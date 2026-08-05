@@ -15,7 +15,6 @@
 
 namespace postflop {
 
-// ИСПРАВЛЕНИЕ БАГА: std::unique_ptr предотвращает утечки при исключениях
 struct ScratchChunk {
     std::unique_ptr<float[]> base;
     size_t capacity;
@@ -358,9 +357,10 @@ void evaluate_terminal(float* result, const PostFlopGame& game, const PostFlopNo
     }
 }
 
+// ИСПРАВЛЕНИЕ: Убрано const с PostFlopGame& game, чтобы вызывать немодифицируемые методы
 static void solve_recursive(
     float* result,
-    const PostFlopGame& game,
+    PostFlopGame& game,
     int node_idx,
     int player,
     const float* cfreach,
@@ -375,7 +375,6 @@ static void solve_recursive(
         return;
     }
 
-    // ── ИСПРАВЛЕНИЕ БАГА: ПОЛНОЦЕННЫЙ РАСЧЕТ CHANCE NODES ─────────────────
     if (node.is_chance()) {
         int num_children = node.num_children;
         if (num_children == 0) {
