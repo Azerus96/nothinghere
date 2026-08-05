@@ -3,7 +3,6 @@
 // ════════════════════════════════════════════════════════════════════════
 #ifdef __CUDACC__
 
-#define HAND_EVALUATOR_CU_IMPL // ИСПРАВЛЕНИЕ: Сигнализирует заголовочнику, что здесь идет определение
 #include "cuda_compat.h"
 #include "hand_evaluator.h"
 #include "card.h"
@@ -11,7 +10,9 @@
 
 namespace postflop {
 
-__constant__ int32_t HAND_TABLE[4824];
+// ИСПРАВЛЕНИЕ ДЛЯ C++20 / CUDA 12.8: 'extern' + инициализатор '= {0}'
+// явно заявляет C++ компилятору, что это единственная внешняя дефиниция
+extern __constant__ int32_t HAND_TABLE[4824] = {0};
 
 extern "C" int init_hand_table_on_gpu(const int32_t* host_table) {
     cudaError_t err = cudaMemcpyToSymbol(HAND_TABLE, host_table, 4824 * sizeof(int32_t));
