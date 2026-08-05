@@ -23,13 +23,13 @@ constexpr int32_t CATEGORY_STRAIGHT_FLUSH  = 8;
 constexpr int32_t CATEGORY_SHIFT = 26;
 constexpr int32_t WHEEL_BITMASK = 0b1'0000'0000'1111;  
 
-#ifdef __CUDACC__
+// ИСПРАВЛЕНИЕ: Макрос-защита от двойного объявления в NVCC 12.8
+#if defined(__CUDACC__) && !defined(HAND_EVALUATOR_CU_IMPL)
 extern __constant__ int32_t HAND_TABLE[4824];
-#else
+#elif !defined(__CUDACC__)
 extern const int32_t HAND_TABLE[4824];
 #endif
 
-// Портативные обертки для CLZ и POPC (работают и на CPU, и на GPU)
 __device__ __host__ __forceinline__
 int host_device_clz(unsigned int x) {
 #if defined(__CUDA_ARCH__)
