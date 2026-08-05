@@ -10,8 +10,8 @@
 
 namespace postflop {
 
-__constant__
-int32_t HAND_TABLE[4824];
+// ИСПРАВЛЕНИЕ: Добавлено __constant__ для соответствия объявлению в hand_evaluator.h
+__constant__ int32_t HAND_TABLE[4824];
 
 extern "C" int init_hand_table_on_gpu(const int32_t* host_table) {
     cudaError_t err = cudaMemcpyToSymbol(HAND_TABLE, host_table, 4824 * sizeof(int32_t));
