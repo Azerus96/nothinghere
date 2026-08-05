@@ -3,6 +3,7 @@
 // ════════════════════════════════════════════════════════════════════════
 #ifdef __CUDACC__
 
+#define HAND_EVALUATOR_CU_IMPL // ИСПРАВЛЕНИЕ: Сигнализирует заголовочнику, что здесь идет определение
 #include "cuda_compat.h"
 #include "hand_evaluator.h"
 #include "card.h"
@@ -10,7 +11,6 @@
 
 namespace postflop {
 
-// ИСПРАВЛЕНИЕ: Добавлено __constant__ для соответствия объявлению в hand_evaluator.h
 __constant__ int32_t HAND_TABLE[4824];
 
 extern "C" int init_hand_table_on_gpu(const int32_t* host_table) {
