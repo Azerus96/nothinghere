@@ -13,7 +13,6 @@ namespace postflop {
 
 #define PLAYER_FOLD_FLAG 24
 
-// ── ЯДРО 1: Проход ВНИЗ (Down-pass) ─────────────────────────────────────
 __global__
 void kernel_down_pass(
     const int* __restrict__ d_nodes_at_depth,
@@ -80,7 +79,6 @@ void kernel_down_pass(
     }
 }
 
-// ── ЯДРО 2: Терминальный Fold ───────────────────────────────────────────
 __global__ 
 void kernel_terminal_fold(
     const int* __restrict__ d_fold_nodes, int num_nodes, 
@@ -135,7 +133,6 @@ void kernel_terminal_fold(
     }
 }
 
-// ── ЯДРО 3: Терминальный Showdown ───────────────────────────────────────
 __global__ 
 void kernel_terminal_showdown(
     const int* __restrict__ d_showdown_nodes, int num_nodes, 
@@ -310,8 +307,8 @@ void kernel_up_pass(
 bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
     if (gpu.initialized) return true;
 
-    // ИСПРАВЛЕНИЕ: Инициализация HAND_TABLE в константной памяти GPU!
-    init_hand_table_on_gpu(HAND_TABLE);
+    // Автоматическая загрузка таблицы в константную память GPU
+    init_hand_table_on_gpu();
 
     const auto& arena = game.node_arena();
     gpu.num_nodes = (int)arena.size();
