@@ -12,9 +12,8 @@
 namespace postflop {
 
 #define PLAYER_FOLD_FLAG 24
-#define MAX_HANDS 1326 // Жесткий шаг для глобальных буферов CFV и Reach
+#define MAX_HANDS 1326
 
-// ── ЯДРО 1: Проход ВНИЗ (Down-pass) ─────────────────────────────────────
 __global__
 void kernel_down_pass(
     const int* __restrict__ d_nodes_at_depth,
@@ -40,7 +39,6 @@ void kernel_down_pass(
 
     if (node.is_chance()) {
         for (int opp_h = tid; opp_h < num_hands_opp; opp_h += blockDim.x) {
-            // ИСПРАВЛЕНИЕ: Шаг MAX_HANDS (1326)
             float my_reach = d_opp_reach[node_idx * MAX_HANDS + opp_h];
             float scaled = my_reach / (float)num_actions;
             for (int a = 0; a < num_actions; ++a) {
@@ -57,7 +55,6 @@ void kernel_down_pass(
             float sum_pos = 0.0f;
             float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
             for (int a = 0; a < num_actions; ++a) {
-                // storage2 упакован плотно, здесь используем num_hands_opp
                 int mem_idx = node.storage2_offset + a * num_hands_opp + opp_h;
                 float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
                                         : ((const float*)d_storage2)[mem_idx];
@@ -73,7 +70,6 @@ void kernel_down_pass(
             }
         }
 
-        // ИСПРАВЛЕНИЕ: Шаг MAX_HANDS (1326)
         float my_reach = d_opp_reach[node_idx * MAX_HANDS + opp_h];
         for (int a = 0; a < num_actions; ++a) {
             int child_idx = node.children_offset + a;
@@ -86,7 +82,6 @@ void kernel_down_pass(
     }
 }
 
-// ── ЯДРО 2: Терминальный Fold ───────────────────────────────────────────
 __global__ 
 void kernel_terminal_fold(
     const int* __restrict__ d_fold_nodes, int num_nodes, 
@@ -115,7 +110,6 @@ void kernel_terminal_fold(
     if (tid < 53) s_cfreach_minus[tid] = 0.0f;
     __syncthreads();
 
-    // ИСПРАВЛЕНИЕ: Шаг MAX_HANDS (1326)
     const float* cfreach = d_opp_reach + node_idx * MAX_HANDS;
     
     float my_sum = 0.0f;
@@ -138,12 +132,10 @@ void kernel_terminal_fold(
         uint16_t si = d_my_same[h];
         if (si != 0xFFFF) cfreach_same = cfreach[si];
         float total = cfreach_sum + cfreach_same - s_cfreach_minus[c1] - s_cfreach_minus[c2];
-        // ИСПРАВЛЕНИЕ: Шаг MAX_HANDS (1326)
         d_node_cfv[node_idx * MAX_HANDS + h] = payoff * total;
     }
 }
 
-// ── ЯДРО 3: Терминальный Showdown ───────────────────────────────────────
 __global__ 
 void kernel_terminal_showdown(
     const int* __restrict__ d_showdown_nodes, int num_nodes, 
@@ -169,7 +161,6 @@ void kernel_terminal_showdown(
 
     Card turn = node.turn;
     Card river = node.river;
-    // ИСПРАВЛЕНИЕ: Шаг MAX_HANDS (1326)
     const float* cfreach = d_opp_reach + node_idx * MAX_HANDS;
 
     extern __shared__ uint16_t s_opp_strengths[]; 
@@ -224,13 +215,11 @@ void kernel_terminal_showdown(
         lose_cfreach += cfreach_same - minus_c1_lose - minus_c2_lose;
         tie_cfreach += cfreach_same - minus_c1_tie - minus_c2_tie;
 
-        // ИСПРАВЛЕНИЕ: Шаг MAX_HANDS (1326)
         d_node_cfv[node_idx * MAX_HANDS + h] = 
             amount_win * win_cfreach + amount_lose * lose_cfreach + amount_tie * tie_cfreach;
     }
 }
 
-// ── ЯДРО 4: Проход ВВЕРХ (Up-pass) ──────────────────────────────────────
 __global__
 void kernel_up_pass(
     const int* __restrict__ d_nodes_at_depth,
@@ -257,7 +246,6 @@ void kernel_up_pass(
         if (node.is_chance()) {
             float sum_cfv = 0.0f;
             for (int a = 0; a < num_actions; ++a) {
-                // ИСПРАВЛЕНИЕ: Шаг MAX_HANDS (1326)
                 sum_cfv += d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
             }
             d_node_cfv[node_idx * MAX_HANDS + h] = sum_cfv;
@@ -268,27 +256,28 @@ void kernel_up_pass(
         extern __shared__ float s_mem[];
         float* s_strategy = s_mem;
 
-        float sum_pos = 0.0f;
-        float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
-        for (int a = 0; a < num_actions; ++a) {
-            int mem_idx = node.storage2_offset + a * num_hands_p + h;
-            float r = is_compressed ? (float)((int16_t*)d_storage2)[mem_idx] * decode_mult
-                                    : ((float*)d_storage2)[mem_idx];
-            if (r > 0.0f) sum_pos += r;
-        }
-        float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
-        float uniform = 1.0f / num_actions;
-        for (int a = 0; a < num_actions; ++a) {
-            int mem_idx = node.storage2_offset + a * num_hands_p + h;
-            float r = is_compressed ? (float)((int16_t*)d_storage2)[mem_idx] * decode_mult
-                                    : ((float*)d_storage2)[mem_idx];
-            s_strategy[a * blockDim.x + tid] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
+        if (node_player == updating_player) {
+            float sum_pos = 0.0f;
+            float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
+            for (int a = 0; a < num_actions; ++a) {
+                int mem_idx = node.storage2_offset + a * num_hands_p + h;
+                float r = is_compressed ? (float)((int16_t*)d_storage2)[mem_idx] * decode_mult
+                                        : ((float*)d_storage2)[mem_idx];
+                if (r > 0.0f) sum_pos += r;
+            }
+            float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
+            float uniform = 1.0f / num_actions;
+            for (int a = 0; a < num_actions; ++a) {
+                int mem_idx = node.storage2_offset + a * num_hands_p + h;
+                float r = is_compressed ? (float)((int16_t*)d_storage2)[mem_idx] * decode_mult
+                                        : ((float*)d_storage2)[mem_idx];
+                s_strategy[a * blockDim.x + tid] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
+            }
         }
 
         float my_cfv = 0.0f;
         if (node_player == updating_player) {
             for (int a = 0; a < num_actions; ++a) {
-                // ИСПРАВЛЕНИЕ: Шаг MAX_HANDS (1326)
                 my_cfv += s_strategy[a * blockDim.x + tid] * d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
             }
         } else {
@@ -304,7 +293,6 @@ void kernel_up_pass(
             for (int a = 0; a < num_actions; ++a) {
                 int mem_idx1 = node.storage1_offset + a * num_hands_p + h;
                 int mem_idx2 = node.storage2_offset + a * num_hands_p + h;
-                // ИСПРАВЛЕНИЕ: Шаг MAX_HANDS (1326)
                 float child_cfv = d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
 
                 float old_s = is_compressed ? (float)((int16_t*)d_storage1)[mem_idx1] * decode_mult1 : ((float*)d_storage1)[mem_idx1];
@@ -413,7 +401,7 @@ int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter) {
         int num_hands_p = gpu.num_hands[p];
         int num_hands_opp = gpu.num_hands[opp];
 
-        // ИСПРАВЛЕНИЕ: Копируем initial_weights в начало буфера d_node_cfreach (с шагом MAX_HANDS)
+        // ИСПРАВЛЕНИЕ: Копируем initial_weights с шагом MAX_HANDS
         cudaMemcpy(gpu.d_node_cfreach, gpu.d_initial_weights[opp], num_hands_opp * sizeof(float), cudaMemcpyDeviceToDevice);
 
         for (int d = 0; d <= gpu.max_depth; ++d) {
