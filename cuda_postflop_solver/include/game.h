@@ -113,7 +113,6 @@ public:
     uint64_t num_nodes() const { return node_arena_.size(); }
     const std::vector<PostFlopNode>& node_arena() const { return node_arena_; }
     
-    // BFS Level accessors for GPU
     const std::vector<std::vector<int>>& nodes_by_depth() const { return nodes_by_depth_; }
     int max_tree_depth() const { return max_tree_depth_; }
 
@@ -125,6 +124,11 @@ public:
     float* storage2_data_mut() { return storage2_.data(); }
     float* storage_ip_data_mut() { return storage_ip_.data(); }
     float* storage_chance_data_mut() { return storage_chance_.data(); }
+
+    // Геттеры размеров хранилищ в байтах для GPU
+    size_t storage1_bytes() const { return storage1_.size() * sizeof(float); }
+    size_t storage_ip_bytes() const { return storage_ip_.size() * sizeof(float); }
+    size_t storage_chance_bytes() const { return storage_chance_.size() * sizeof(float); }
 
     std::vector<float> root_strategy() const;
 
