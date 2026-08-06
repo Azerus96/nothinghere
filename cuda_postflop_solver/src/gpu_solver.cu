@@ -13,6 +13,7 @@ namespace postflop {
 
 #define PLAYER_FOLD_FLAG 24
 
+// ── ЯДРО 1: Проход ВНИЗ (Down-pass) ─────────────────────────────────────
 __global__
 void kernel_down_pass(
     const int* __restrict__ d_nodes_at_depth,
@@ -20,7 +21,8 @@ void kernel_down_pass(
     const PostFlopNode* __restrict__ d_nodes,
     const uint8_t* __restrict__ d_storage2, 
     float* __restrict__ d_opp_reach,
-    int num_hands,
+    int num_hands_p,
+    int num_hands_opp,
     int updating_player,
     bool is_compressed)
 {
@@ -36,44 +38,49 @@ void kernel_down_pass(
     extern __shared__ float s_strategy[]; 
 
     if (node.is_chance()) {
-        float my_reach = d_opp_reach[node_idx * num_hands + h];
-        float scaled = my_reach / (float)num_actions;
-        for (int a = 0; a < num_actions; ++a) {
-            d_opp_reach[(node.children_offset + a) * num_hands + h] = scaled;
+        for (int opp_h = h; opp_h < num_hands_opp; opp_h += blockDim.x) {
+            float my_reach = d_opp_reach[node_idx * num_hands_opp + opp_h];
+            float scaled = my_reach / (float)num_actions;
+            for (int a = 0; a < num_actions; ++a) {
+                d_opp_reach[(node.children_offset + a) * num_hands_opp + opp_h] = scaled;
+            }
         }
         return;
     }
 
     int node_player = node.player & 3;
     
-    if (node_player != updating_player) {
-        float sum_pos = 0.0f;
-        float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
-        for (int a = 0; a < num_actions; ++a) {
-            float r = is_compressed ? (float)((const int16_t*)d_storage2)[node.storage2_offset + a*num_hands + h] * decode_mult
-                                    : ((const float*)d_storage2)[node.storage2_offset + a*num_hands + h];
-            if (r > 0.0f) sum_pos += r;
+    for (int opp_h = h; opp_h < num_hands_opp; opp_h += blockDim.x) {
+        if (node_player != updating_player) {
+            float sum_pos = 0.0f;
+            float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
+            for (int a = 0; a < num_actions; ++a) {
+                float r = is_compressed ? (float)((const int16_t*)d_storage2)[node.storage2_offset + a*num_hands_opp + opp_h] * decode_mult
+                                        : ((const float*)d_storage2)[node.storage2_offset + a*num_hands_opp + opp_h];
+                if (r > 0.0f) sum_pos += r;
+            }
+            float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
+            float uniform = 1.0f / num_actions;
+            for (int a = 0; a < num_actions; ++a) {
+                float r = is_compressed ? (float)((const int16_t*)d_storage2)[node.storage2_offset + a*num_hands_opp + opp_h] * decode_mult
+                                        : ((const float*)d_storage2)[node.storage2_offset + a*num_hands_opp + opp_h];
+                s_strategy[a * blockDim.x + threadIdx.x] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
+            }
         }
-        float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
-        float uniform = 1.0f / num_actions;
-        for (int a = 0; a < num_actions; ++a) {
-            float r = is_compressed ? (float)((const int16_t*)d_storage2)[node.storage2_offset + a*num_hands + h] * decode_mult
-                                    : ((const float*)d_storage2)[node.storage2_offset + a*num_hands + h];
-            s_strategy[a * blockDim.x + h] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
-        }
-    }
 
-    float my_reach = d_opp_reach[node_idx * num_hands + h];
-    for (int a = 0; a < num_actions; ++a) {
-        int child_idx = node.children_offset + a;
-        if (node_player == updating_player) {
-            d_opp_reach[child_idx * num_hands + h] = my_reach;
-        } else {
-            d_opp_reach[child_idx * num_hands + h] = my_reach * s_strategy[a * blockDim.x + h];
+        float my_reach = d_opp_reach[node_idx * num_hands_opp + opp_h];
+        for (int a = 0; a < num_actions; ++a) {
+            int child_idx = node.children_offset + a;
+            if (node_player == updating_player) {
+                d_opp_reach[child_idx * num_hands_opp + opp_h] = my_reach;
+            } else {
+                d_opp_reach[child_idx * num_hands_opp + opp_h] = my_reach * s_strategy[a * blockDim.x + threadIdx.x];
+            }
         }
     }
 }
 
+// ── ЯДРО 2: Терминальный Fold ───────────────────────────────────────────
 __global__ 
 void kernel_terminal_fold(
     const int* __restrict__ d_fold_nodes, int num_nodes, 
@@ -102,7 +109,7 @@ void kernel_terminal_fold(
     if (tid < 53) s_cfreach_minus[tid] = 0.0f;
     __syncthreads();
 
-    const float* cfreach = d_opp_reach + node_idx * num_hands;
+    const float* cfreach = d_opp_reach + node_idx * opp_num_hands;
     
     float my_sum = 0.0f;
     for (int i = tid; i < opp_num_hands; i += blockDim.x) {
@@ -128,6 +135,7 @@ void kernel_terminal_fold(
     }
 }
 
+// ── ЯДРО 3: Терминальный Showdown ───────────────────────────────────────
 __global__ 
 void kernel_terminal_showdown(
     const int* __restrict__ d_showdown_nodes, int num_nodes, 
@@ -153,7 +161,7 @@ void kernel_terminal_showdown(
 
     Card turn = node.turn;
     Card river = node.river;
-    const float* cfreach = d_opp_reach + node_idx * num_hands;
+    const float* cfreach = d_opp_reach + node_idx * opp_num_hands;
 
     extern __shared__ uint16_t s_opp_strengths[]; 
     int tid = threadIdx.x;
@@ -212,6 +220,7 @@ void kernel_terminal_showdown(
     }
 }
 
+// ── ЯДРО 4: Проход ВВЕРХ (Up-pass) ──────────────────────────────────────
 __global__
 void kernel_up_pass(
     const int* __restrict__ d_nodes_at_depth,
@@ -327,7 +336,7 @@ void kernel_up_pass(
     }
 }
 
-// ── ИСПРАВЛЕНИЕ: Вызов storage1_bytes() вместо storage1_data_mut().size() ─────
+// ── Оркестрация с хоста ─────────────────────────────────────────────────
 bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
     if (gpu.initialized) return true;
 
@@ -414,14 +423,17 @@ int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter) {
 
     for (int p = 0; p < 2; ++p) {
         int opp = 1 - p;
-        cudaMemcpy(gpu.d_node_cfreach, gpu.d_initial_weights[opp], gpu.num_hands[opp] * sizeof(float), cudaMemcpyDeviceToDevice);
+        int num_hands_p = gpu.num_hands[p];
+        int num_hands_opp = gpu.num_hands[opp];
+
+        cudaMemcpy(gpu.d_node_cfreach, gpu.d_initial_weights[opp], num_hands_opp * sizeof(float), cudaMemcpyDeviceToDevice);
 
         for (int d = 0; d <= gpu.max_depth; ++d) {
             if (gpu.level_sizes[d] == 0) continue;
             size_t smem = 10 * 256 * sizeof(float); 
             kernel_down_pass<<<gpu.level_sizes[d], 256, smem>>>(
                 gpu.d_levels[d], gpu.level_sizes[d], gpu.d_nodes, gpu.d_storage2, gpu.d_node_cfreach,
-                gpu.num_hands[p], p, gpu.is_compressed
+                num_hands_p, num_hands_opp, p, gpu.is_compressed
             );
         }
 
@@ -429,14 +441,14 @@ int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter) {
             kernel_terminal_fold<<<gpu.num_fold_nodes, 256, 53 * sizeof(float)>>>(
                 gpu.d_fold_nodes, gpu.num_fold_nodes, gpu.d_nodes, gpu.d_node_cfreach, gpu.d_node_cfv,
                 gpu.d_private_cards[p], gpu.d_private_cards[opp], gpu.d_same_hand_idx[p],
-                gpu.num_hands[p], gpu.num_hands[opp], gpu.starting_pot, gpu.rake_rate, gpu.rake_cap, p
+                num_hands_p, num_hands_opp, gpu.starting_pot, gpu.rake_rate, gpu.rake_cap, p
             );
         }
         if (gpu.num_showdown_nodes > 0) {
             kernel_terminal_showdown<<<gpu.num_showdown_nodes, 256, 1326 * sizeof(uint16_t)>>>(
                 gpu.d_showdown_nodes, gpu.num_showdown_nodes, gpu.d_nodes, gpu.d_node_cfreach, gpu.d_node_cfv,
                 gpu.d_private_cards[p], gpu.d_private_cards[opp], gpu.d_same_hand_idx[p],
-                gpu.num_hands[p], gpu.num_hands[opp], gpu.starting_pot, gpu.rake_rate, gpu.rake_cap,
+                num_hands_p, num_hands_opp, gpu.starting_pot, gpu.rake_rate, gpu.rake_cap,
                 gpu.flop[0], gpu.flop[1], gpu.flop[2]
             );
         }
@@ -446,7 +458,7 @@ int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter) {
             size_t smem = (10 * 256 + 256) * sizeof(float);
             kernel_up_pass<<<gpu.level_sizes[d], 256, smem>>>(
                 gpu.d_levels[d], gpu.level_sizes[d], gpu.d_nodes, gpu.d_storage1, gpu.d_storage2, gpu.d_node_cfv,
-                params.alpha_t, params.beta_t, params.gamma_t, gpu.num_hands[p], p, gpu.is_compressed
+                params.alpha_t, params.beta_t, params.gamma_t, num_hands_p, p, gpu.is_compressed
             );
         }
     }
