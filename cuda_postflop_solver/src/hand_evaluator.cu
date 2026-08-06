@@ -8,14 +8,16 @@
 #include "card.h"
 #include <cstdio>
 
+// Глобальный символ VRAM без namespace mangling
+__constant__ int32_t g_hand_table_device[4824];
+
 namespace postflop {
 
 int init_hand_table_on_gpu(const int32_t* host_table) {
     if (!host_table) host_table = HAND_TABLE; 
-    // Явное указание postflop::HAND_TABLE_DEVICE убирает ошибку invalid device symbol
-    cudaError_t err = cudaMemcpyToSymbol(postflop::HAND_TABLE_DEVICE, host_table, 4824 * sizeof(int32_t));
+    cudaError_t err = cudaMemcpyToSymbol(g_hand_table_device, host_table, 4824 * sizeof(int32_t));
     if (err != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpyToSymbol HAND_TABLE_DEVICE failed: %s\n", cudaGetErrorString(err));
+        fprintf(stderr, "cudaMemcpyToSymbol g_hand_table_device failed: %s\n", cudaGetErrorString(err));
         return -1;
     }
     return 0;
