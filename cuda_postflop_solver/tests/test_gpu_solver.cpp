@@ -66,6 +66,9 @@ int main() {
     std::vector<float> cpu_strategy = game.root_strategy();
     printf("  CPU root strategy size: %zu floats\n", cpu_strategy.size());
 
+    // СБРАСЫВАЕМ ПАМЯТЬ В НУЛЬ ПЕРЕД ТЕСТОМ GPU!
+    game.allocate_memory(false);
+
     // ── Test 2: GPU init ──
     printf("\n── Test 2: GPU solver initialization ──\n");
     GpuMemory gpu;
@@ -82,7 +85,7 @@ int main() {
     check(!gpu_ok, "gpu_solver_init correctly returns false on CPU-only build");
 #endif
 
-    // ── Test 3: GPU solve step (10 iterations, matching CPU) ──
+    // ── Test 3: GPU solve step (10 iterations) ──
     printf("\n── Test 3: GPU solve step (10 iterations) ──\n");
 #ifdef CUDA_BUILD
     int result = 0;
