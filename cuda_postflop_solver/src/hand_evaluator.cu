@@ -8,15 +8,13 @@
 #include "card.h"
 #include <cstdio>
 
-// ИСПРАВЛЕНИЕ: Выносим HAND_TABLE_DEVICE в глобальную область видимости,
-// чтобы избежать C++ name mangling и ошибки "invalid device symbol".
-__constant__ int32_t HAND_TABLE_DEVICE[4824];
-
 namespace postflop {
+
+// ПРИМЕЧАНИЕ: HAND_TABLE_DEVICE объявляется в hand_evaluator.h как extern __constant__.
+// Никаких дополнительных строк __constant__ здесь писать НЕ НУЖНО.
 
 int init_hand_table_on_gpu(const int32_t* host_table) {
     if (!host_table) host_table = HAND_TABLE; 
-    // Передаем символ напрямую
     cudaError_t err = cudaMemcpyToSymbol(HAND_TABLE_DEVICE, host_table, 4824 * sizeof(int32_t));
     if (err != cudaSuccess) {
         fprintf(stderr, "cudaMemcpyToSymbol HAND_TABLE_DEVICE failed: %s\n", cudaGetErrorString(err));
