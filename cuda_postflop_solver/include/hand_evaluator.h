@@ -8,12 +8,6 @@
 #include "cuda_compat.h"
 #include "card.h"
 
-// Подавление предупреждений NVCC при компиляции
-#ifdef __NVCC__
-#pragma nv_diag_suppress 20091
-#pragma nv_diag_suppress 20015
-#endif
-
 namespace postflop {
 
 constexpr int32_t CATEGORY_HIGH_CARD       = 0;
@@ -29,10 +23,14 @@ constexpr int32_t CATEGORY_STRAIGHT_FLUSH  = 8;
 constexpr int32_t CATEGORY_SHIFT = 26;
 constexpr int32_t WHEEL_BITMASK = 0b1'0000'0000'1111;  
 
-#if defined(__CUDACC__) && !defined(HAND_EVALUATOR_CU_IMPL)
-extern __constant__ int32_t HAND_TABLE[4824];
-#elif !defined(__CUDACC__)
+// Таблица на CPU (в RAM)
 extern const int32_t HAND_TABLE[4824];
+
+#ifdef __CUDACC__
+// Таблица на GPU (в VRAM constant memory)
+extern __constant__ int32_t HAND_TABLE_DEVICE[4824];
+
+int init_hand_table_on_gpu(const int32_t* host_table = nullptr);
 #endif
 
 __device__ __host__ __forceinline__
@@ -181,7 +179,11 @@ int32_t evaluate(const Card* cards, int n) {
     for (int i = 0; i < 13; ++i) {
         if (lo >= hi) break;
         int mid = (lo + hi) >> 1;
+#if defined(__CUDA_ARCH__)
+        if (HAND_TABLE_DEVICE[mid] < key) lo = mid + 1;
+#else
         if (HAND_TABLE[mid] < key) lo = mid + 1;
+#endif
         else hi = mid;
     }
     return (int32_t)(lo + 1);  
