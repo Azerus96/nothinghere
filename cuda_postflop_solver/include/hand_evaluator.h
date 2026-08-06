@@ -23,10 +23,9 @@ constexpr int32_t CATEGORY_STRAIGHT_FLUSH  = 8;
 constexpr int32_t CATEGORY_SHIFT = 26;
 constexpr int32_t WHEEL_BITMASK = 0b1'0000'0000'1111;  
 
-// ИСПРАВЛЕНИЕ: Макрос-защита от двойного объявления в NVCC 12.8
-#if defined(__CUDACC__) && !defined(HAND_EVALUATOR_CU_IMPL)
+#ifdef __CUDACC__
 extern __constant__ int32_t HAND_TABLE[4824];
-#elif !defined(__CUDACC__)
+#else
 extern const int32_t HAND_TABLE[4824];
 #endif
 
