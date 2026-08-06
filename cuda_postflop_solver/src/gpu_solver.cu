@@ -50,7 +50,6 @@ void kernel_down_pass(
 
     int node_player = node.player & 3;
     
-    // ИСПРАВЛЕНИЕ: Цикл по всем рукам соперника
     for (int opp_h = tid; opp_h < num_hands_opp; opp_h += blockDim.x) {
         if (node_player != updating_player) {
             float sum_pos = 0.0f;
@@ -65,7 +64,7 @@ void kernel_down_pass(
             for (int a = 0; a < num_actions; ++a) {
                 float r = is_compressed ? (float)((const int16_t*)d_storage2)[node.storage2_offset + a*num_hands_opp + opp_h] * decode_mult
                                         : ((const float*)d_storage2)[node.storage2_offset + a*num_hands_opp + opp_h];
-                s_strategy[a * blockDim.x + tid] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
+                s_strategy[a * blockDim.x + threadIdx.x] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
             }
         }
 
@@ -75,7 +74,7 @@ void kernel_down_pass(
             if (node_player == updating_player) {
                 d_opp_reach[child_idx * num_hands_opp + opp_h] = my_reach;
             } else {
-                d_opp_reach[child_idx * num_hands_opp + opp_h] = my_reach * s_strategy[a * blockDim.x + tid];
+                d_opp_reach[child_idx * num_hands_opp + opp_h] = my_reach * s_strategy[a * blockDim.x + threadIdx.x];
             }
         }
     }
@@ -244,7 +243,6 @@ void kernel_up_pass(
     int num_actions = node.num_children;
     int tid = threadIdx.x;
 
-    // ИСПРАВЛЕНИЕ: Цикл по всем рукам игрока
     for (int h = tid; h < num_hands_p; h += blockDim.x) {
         if (node.is_chance()) {
             float sum_cfv = 0.0f;
@@ -311,6 +309,9 @@ void kernel_up_pass(
 // ── Оркестрация с хоста ─────────────────────────────────────────────────
 bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
     if (gpu.initialized) return true;
+
+    // ИСПРАВЛЕНИЕ: Инициализация HAND_TABLE в константной памяти GPU!
+    init_hand_table_on_gpu(HAND_TABLE);
 
     const auto& arena = game.node_arena();
     gpu.num_nodes = (int)arena.size();
