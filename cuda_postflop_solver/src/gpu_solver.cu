@@ -34,11 +34,11 @@ void kernel_down_pass(
     if (node.is_terminal()) return;
 
     int num_actions = node.num_children;
-    int h = threadIdx.x; 
+    int tid = threadIdx.x; 
     extern __shared__ float s_strategy[]; 
 
     if (node.is_chance()) {
-        for (int opp_h = h; opp_h < num_hands_opp; opp_h += blockDim.x) {
+        for (int opp_h = tid; opp_h < num_hands_opp; opp_h += blockDim.x) {
             float my_reach = d_opp_reach[node_idx * num_hands_opp + opp_h];
             float scaled = my_reach / (float)num_actions;
             for (int a = 0; a < num_actions; ++a) {
@@ -50,7 +50,8 @@ void kernel_down_pass(
 
     int node_player = node.player & 3;
     
-    for (int opp_h = h; opp_h < num_hands_opp; opp_h += blockDim.x) {
+    // ИСПРАВЛЕНИЕ: Цикл по всем рукам соперника
+    for (int opp_h = tid; opp_h < num_hands_opp; opp_h += blockDim.x) {
         if (node_player != updating_player) {
             float sum_pos = 0.0f;
             float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
@@ -64,7 +65,7 @@ void kernel_down_pass(
             for (int a = 0; a < num_actions; ++a) {
                 float r = is_compressed ? (float)((const int16_t*)d_storage2)[node.storage2_offset + a*num_hands_opp + opp_h] * decode_mult
                                         : ((const float*)d_storage2)[node.storage2_offset + a*num_hands_opp + opp_h];
-                s_strategy[a * blockDim.x + threadIdx.x] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
+                s_strategy[a * blockDim.x + tid] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
             }
         }
 
@@ -74,7 +75,7 @@ void kernel_down_pass(
             if (node_player == updating_player) {
                 d_opp_reach[child_idx * num_hands_opp + opp_h] = my_reach;
             } else {
-                d_opp_reach[child_idx * num_hands_opp + opp_h] = my_reach * s_strategy[a * blockDim.x + threadIdx.x];
+                d_opp_reach[child_idx * num_hands_opp + opp_h] = my_reach * s_strategy[a * blockDim.x + tid];
             }
         }
     }
@@ -230,7 +231,8 @@ void kernel_up_pass(
     uint8_t* __restrict__ d_storage2,   
     float* __restrict__ d_node_cfv,
     float alpha_t, float beta_t, float gamma_t,
-    int num_hands, int updating_player, bool is_compressed)
+    int num_hands_p, int num_hands_opp,
+    int updating_player, bool is_compressed)
 {
     int idx = blockIdx.x;
     if (idx >= num_nodes_this_depth) return;
@@ -240,97 +242,67 @@ void kernel_up_pass(
     if (node.is_terminal()) return;
 
     int num_actions = node.num_children;
-    int h = threadIdx.x;
+    int tid = threadIdx.x;
 
-    if (node.is_chance()) {
-        float sum_cfv = 0.0f;
-        for (int a = 0; a < num_actions; ++a) {
-            sum_cfv += d_node_cfv[(node.children_offset + a) * num_hands + h];
-        }
-        d_node_cfv[node_idx * num_hands + h] = sum_cfv;
-        return;
-    }
-
-    int node_player = node.player & 3;
-    extern __shared__ float s_mem[];
-    float* s_strategy = s_mem;
-    float* s_max_abs = s_strategy + num_actions * blockDim.x;
-
-    float sum_pos = 0.0f;
-    float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
-    for (int a = 0; a < num_actions; ++a) {
-        float r = is_compressed ? (float)((int16_t*)d_storage2)[node.storage2_offset + a*num_hands + h] * decode_mult
-                                : ((float*)d_storage2)[node.storage2_offset + a*num_hands + h];
-        if (r > 0.0f) sum_pos += r;
-    }
-    float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
-    float uniform = 1.0f / num_actions;
-    for (int a = 0; a < num_actions; ++a) {
-        float r = is_compressed ? (float)((int16_t*)d_storage2)[node.storage2_offset + a*num_hands + h] * decode_mult
-                                : ((float*)d_storage2)[node.storage2_offset + a*num_hands + h];
-        s_strategy[a * blockDim.x + h] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
-    }
-
-    float my_cfv = 0.0f;
-    if (node_player == updating_player) {
-        for (int a = 0; a < num_actions; ++a) {
-            my_cfv += s_strategy[a * blockDim.x + h] * d_node_cfv[(node.children_offset + a) * num_hands + h];
-        }
-    } else {
-        for (int a = 0; a < num_actions; ++a) {
-            my_cfv += d_node_cfv[(node.children_offset + a) * num_hands + h];
-        }
-    }
-    d_node_cfv[node_idx * num_hands + h] = my_cfv;
-
-    if (node_player == updating_player) {
-        float local_max_regret = 0.0f;
-        float local_max_strat = 0.0f;
-        float decode_mult1 = is_compressed ? (node.scale1 / 32767.0f) : 1.0f;
-
-        for (int a = 0; a < num_actions; ++a) {
-            int mem_idx1 = node.storage1_offset + a * num_hands + h;
-            int mem_idx2 = node.storage2_offset + a * num_hands + h;
-            float child_cfv = d_node_cfv[(node.children_offset + a) * num_hands + h];
-
-            float old_s = is_compressed ? (float)((int16_t*)d_storage1)[mem_idx1] * decode_mult1 : ((float*)d_storage1)[mem_idx1];
-            float new_s = old_s * gamma_t + s_strategy[a * blockDim.x + h];
-            if (fabsf(new_s) > local_max_strat) local_max_strat = fabsf(new_s);
-            if (!is_compressed) ((float*)d_storage1)[mem_idx1] = new_s;
-            else s_strategy[a * blockDim.x + h] = new_s; 
-
-            float old_r = is_compressed ? (float)((int16_t*)d_storage2)[mem_idx2] * decode_mult : ((float*)d_storage2)[mem_idx2];
-            float coef = (old_r >= 0.0f) ? alpha_t : beta_t;
-            float new_r = old_r * coef + (child_cfv - my_cfv);
-            new_r = (new_r > 0.0f) ? new_r : 0.0f;
-            if (fabsf(new_r) > local_max_regret) local_max_regret = fabsf(new_r);
-            if (!is_compressed) ((float*)d_storage2)[mem_idx2] = new_r;
-            else d_node_cfv[(node.children_offset + a) * num_hands + h] = new_r; 
-        }
-
-        if (is_compressed) {
-            s_max_abs[h] = fmaxf(local_max_regret, local_max_strat);
-            __syncthreads();
-            for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-                if (h < s) s_max_abs[h] = fmaxf(s_max_abs[h], s_max_abs[h + s]);
-                __syncthreads();
-            }
-            __shared__ float new_scale;
-            if (h == 0) {
-                new_scale = s_max_abs[0] == 0.0f ? 1.0f : s_max_abs[0];
-                node.scale1 = new_scale;
-                node.scale2 = new_scale;
-            }
-            __syncthreads();
-
-            float encode_mult = 32767.0f / new_scale;
+    // ИСПРАВЛЕНИЕ: Цикл по всем рукам игрока
+    for (int h = tid; h < num_hands_p; h += blockDim.x) {
+        if (node.is_chance()) {
+            float sum_cfv = 0.0f;
             for (int a = 0; a < num_actions; ++a) {
-                int mem_idx1 = node.storage1_offset + a * num_hands + h;
-                int mem_idx2 = node.storage2_offset + a * num_hands + h;
-                float s_val = s_strategy[a * blockDim.x + h];
-                float r_val = d_node_cfv[(node.children_offset + a) * num_hands + h];
-                ((int16_t*)d_storage1)[mem_idx1] = (int16_t)fmaxf(-32768.0f, fminf(32767.0f, roundf(s_val * encode_mult)));
-                ((int16_t*)d_storage2)[mem_idx2] = (int16_t)fmaxf(-32768.0f, fminf(32767.0f, roundf(r_val * encode_mult)));
+                sum_cfv += d_node_cfv[(node.children_offset + a) * num_hands_p + h];
+            }
+            d_node_cfv[node_idx * num_hands_p + h] = sum_cfv;
+            continue;
+        }
+
+        int node_player = node.player & 3;
+        extern __shared__ float s_mem[];
+        float* s_strategy = s_mem;
+
+        float sum_pos = 0.0f;
+        float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
+        for (int a = 0; a < num_actions; ++a) {
+            float r = is_compressed ? (float)((int16_t*)d_storage2)[node.storage2_offset + a*num_hands_p + h] * decode_mult
+                                    : ((float*)d_storage2)[node.storage2_offset + a*num_hands_p + h];
+            if (r > 0.0f) sum_pos += r;
+        }
+        float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
+        float uniform = 1.0f / num_actions;
+        for (int a = 0; a < num_actions; ++a) {
+            float r = is_compressed ? (float)((int16_t*)d_storage2)[node.storage2_offset + a*num_hands_p + h] * decode_mult
+                                    : ((float*)d_storage2)[node.storage2_offset + a*num_hands_p + h];
+            s_strategy[a * blockDim.x + tid] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
+        }
+
+        float my_cfv = 0.0f;
+        if (node_player == updating_player) {
+            for (int a = 0; a < num_actions; ++a) {
+                my_cfv += s_strategy[a * blockDim.x + tid] * d_node_cfv[(node.children_offset + a) * num_hands_p + h];
+            }
+        } else {
+            for (int a = 0; a < num_actions; ++a) {
+                my_cfv += d_node_cfv[(node.children_offset + a) * num_hands_p + h];
+            }
+        }
+        d_node_cfv[node_idx * num_hands_p + h] = my_cfv;
+
+        if (node_player == updating_player) {
+            float decode_mult1 = is_compressed ? (node.scale1 / 32767.0f) : 1.0f;
+
+            for (int a = 0; a < num_actions; ++a) {
+                int mem_idx1 = node.storage1_offset + a * num_hands_p + h;
+                int mem_idx2 = node.storage2_offset + a * num_hands_p + h;
+                float child_cfv = d_node_cfv[(node.children_offset + a) * num_hands_p + h];
+
+                float old_s = is_compressed ? (float)((int16_t*)d_storage1)[mem_idx1] * decode_mult1 : ((float*)d_storage1)[mem_idx1];
+                float new_s = old_s * gamma_t + s_strategy[a * blockDim.x + tid];
+                if (!is_compressed) ((float*)d_storage1)[mem_idx1] = new_s;
+
+                float old_r = is_compressed ? (float)((int16_t*)d_storage2)[mem_idx2] * decode_mult : ((float*)d_storage2)[mem_idx2];
+                float coef = (old_r >= 0.0f) ? alpha_t : beta_t;
+                float new_r = old_r * coef + (child_cfv - my_cfv);
+                new_r = (new_r > 0.0f) ? new_r : 0.0f;
+                if (!is_compressed) ((float*)d_storage2)[mem_idx2] = new_r;
             }
         }
     }
@@ -458,7 +430,7 @@ int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter) {
             size_t smem = (10 * 256 + 256) * sizeof(float);
             kernel_up_pass<<<gpu.level_sizes[d], 256, smem>>>(
                 gpu.d_levels[d], gpu.level_sizes[d], gpu.d_nodes, gpu.d_storage1, gpu.d_storage2, gpu.d_node_cfv,
-                params.alpha_t, params.beta_t, params.gamma_t, num_hands_p, p, gpu.is_compressed
+                params.alpha_t, params.beta_t, params.gamma_t, num_hands_p, num_hands_opp, p, gpu.is_compressed
             );
         }
     }
