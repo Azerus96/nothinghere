@@ -8,6 +8,17 @@
 #include "cuda_compat.h"
 #include "card.h"
 
+// Подавление предупреждений NVCC при компиляции
+#ifdef __NVCC__
+#pragma nv_diag_suppress 20091
+#pragma nv_diag_suppress 20015
+#endif
+
+#ifdef __CUDACC__
+// ИСПРАВЛЕНИЕ: Объявление в глобальной области видимости
+extern __constant__ int32_t HAND_TABLE_DEVICE[4824];
+#endif
+
 namespace postflop {
 
 constexpr int32_t CATEGORY_HIGH_CARD       = 0;
@@ -27,9 +38,6 @@ constexpr int32_t WHEEL_BITMASK = 0b1'0000'0000'1111;
 extern const int32_t HAND_TABLE[4824];
 
 #ifdef __CUDACC__
-// Таблица на GPU (в VRAM constant memory)
-extern __constant__ int32_t HAND_TABLE_DEVICE[4824];
-
 int init_hand_table_on_gpu(const int32_t* host_table = nullptr);
 #endif
 
