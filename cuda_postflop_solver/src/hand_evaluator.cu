@@ -8,7 +8,7 @@
 #include "card.h"
 #include <cstdio>
 
-// Глобальный символ VRAM без namespace mangling
+// Единственное глобальное определение символа (линкуется благодаря CMAKE_CUDA_SEPARABLE_COMPILATION)
 __constant__ int32_t g_hand_table_device[4824];
 
 namespace postflop {
