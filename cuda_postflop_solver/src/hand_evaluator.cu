@@ -10,12 +10,10 @@
 
 namespace postflop {
 
-// ПРИМЕЧАНИЕ: HAND_TABLE_DEVICE объявляется в hand_evaluator.h как extern __constant__.
-// Никаких дополнительных строк __constant__ здесь писать НЕ НУЖНО.
-
 int init_hand_table_on_gpu(const int32_t* host_table) {
     if (!host_table) host_table = HAND_TABLE; 
-    cudaError_t err = cudaMemcpyToSymbol(HAND_TABLE_DEVICE, host_table, 4824 * sizeof(int32_t));
+    // Явное указание postflop::HAND_TABLE_DEVICE убирает ошибку invalid device symbol
+    cudaError_t err = cudaMemcpyToSymbol(postflop::HAND_TABLE_DEVICE, host_table, 4824 * sizeof(int32_t));
     if (err != cudaSuccess) {
         fprintf(stderr, "cudaMemcpyToSymbol HAND_TABLE_DEVICE failed: %s\n", cudaGetErrorString(err));
         return -1;
