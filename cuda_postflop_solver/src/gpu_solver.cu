@@ -36,12 +36,12 @@ void kernel_down_pass(
 
     int num_actions = node.num_children;
     int tid = threadIdx.x; 
-    extern __shared__ float s_strategy[]; 
 
     if (node.is_chance()) {
+        float chance_factor = (node.turn == 255) ? 45.0f : 44.0f;
         for (int opp_h = tid; opp_h < num_hands_opp; opp_h += blockDim.x) {
             float my_reach = d_opp_reach[node_idx * MAX_HANDS + opp_h];
-            float scaled = my_reach / (float)num_actions;
+            float scaled = my_reach / chance_factor;
             for (int a = 0; a < num_actions; ++a) {
                 d_opp_reach[(node.children_offset + a) * MAX_HANDS + opp_h] = scaled;
             }
@@ -52,32 +52,39 @@ void kernel_down_pass(
     int node_player = node.player & 3;
     
     for (int opp_h = tid; opp_h < num_hands_opp; opp_h += blockDim.x) {
-        if (node_player != updating_player) {
+        float my_reach = d_opp_reach[node_idx * MAX_HANDS + opp_h];
+
+        if (node_player == updating_player) {
+            // Узел обновляемого игрока: cfreach соперника пробрасывается без изменений
+            for (int a = 0; a < num_actions; ++a) {
+                d_opp_reach[(node.children_offset + a) * MAX_HANDS + opp_h] = my_reach;
+            }
+        } else {
+            // Узел соперника: считаем его стратегию на лету и умножаем на cfreach
             float sum_pos = 0.0f;
-            float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
+            float s2 = node.scale2;
+            if (s2 == 0.0f) s2 = 1.0f;
+            float decode_mult = is_compressed ? (s2 / 32767.0f) : 1.0f;
+            
             for (int a = 0; a < num_actions; ++a) {
                 int mem_idx = node.storage2_offset + a * num_hands_opp + opp_h;
                 float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
                                         : ((const float*)d_storage2)[mem_idx];
                 if (r > 0.0f) sum_pos += r;
             }
+            
             float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
             float uniform = 1.0f / num_actions;
+            
             for (int a = 0; a < num_actions; ++a) {
                 int mem_idx = node.storage2_offset + a * num_hands_opp + opp_h;
                 float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
                                         : ((const float*)d_storage2)[mem_idx];
-                s_strategy[a * blockDim.x + threadIdx.x] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
-            }
-        }
-
-        float my_reach = d_opp_reach[node_idx * MAX_HANDS + opp_h];
-        for (int a = 0; a < num_actions; ++a) {
-            int child_idx = node.children_offset + a;
-            if (node_player == updating_player) {
-                d_opp_reach[child_idx * MAX_HANDS + opp_h] = my_reach;
-            } else {
-                d_opp_reach[child_idx * MAX_HANDS + opp_h] = my_reach * s_strategy[a * blockDim.x + threadIdx.x];
+                
+                // ИСПРАВЛЕНИЕ ЗИНОВИЯ: Правильный тернарный оператор
+                float strat_val = (sum_pos > 1e-7f) ? ((r > 0.0f) ? (r * inv) : 0.0f) : uniform;
+                
+                d_opp_reach[(node.children_offset + a) * MAX_HANDS + opp_h] = my_reach * strat_val;
             }
         }
     }
@@ -100,41 +107,42 @@ void kernel_terminal_fold(
     const PostFlopNode& node = d_nodes[node_idx];
     
     int folded_player = node.player & 3;
-    float pot = starting_pot + 2 * node.amount;
-    float half_pot = 0.5f * pot;
-    float rake = fminf(pot * rake_rate, rake_cap);
-    float amount_win = (half_pot - rake) / opp_num_hands;
-    float amount_lose = -half_pot / opp_num_hands;
-    float payoff = (updating_player == folded_player) ? amount_lose : amount_win;
+    
+    double pot = starting_pot + 2 * node.amount;
+    double half_pot = 0.5 * pot;
+    double rake = fmin(pot * (double)rake_rate, (double)rake_cap);
+    double amount_win = (half_pot - rake) / opp_num_hands;
+    double amount_lose = -half_pot / opp_num_hands;
+    double payoff = (updating_player == folded_player) ? amount_lose : amount_win;
 
-    extern __shared__ float s_cfreach_minus[]; 
+    extern __shared__ double s_cfreach_minus[]; 
     int tid = threadIdx.x;
-    if (tid < 53) s_cfreach_minus[tid] = 0.0f;
+    if (tid < 53) s_cfreach_minus[tid] = 0.0;
     __syncthreads();
 
     const float* cfreach = d_opp_reach + node_idx * MAX_HANDS;
     
-    float my_sum = 0.0f;
+    double my_sum = 0.0;
     for (int i = tid; i < opp_num_hands; i += blockDim.x) {
         float w = cfreach[i];
         if (w != 0.0f) {
             my_sum += w;
-            atomicAdd(&s_cfreach_minus[d_opp_cards[i * 2]], w);
-            atomicAdd(&s_cfreach_minus[d_opp_cards[i * 2 + 1]], w);
+            atomicAdd(&s_cfreach_minus[d_opp_cards[i * 2]], (double)w);
+            atomicAdd(&s_cfreach_minus[d_opp_cards[i * 2 + 1]], (double)w);
         }
     }
-    if (my_sum != 0.0f) atomicAdd(&s_cfreach_minus[52], my_sum);
+    if (my_sum != 0.0) atomicAdd(&s_cfreach_minus[52], my_sum);
     __syncthreads();
 
-    float cfreach_sum = s_cfreach_minus[52];
+    double cfreach_sum = s_cfreach_minus[52];
     for (int h = tid; h < num_hands; h += blockDim.x) {
         Card c1 = d_my_cards[h * 2];
         Card c2 = d_my_cards[h * 2 + 1];
-        float cfreach_same = 0.0f;
+        double cfreach_same = 0.0;
         uint16_t si = d_my_same[h];
         if (si != 0xFFFF) cfreach_same = cfreach[si];
-        float total = cfreach_sum + cfreach_same - s_cfreach_minus[c1] - s_cfreach_minus[c2];
-        d_node_cfv[node_idx * MAX_HANDS + h] = payoff * total;
+        double total = cfreach_sum + cfreach_same - s_cfreach_minus[c1] - s_cfreach_minus[c2];
+        d_node_cfv[node_idx * MAX_HANDS + h] = (float)(payoff * total);
     }
 }
 
@@ -155,12 +163,12 @@ void kernel_terminal_showdown(
     int node_idx = d_showdown_nodes[idx];
     const PostFlopNode& node = d_nodes[node_idx];
     
-    float pot = starting_pot + 2 * node.amount;
-    float half_pot = 0.5f * pot;
-    float rake = fminf(pot * rake_rate, rake_cap);
-    float amount_win = (half_pot - rake) / opp_num_hands;
-    float amount_lose = -half_pot / opp_num_hands;
-    float amount_tie = -0.5f * rake / opp_num_hands;
+    double pot = starting_pot + 2 * node.amount;
+    double half_pot = 0.5 * pot;
+    double rake = fmin(pot * (double)rake_rate, (double)rake_cap);
+    double amount_win = (half_pot - rake) / opp_num_hands;
+    double amount_lose = -half_pot / opp_num_hands;
+    double amount_tie = -0.5 * rake / opp_num_hands;
 
     Card turn = node.turn;
     Card river = node.river;
@@ -181,10 +189,10 @@ void kernel_terminal_showdown(
         Card mcards[7] = {c1, c2, flop0, flop1, flop2, turn, river};
         uint16_t my_strength = evaluate(mcards, 7);
 
-        float win_cfreach = 0, lose_cfreach = 0, tie_cfreach = 0;
-        float minus_c1_win = 0, minus_c2_win = 0;
-        float minus_c1_lose = 0, minus_c2_lose = 0;
-        float minus_c1_tie = 0, minus_c2_tie = 0;
+        double win_cfreach = 0, lose_cfreach = 0, tie_cfreach = 0;
+        double minus_c1_win = 0, minus_c2_win = 0;
+        double minus_c1_lose = 0, minus_c2_lose = 0;
+        double minus_c1_tie = 0, minus_c2_tie = 0;
 
         for (int i = 0; i < opp_num_hands; ++i) {
             float w = cfreach[i];
@@ -210,7 +218,7 @@ void kernel_terminal_showdown(
             }
         }
 
-        float cfreach_same = 0.0f;
+        double cfreach_same = 0.0;
         uint16_t si = d_my_same[h];
         if (si != 0xFFFF) cfreach_same = cfreach[si];
 
@@ -218,8 +226,8 @@ void kernel_terminal_showdown(
         lose_cfreach += cfreach_same - minus_c1_lose - minus_c2_lose;
         tie_cfreach += cfreach_same - minus_c1_tie - minus_c2_tie;
 
-        d_node_cfv[node_idx * MAX_HANDS + h] = 
-            amount_win * win_cfreach + amount_lose * lose_cfreach + amount_tie * tie_cfreach;
+        d_node_cfv[node_idx * MAX_HANDS + h] = (float)(
+            amount_win * win_cfreach + amount_lose * lose_cfreach + amount_tie * tie_cfreach);
     }
 }
 
@@ -257,52 +265,55 @@ void kernel_up_pass(
         }
 
         int node_player = node.player & 3;
-        extern __shared__ float s_mem[];
-        float* s_strategy = s_mem;
 
-        if (node_player == updating_player) {
-            float sum_pos = 0.0f;
-            float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
-            for (int a = 0; a < num_actions; ++a) {
-                int mem_idx = node.storage2_offset + a * num_hands_p + h;
-                float r = is_compressed ? (float)((int16_t*)d_storage2)[mem_idx] * decode_mult
-                                        : ((float*)d_storage2)[mem_idx];
-                if (r > 0.0f) sum_pos += r;
-            }
-            float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
-            float uniform = 1.0f / num_actions;
-            for (int a = 0; a < num_actions; ++a) {
-                int mem_idx = node.storage2_offset + a * num_hands_p + h;
-                float r = is_compressed ? (float)((int16_t*)d_storage2)[mem_idx] * decode_mult
-                                        : ((float*)d_storage2)[mem_idx];
-                s_strategy[a * blockDim.x + tid] = (sum_pos > 1e-7f && r > 0.0f) ? (r * inv) : uniform;
-            }
+        // Считаем стратегию на лету (без Shared Memory)
+        float sum_pos = 0.0f;
+        float s2 = node.scale2;
+        if (s2 == 0.0f) s2 = 1.0f;
+        float decode_mult = is_compressed ? (s2 / 32767.0f) : 1.0f;
+        
+        for (int a = 0; a < num_actions; ++a) {
+            int mem_idx = node.storage2_offset + a * num_hands_p + h;
+            float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
+                                    : ((const float*)d_storage2)[mem_idx];
+            if (r > 0.0f) sum_pos += r;
         }
+        
+        float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
+        float uniform = 1.0f / num_actions;
 
         float my_cfv = 0.0f;
-        if (node_player == updating_player) {
-            for (int a = 0; a < num_actions; ++a) {
-                my_cfv += s_strategy[a * blockDim.x + tid] * d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
-            }
-        } else {
-            for (int a = 0; a < num_actions; ++a) {
-                my_cfv += d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
+        for (int a = 0; a < num_actions; ++a) {
+            int mem_idx = node.storage2_offset + a * num_hands_p + h;
+            float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
+                                    : ((const float*)d_storage2)[mem_idx];
+            float strat_val = (sum_pos > 1e-7f) ? ((r > 0.0f) ? (r * inv) : 0.0f) : uniform;
+            
+            float child_cfv = d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
+            if (node_player == updating_player) {
+                my_cfv += strat_val * child_cfv;
+            } else {
+                my_cfv += child_cfv;
             }
         }
         d_node_cfv[node_idx * MAX_HANDS + h] = my_cfv;
 
         if (node_player == updating_player) {
-            float decode_mult1 = is_compressed ? (node.scale1 / 32767.0f) : 1.0f;
-            // ИСПРАВЛЕНИЕ: Добавлена переменная decode_mult для регретов
-            float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
-
+            float s1 = node.scale1; if (s1 == 0.0f) s1 = 1.0f;
+            float decode_mult1 = is_compressed ? (s1 / 32767.0f) : 1.0f;
+            
             for (int a = 0; a < num_actions; ++a) {
                 int mem_idx1 = node.storage1_offset + a * num_hands_p + h;
                 int mem_idx2 = node.storage2_offset + a * num_hands_p + h;
                 float child_cfv = d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
 
+                // Пересчитываем strat_val еще раз (дешевле, чем хранить в памяти)
+                float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx2] * decode_mult
+                                        : ((const float*)d_storage2)[mem_idx2];
+                float strat_val = (sum_pos > 1e-7f) ? ((r > 0.0f) ? (r * inv) : 0.0f) : uniform;
+
                 float old_s = is_compressed ? (float)((int16_t*)d_storage1)[mem_idx1] * decode_mult1 : ((float*)d_storage1)[mem_idx1];
-                float new_s = old_s * gamma_t + s_strategy[a * blockDim.x + tid];
+                float new_s = old_s * gamma_t + strat_val;
                 if (!is_compressed) ((float*)d_storage1)[mem_idx1] = new_s;
 
                 float old_r = is_compressed ? (float)((int16_t*)d_storage2)[mem_idx2] * decode_mult : ((float*)d_storage2)[mem_idx2];
@@ -411,15 +422,14 @@ int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter) {
 
         for (int d = 0; d <= gpu.max_depth; ++d) {
             if (gpu.level_sizes[d] == 0) continue;
-            size_t smem = 10 * 256 * sizeof(float); 
-            kernel_down_pass<<<gpu.level_sizes[d], 256, smem>>>(
+            kernel_down_pass<<<gpu.level_sizes[d], 256>>>(
                 gpu.d_levels[d], gpu.level_sizes[d], gpu.d_nodes, gpu.d_storage2, gpu.d_node_cfreach,
                 num_hands_p, num_hands_opp, p, gpu.is_compressed
             );
         }
 
         if (gpu.num_fold_nodes > 0) {
-            kernel_terminal_fold<<<gpu.num_fold_nodes, 256, 53 * sizeof(float)>>>(
+            kernel_terminal_fold<<<gpu.num_fold_nodes, 256, 53 * sizeof(double)>>>(
                 gpu.d_fold_nodes, gpu.num_fold_nodes, gpu.d_nodes, gpu.d_node_cfreach, gpu.d_node_cfv,
                 gpu.d_private_cards[p], gpu.d_private_cards[opp], gpu.d_same_hand_idx[p],
                 num_hands_p, num_hands_opp, gpu.starting_pot, gpu.rake_rate, gpu.rake_cap, p
@@ -436,8 +446,7 @@ int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter) {
 
         for (int d = gpu.max_depth; d >= 0; --d) {
             if (gpu.level_sizes[d] == 0) continue;
-            size_t smem = (10 * 256 + 256) * sizeof(float);
-            kernel_up_pass<<<gpu.level_sizes[d], 256, smem>>>(
+            kernel_up_pass<<<gpu.level_sizes[d], 256>>>(
                 gpu.d_levels[d], gpu.level_sizes[d], gpu.d_nodes, gpu.d_storage1, gpu.d_storage2, gpu.d_node_cfv,
                 params.alpha_t, params.beta_t, params.gamma_t, num_hands_p, num_hands_opp, p, gpu.is_compressed
             );
