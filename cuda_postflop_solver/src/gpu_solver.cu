@@ -14,6 +14,7 @@ namespace postflop {
 #define PLAYER_FOLD_FLAG 24
 #define MAX_HANDS 1326
 
+// ── ЯДРО 1: Проход ВНИЗ (Down-pass) ─────────────────────────────────────
 __global__
 void kernel_down_pass(
     const int* __restrict__ d_nodes_at_depth,
@@ -82,6 +83,7 @@ void kernel_down_pass(
     }
 }
 
+// ── ЯДРО 2: Терминальный Fold ───────────────────────────────────────────
 __global__ 
 void kernel_terminal_fold(
     const int* __restrict__ d_fold_nodes, int num_nodes, 
@@ -136,6 +138,7 @@ void kernel_terminal_fold(
     }
 }
 
+// ── ЯДРО 3: Терминальный Showdown ───────────────────────────────────────
 __global__ 
 void kernel_terminal_showdown(
     const int* __restrict__ d_showdown_nodes, int num_nodes, 
@@ -220,6 +223,7 @@ void kernel_terminal_showdown(
     }
 }
 
+// ── ЯДРО 4: Проход ВВЕРХ (Up-pass) ──────────────────────────────────────
 __global__
 void kernel_up_pass(
     const int* __restrict__ d_nodes_at_depth,
@@ -289,6 +293,8 @@ void kernel_up_pass(
 
         if (node_player == updating_player) {
             float decode_mult1 = is_compressed ? (node.scale1 / 32767.0f) : 1.0f;
+            // ИСПРАВЛЕНИЕ: Добавлена переменная decode_mult для регретов
+            float decode_mult = is_compressed ? (node.scale2 / 32767.0f) : 1.0f;
 
             for (int a = 0; a < num_actions; ++a) {
                 int mem_idx1 = node.storage1_offset + a * num_hands_p + h;
@@ -401,7 +407,6 @@ int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter) {
         int num_hands_p = gpu.num_hands[p];
         int num_hands_opp = gpu.num_hands[opp];
 
-        // ИСПРАВЛЕНИЕ: Копируем initial_weights с шагом MAX_HANDS
         cudaMemcpy(gpu.d_node_cfreach, gpu.d_initial_weights[opp], num_hands_opp * sizeof(float), cudaMemcpyDeviceToDevice);
 
         for (int d = 0; d <= gpu.max_depth; ++d) {
