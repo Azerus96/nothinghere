@@ -13,7 +13,6 @@ namespace postflop {
 
 #define PLAYER_FOLD_FLAG 24
 
-// ── ЯДРО 1: Проход ВНИЗ (Down-pass) ─────────────────────────────────────
 __global__
 void kernel_down_pass(
     const int* __restrict__ d_nodes_at_depth,
@@ -75,7 +74,6 @@ void kernel_down_pass(
     }
 }
 
-// ── ЯДРО 2: Терминальный Fold ───────────────────────────────────────────
 __global__ 
 void kernel_terminal_fold(
     const int* __restrict__ d_fold_nodes, int num_nodes, 
@@ -99,7 +97,7 @@ void kernel_terminal_fold(
     float amount_lose = -half_pot / opp_num_hands;
     float payoff = (updating_player == folded_player) ? amount_lose : amount_win;
 
-    extern __shared__ float s_cfreach_minus[]; // [53]
+    extern __shared__ float s_cfreach_minus[]; 
     int tid = threadIdx.x;
     if (tid < 53) s_cfreach_minus[tid] = 0.0f;
     __syncthreads();
@@ -130,7 +128,6 @@ void kernel_terminal_fold(
     }
 }
 
-// ── ЯДРО 3: Терминальный Showdown ───────────────────────────────────────
 __global__ 
 void kernel_terminal_showdown(
     const int* __restrict__ d_showdown_nodes, int num_nodes, 
@@ -158,7 +155,7 @@ void kernel_terminal_showdown(
     Card river = node.river;
     const float* cfreach = d_opp_reach + node_idx * num_hands;
 
-    extern __shared__ uint16_t s_opp_strengths[]; // [1326]
+    extern __shared__ uint16_t s_opp_strengths[]; 
     int tid = threadIdx.x;
     
     for (int i = tid; i < opp_num_hands; i += blockDim.x) {
@@ -215,7 +212,6 @@ void kernel_terminal_showdown(
     }
 }
 
-// ── ЯДРО 4: Проход ВВЕРХ (Up-pass) ──────────────────────────────────────
 __global__
 void kernel_up_pass(
     const int* __restrict__ d_nodes_at_depth,
@@ -331,15 +327,15 @@ void kernel_up_pass(
     }
 }
 
-// ── Оркестрация с хоста ─────────────────────────────────────────────────
+// ── ИСПРАВЛЕНИЕ: Вызов storage1_bytes() вместо storage1_data_mut().size() ─────
 bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
     if (gpu.initialized) return true;
 
     const auto& arena = game.node_arena();
     gpu.num_nodes = (int)arena.size();
-    gpu.num_storage = (int)game.storage1_data_mut().size(); // bytes
-    gpu.num_storage_ip = (int)game.storage_ip_data_mut().size();
-    gpu.num_storage_chance = (int)game.storage_chance_data_mut().size();
+    gpu.num_storage = (int)game.storage1_bytes();
+    gpu.num_storage_ip = (int)game.storage_ip_bytes();
+    gpu.num_storage_chance = (int)game.storage_chance_bytes();
     gpu.num_hands[0] = game.num_private_hands(0);
     gpu.num_hands[1] = game.num_private_hands(1);
     gpu.starting_pot = game.tree_config().starting_pot;
@@ -373,7 +369,6 @@ bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
         cudaMemcpy(gpu.d_initial_weights[p], cc.initial_weights[p].data(), nh * sizeof(float), cudaMemcpyHostToDevice);
     }
 
-    // BFS Levels
     gpu.max_depth = game.max_tree_depth();
     gpu.level_sizes = new int[gpu.max_depth + 1];
     gpu.d_levels = new int*[gpu.max_depth + 1];
@@ -388,7 +383,6 @@ bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
         }
     }
 
-    // Terminal nodes
     std::vector<int> fold_nodes, showdown_nodes;
     for (int i = 0; i < gpu.num_nodes; ++i) {
         if (arena[i].is_terminal()) {
