@@ -10,9 +10,6 @@
 
 namespace postflop {
 
-// Константная память GPU
-__constant__ int32_t HAND_TABLE_DEVICE[4824];
-
 int init_hand_table_on_gpu(const int32_t* host_table) {
     if (!host_table) host_table = HAND_TABLE; 
     cudaError_t err = cudaMemcpyToSymbol(HAND_TABLE_DEVICE, host_table, 4824 * sizeof(int32_t));
