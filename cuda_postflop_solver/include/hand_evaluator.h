@@ -8,6 +8,12 @@
 #include "cuda_compat.h"
 #include "card.h"
 
+// Подавление предупреждений NVCC при компиляции
+#ifdef __NVCC__
+#pragma nv_diag_suppress 20091
+#pragma nv_diag_suppress 20015
+#endif
+
 namespace postflop {
 
 constexpr int32_t CATEGORY_HIGH_CARD       = 0;
@@ -23,9 +29,9 @@ constexpr int32_t CATEGORY_STRAIGHT_FLUSH  = 8;
 constexpr int32_t CATEGORY_SHIFT = 26;
 constexpr int32_t WHEEL_BITMASK = 0b1'0000'0000'1111;  
 
-#ifdef __CUDACC__
+#if defined(__CUDACC__) && !defined(HAND_EVALUATOR_CU_IMPL)
 extern __constant__ int32_t HAND_TABLE[4824];
-#else
+#elif !defined(__CUDACC__)
 extern const int32_t HAND_TABLE[4824];
 #endif
 
