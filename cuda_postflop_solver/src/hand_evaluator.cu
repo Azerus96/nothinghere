@@ -10,9 +10,8 @@
 
 namespace postflop {
 
-// ИСПРАВЛЕНИЕ ДЛЯ C++20 / CUDA 12.8: 'extern' + инициализатор '= {0}'
-// явно заявляет C++ компилятору, что это единственная внешняя дефиниция
-extern __constant__ int32_t HAND_TABLE[4824] = {0};
+// HAND_TABLE объявляется через extern __constant__ в hand_evaluator.h
+// Отдельное повторное определение здесь не требуется для NVCC.
 
 extern "C" int init_hand_table_on_gpu(const int32_t* host_table) {
     cudaError_t err = cudaMemcpyToSymbol(HAND_TABLE, host_table, 4824 * sizeof(int32_t));
