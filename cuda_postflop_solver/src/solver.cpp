@@ -91,17 +91,14 @@ static ScratchArena* get_scratch() {
 }
 
 void sub_slice(float* dst, const float* src1, const float* src2, int len) {
-    #pragma omp simd
     for (int i = 0; i < len; ++i) dst[i] = src1[i] - src2[i];
 }
 
 void mul_slice(float* dst, const float* src, int len) {
-    #pragma omp simd
     for (int i = 0; i < len; ++i) dst[i] *= src[i];
 }
 
 void mul_slice_scalar_uninit(float* dst, const float* src, float scalar, int len) {
-    #pragma omp simd
     for (int i = 0; i < len; ++i) dst[i] = src[i] * scalar;
 }
 
@@ -110,18 +107,15 @@ void sum_slices_uninit(float* dst, const float* src, int num_rows, int len) {
     std::memcpy(dst, src, len * sizeof(float));
     for (int r = 1; r < num_rows; ++r) {
         const float* row = src + r * len;
-        #pragma omp simd
         for (int i = 0; i < len; ++i) dst[i] += row[i];
     }
 }
 
 void fma_strategy_cfv(float* dst, const float* strategy, const float* cfv, int num_actions, int num_hands) {
-    #pragma omp simd
     for (int h = 0; h < num_hands; ++h) dst[h] = 0.0f;
     for (int a = 0; a < num_actions; ++a) {
         const float* s_row = strategy + a * num_hands;
         const float* c_row = cfv      + a * num_hands;
-        #pragma omp simd
         for (int h = 0; h < num_hands; ++h) dst[h] += s_row[h] * c_row[h];
     }
 }
@@ -131,7 +125,6 @@ void max_slices_uninit(float* dst, const float* src, int num_rows, int len) {
     std::memcpy(dst, src, len * sizeof(float));
     for (int r = 1; r < num_rows; ++r) {
         const float* row = src + r * len;
-        #pragma omp simd
         for (int i = 0; i < len; ++i) {
             if (row[i] > dst[i]) dst[i] = row[i];
         }
@@ -140,26 +133,7 @@ void max_slices_uninit(float* dst, const float* src, int num_rows, int len) {
 
 void regret_matching(float* strategy, const float* regret, int num_actions, int num_hands) {
     const float uniform = 1.0f / num_actions;
-    const int H8 = num_hands & ~7;
-    int h = 0;
-    for (; h < H8; h += 8) {
-        float sp[8] = {0};
-        for (int a = 0; a < num_actions; ++a) {
-            const float* r = regret + a * num_hands + h;
-            #pragma omp simd
-            for (int k = 0; k < 8; ++k) if (r[k] > 0.0f) sp[k] += r[k];
-        }
-        for (int a = 0; a < num_actions; ++a) {
-            float* s = strategy + a * num_hands + h;
-            const float* r = regret + a * num_hands + h;
-            #pragma omp simd
-            for (int k = 0; k < 8; ++k) {
-                if (sp[k] > 1e-7f) s[k] = (r[k] > 0.0f) ? (r[k] / sp[k]) : 0.0f;
-                else s[k] = uniform;
-            }
-        }
-    }
-    for (; h < num_hands; ++h) {
+    for (int h = 0; h < num_hands; ++h) {
         float sum_positive = 0.0f;
         for (int a = 0; a < num_actions; ++a) {
             float r = regret[a * num_hands + h];
@@ -357,7 +331,6 @@ void evaluate_terminal(float* result, const PostFlopGame& game, const PostFlopNo
     }
 }
 
-// ИСПРАВЛЕНИЕ: Убрано const с PostFlopGame& game, чтобы вызывать немодифицируемые методы
 static void solve_recursive(
     float* result,
     PostFlopGame& game,
@@ -368,7 +341,9 @@ static void solve_recursive(
     int depth)
 {
     const PostFlopNode& node = game.node_arena()[node_idx];
-    int num_hands = game.num_private_hands(player);
+    int num_hands_p = game.num_private_hands(player);
+    int opp_player = 1 - player;
+    int num_hands_opp = game.num_private_hands(opp_player);
 
     if (node.is_terminal()) {
         evaluate_terminal(result, game, node, player, cfreach);
@@ -378,31 +353,27 @@ static void solve_recursive(
     if (node.is_chance()) {
         int num_children = node.num_children;
         if (num_children == 0) {
-            std::memset(result, 0, num_hands * sizeof(float));
+            std::memset(result, 0, num_hands_p * sizeof(float));
             return;
         }
         ScratchArena* arena = get_scratch();
         ScratchArena::SavePoint saved = arena->save();
         
-        float* cfreach_scaled = arena->alloc(num_hands);
+        float* cfreach_scaled = arena->alloc(num_hands_opp);
         float scale = 1.0f / (float)game.chance_factor(node);
-        #pragma omp simd
-        for (int i = 0; i < num_hands; ++i) cfreach_scaled[i] = cfreach[i] * scale;
+        for (int i = 0; i < num_hands_opp; ++i) cfreach_scaled[i] = cfreach[i] * scale;
 
-        double* result_f64 = (double*)arena->alloc(num_hands * 2);
-        std::memset(result_f64, 0, num_hands * sizeof(double));
+        double* result_f64 = (double*)arena->alloc(num_hands_p * 2);
+        std::memset(result_f64, 0, num_hands_p * sizeof(double));
 
-        float* child_cfv = arena->alloc(num_hands);
+        float* child_cfv = arena->alloc(num_hands_p);
         for (int a = 0; a < num_children; ++a) {
             int child_idx = node.children_offset + a;
             solve_recursive(child_cfv, game, child_idx, player, cfreach_scaled, params, depth + 1);
-            #pragma omp simd
-            for (int h = 0; h < num_hands; ++h) result_f64[h] += child_cfv[h];
+            for (int h = 0; h < num_hands_p; ++h) result_f64[h] += child_cfv[h];
         }
 
-        #pragma omp simd
-        for (int h = 0; h < num_hands; ++h) result[h] = (float)result_f64[h];
-
+        for (int h = 0; h < num_hands_p; ++h) result[h] = (float)result_f64[h];
         arena->restore(saved);
         return;
     }
@@ -410,62 +381,50 @@ static void solve_recursive(
     int node_player = node.get_player();
     int num_actions = node.num_actions();
     if (num_actions == 0 || node.num_elements == 0) {
-        std::memset(result, 0, num_hands * sizeof(float));
+        std::memset(result, 0, num_hands_p * sizeof(float));
         return;
     }
 
     ScratchArena* arena = get_scratch();
     ScratchArena::SavePoint saved = arena->save();
 
-    float* cfv_actions = arena->alloc(num_actions * num_hands);
-    float* strategy = arena->alloc(num_actions * num_hands);
-
-    if (game.is_compression_enabled()) {
-        const int16_t* regrets = (const int16_t*)game.storage2_data() + node.storage2_offset;
-        float decode_mult = node.scale2 / 32767.0f;
-        float* r_float = arena->alloc(num_actions * num_hands);
-        for (int i = 0; i < num_actions * num_hands; ++i) r_float[i] = (float)regrets[i] * decode_mult;
-        regret_matching(strategy, r_float, num_actions, num_hands);
-    } else {
-        const float* regrets = game.storage2_data() + node.storage2_offset;
-        regret_matching(strategy, regrets, num_actions, num_hands);
-    }
-
+    // ИСПРАВЛЕНИЕ: Строгое разделение логики для своего узла и узла соперника
     if (node_player == player) {
+        // Это НАШ узел. Читаем НАШИ регреты (размер num_hands_p)
+        float* strategy = arena->alloc(num_actions * num_hands_p);
+        if (game.is_compression_enabled()) {
+            const int16_t* regrets = (const int16_t*)game.storage2_data() + node.storage2_offset;
+            float decode_mult = node.scale2 / 32767.0f;
+            float* r_float = arena->alloc(num_actions * num_hands_p);
+            for (int i = 0; i < num_actions * num_hands_p; ++i) r_float[i] = (float)regrets[i] * decode_mult;
+            regret_matching(strategy, r_float, num_actions, num_hands_p);
+        } else {
+            const float* regrets = game.storage2_data() + node.storage2_offset;
+            regret_matching(strategy, regrets, num_actions, num_hands_p);
+        }
+
+        float* cfv_actions = arena->alloc(num_actions * num_hands_p);
         for (int a = 0; a < num_actions; ++a) {
             int child_idx = node.children_offset + a;
-            float* child_cfv = cfv_actions + a * num_hands;
-            solve_recursive(child_cfv, game, child_idx, player, cfreach, params, depth + 1);
+            // cfreach соперника пробрасывается без изменений
+            solve_recursive(cfv_actions + a * num_hands_p, game, child_idx, player, cfreach, params, depth + 1);
         }
-    } else {
-        float* cfreach_a = arena->alloc(num_hands);
-        for (int a = 0; a < num_actions; ++a) {
-            const float* strat_row = strategy + a * num_hands;
-            #pragma omp simd
-            for (int i = 0; i < num_hands; ++i) cfreach_a[i] = cfreach[i] * strat_row[i];
-            int child_idx = node.children_offset + a;
-            float* child_cfv = cfv_actions + a * num_hands;
-            solve_recursive(child_cfv, game, child_idx, player, cfreach_a, params, depth + 1);
-        }
-    }
 
-    fma_strategy_cfv(result, strategy, cfv_actions, num_actions, num_hands);
+        fma_strategy_cfv(result, strategy, cfv_actions, num_actions, num_hands_p);
 
-    if (node_player == player) {
+        // Обновляем НАШИ регреты и стратегию
         if (game.is_compression_enabled()) {
             int16_t* strategy_sum = (int16_t*)game.storage1_data_mut() + node.storage1_offset;
             int16_t* regrets = (int16_t*)game.storage2_data_mut() + node.storage2_offset;
-            
             float decode_mult1 = node.scale1 / 32767.0f;
             float decode_mult2 = node.scale2 / 32767.0f;
             float max_s = 0.0f, max_r = 0.0f;
-
-            float* new_s_buf = arena->alloc(num_actions * num_hands);
-            float* new_r_buf = arena->alloc(num_actions * num_hands);
+            float* new_s_buf = arena->alloc(num_actions * num_hands_p);
+            float* new_r_buf = arena->alloc(num_actions * num_hands_p);
 
             for (int a = 0; a < num_actions; ++a) {
-                for (int h = 0; h < num_hands; ++h) {
-                    int idx = a * num_hands + h;
+                for (int h = 0; h < num_hands_p; ++h) {
+                    int idx = a * num_hands_p + h;
                     float old_s = (float)strategy_sum[idx] * decode_mult1;
                     float new_s = old_s * params.gamma_t + strategy[idx];
                     new_s_buf[idx] = new_s;
@@ -479,14 +438,13 @@ static void solve_recursive(
                     if (std::abs(new_r) > max_r) max_r = std::abs(new_r);
                 }
             }
-
             float new_scale = std::max(max_s, max_r);
             if (new_scale == 0.0f) new_scale = 1.0f;
             const_cast<PostFlopNode&>(node).scale1 = new_scale;
             const_cast<PostFlopNode&>(node).scale2 = new_scale;
             float encode_mult = 32767.0f / new_scale;
 
-            for (int i = 0; i < num_actions * num_hands; ++i) {
+            for (int i = 0; i < num_actions * num_hands_p; ++i) {
                 strategy_sum[i] = (int16_t)std::max(-32768.0f, std::min(32767.0f, std::round(new_s_buf[i] * encode_mult)));
                 regrets[i] = (int16_t)std::max(-32768.0f, std::min(32767.0f, std::round(new_r_buf[i] * encode_mult)));
             }
@@ -494,8 +452,8 @@ static void solve_recursive(
             float* strategy_sum = game.storage1_data_mut() + node.storage1_offset;
             float* regrets = game.storage2_data_mut() + node.storage2_offset;
             for (int a = 0; a < num_actions; ++a) {
-                for (int h = 0; h < num_hands; ++h) {
-                    int idx = a * num_hands + h;
+                for (int h = 0; h < num_hands_p; ++h) {
+                    int idx = a * num_hands_p + h;
                     strategy_sum[idx] = strategy_sum[idx] * params.gamma_t + strategy[idx];
                     float old_r = regrets[idx];
                     float coef = (old_r >= 0.0f) ? params.alpha_t : params.beta_t;
@@ -504,6 +462,32 @@ static void solve_recursive(
                 }
             }
         }
+    } else {
+        // Это узел СОПЕРНИКА. Читаем ЕГО регреты (размер num_hands_opp)
+        float* strategy = arena->alloc(num_actions * num_hands_opp);
+        if (game.is_compression_enabled()) {
+            const int16_t* regrets = (const int16_t*)game.storage2_data() + node.storage2_offset;
+            float decode_mult = node.scale2 / 32767.0f;
+            float* r_float = arena->alloc(num_actions * num_hands_opp);
+            for (int i = 0; i < num_actions * num_hands_opp; ++i) r_float[i] = (float)regrets[i] * decode_mult;
+            regret_matching(strategy, r_float, num_actions, num_hands_opp);
+        } else {
+            const float* regrets = game.storage2_data() + node.storage2_offset;
+            regret_matching(strategy, regrets, num_actions, num_hands_opp);
+        }
+
+        float* cfreach_a = arena->alloc(num_hands_opp);
+        float* cfv_actions = arena->alloc(num_actions * num_hands_p);
+        
+        for (int a = 0; a < num_actions; ++a) {
+            const float* strat_row = strategy + a * num_hands_opp;
+            for (int i = 0; i < num_hands_opp; ++i) cfreach_a[i] = cfreach[i] * strat_row[i];
+            int child_idx = node.children_offset + a;
+            solve_recursive(cfv_actions + a * num_hands_p, game, child_idx, player, cfreach_a, params, depth + 1);
+        }
+        
+        // ИСПРАВЛЕНИЕ: Для узла соперника CFV просто суммируется!
+        sum_slices_uninit(result, cfv_actions, num_actions, num_hands_p);
     }
 
     arena->restore(saved);
@@ -582,7 +566,9 @@ void finalize(PostFlopGame& game) { game.set_solved(); }
 
 static void best_response_recursive(float* result, const PostFlopGame& game, int node_idx, int br_player, const float* cfreach, int depth) {
     const PostFlopNode& node = game.node_arena()[node_idx];
-    int num_hands = game.num_private_hands(br_player);
+    int num_hands_p = game.num_private_hands(br_player);
+    int opp_player = 1 - br_player;
+    int num_hands_opp = game.num_private_hands(opp_player);
 
     if (node.is_terminal()) {
         evaluate_terminal(result, game, node, br_player, cfreach);
@@ -595,27 +581,24 @@ static void best_response_recursive(float* result, const PostFlopGame& game, int
     if (node.is_chance()) {
         int num_children = node.num_children;
         if (num_children == 0) {
-            std::memset(result, 0, num_hands * sizeof(float));
+            std::memset(result, 0, num_hands_p * sizeof(float));
             arena->restore(saved);
             return;
         }
         float scale = 1.0f / (float)num_children;
-        float* cfreach_scaled = arena->alloc(num_hands);
-        #pragma omp simd
-        for (int i = 0; i < num_hands; ++i) cfreach_scaled[i] = cfreach[i] * scale;
+        float* cfreach_scaled = arena->alloc(num_hands_opp);
+        for (int i = 0; i < num_hands_opp; ++i) cfreach_scaled[i] = cfreach[i] * scale;
 
-        double* result_f64 = (double*)arena->alloc(num_hands * 2);
-        std::memset(result_f64, 0, num_hands * sizeof(double));
+        double* result_f64 = (double*)arena->alloc(num_hands_p * 2);
+        std::memset(result_f64, 0, num_hands_p * sizeof(double));
 
-        float* child_cfv = arena->alloc(num_hands);
+        float* child_cfv = arena->alloc(num_hands_p);
         for (int a = 0; a < num_children; ++a) {
             int child_idx = node.children_offset + a;
             best_response_recursive(child_cfv, game, child_idx, br_player, cfreach_scaled, depth + 1);
-            #pragma omp simd
-            for (int h = 0; h < num_hands; ++h) result_f64[h] += child_cfv[h];
+            for (int h = 0; h < num_hands_p; ++h) result_f64[h] += child_cfv[h];
         }
-        #pragma omp simd
-        for (int h = 0; h < num_hands; ++h) result[h] = (float)result_f64[h];
+        for (int h = 0; h < num_hands_p; ++h) result[h] = (float)result_f64[h];
         arena->restore(saved);
         return;
     }
@@ -623,54 +606,49 @@ static void best_response_recursive(float* result, const PostFlopGame& game, int
     int node_player = node.get_player();
     int num_actions = node.num_actions();
     if (num_actions == 0) {
-        std::memset(result, 0, num_hands * sizeof(float));
+        std::memset(result, 0, num_hands_p * sizeof(float));
         arena->restore(saved);
         return;
     }
 
-    float* strategy = arena->alloc(num_actions * num_hands);
-    if (game.is_compression_enabled()) {
-        const int16_t* ss = (const int16_t*)game.storage1_data() + node.storage1_offset;
-        float decode_mult = node.scale1 / 32767.0f;
-        for (int i = 0; i < num_actions * num_hands; ++i) strategy[i] = (float)ss[i] * decode_mult;
-    } else {
-        const float* ss = game.storage1_data() + node.storage1_offset;
-        std::memcpy(strategy, ss, num_actions * num_hands * sizeof(float));
-    }
-    normalize_strategy(strategy, num_actions, num_hands);
-
     if (node_player == br_player) {
-        float* all_child_cfvs = arena->alloc(num_actions * num_hands);
+        float* all_child_cfvs = arena->alloc(num_actions * num_hands_p);
         for (int a = 0; a < num_actions; ++a) {
             int child_idx = node.children_offset + a;
-            best_response_recursive(all_child_cfvs + a * num_hands, game, child_idx, br_player, cfreach, depth + 1);
+            best_response_recursive(all_child_cfvs + a * num_hands_p, game, child_idx, br_player, cfreach, depth + 1);
         }
-        #pragma omp simd
-        for (int h = 0; h < num_hands; ++h) result[h] = all_child_cfvs[h];
+        for (int h = 0; h < num_hands_p; ++h) result[h] = all_child_cfvs[h];
         for (int a = 1; a < num_actions; ++a) {
-            const float* row = all_child_cfvs + a * num_hands;
-            #pragma omp simd
-            for (int h = 0; h < num_hands; ++h) {
+            const float* row = all_child_cfvs + a * num_hands_p;
+            for (int h = 0; h < num_hands_p; ++h) {
                 if (row[h] > result[h]) result[h] = row[h];
             }
         }
     } else {
-        float* cfreach_a = arena->alloc(num_hands);
-        double* sum = (double*)arena->alloc(num_hands * 2);
-        float* child_cfv = arena->alloc(num_hands);
-        std::memset(sum, 0, num_hands * sizeof(double));
+        float* strategy = arena->alloc(num_actions * num_hands_opp);
+        if (game.is_compression_enabled()) {
+            const int16_t* ss = (const int16_t*)game.storage1_data() + node.storage1_offset;
+            float decode_mult = node.scale1 / 32767.0f;
+            for (int i = 0; i < num_actions * num_hands_opp; ++i) strategy[i] = (float)ss[i] * decode_mult;
+        } else {
+            const float* ss = game.storage1_data() + node.storage1_offset;
+            std::memcpy(strategy, ss, num_actions * num_hands_opp * sizeof(float));
+        }
+        normalize_strategy(strategy, num_actions, num_hands_opp);
+
+        float* cfreach_a = arena->alloc(num_hands_opp);
+        double* sum = (double*)arena->alloc(num_hands_p * 2);
+        float* child_cfv = arena->alloc(num_hands_p);
+        std::memset(sum, 0, num_hands_p * sizeof(double));
 
         for (int a = 0; a < num_actions; ++a) {
-            const float* s_row = strategy + a * num_hands;
-            #pragma omp simd
-            for (int i = 0; i < num_hands; ++i) cfreach_a[i] = cfreach[i] * s_row[i];
+            const float* s_row = strategy + a * num_hands_opp;
+            for (int i = 0; i < num_hands_opp; ++i) cfreach_a[i] = cfreach[i] * s_row[i];
             int child_idx = node.children_offset + a;
             best_response_recursive(child_cfv, game, child_idx, br_player, cfreach_a, depth + 1);
-            #pragma omp simd
-            for (int h = 0; h < num_hands; ++h) sum[h] += child_cfv[h];
+            for (int h = 0; h < num_hands_p; ++h) sum[h] += child_cfv[h];
         }
-        #pragma omp simd
-        for (int h = 0; h < num_hands; ++h) result[h] = (float)sum[h];
+        for (int h = 0; h < num_hands_p; ++h) result[h] = (float)sum[h];
     }
     arena->restore(saved);
 }
