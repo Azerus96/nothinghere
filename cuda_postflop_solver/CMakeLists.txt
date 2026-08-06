@@ -1,13 +1,6 @@
 # ════════════════════════════════════════════════════════════════════════
 # CMakeLists.txt — CUDA postflop solver build system
 # ════════════════════════════════════════════════════════════════════════
-# Builds two configurations:
-#   1. CPU-only build (g++):     uses cuda_compat.h shims, runs single-threaded.
-#   2. CUDA build (nvcc + g++):  real GPU kernels, requires compute_75+ (Tesla T4).
-#
-# Auto-detects CUDA. To force CPU-only: cmake -DUSE_CUDA=OFF ..
-# To force specific arch: cmake -DCUDA_ARCH=75 ..
-# ════════════════════════════════════════════════════════════════════════
 cmake_minimum_required(VERSION 3.16)
 project(cuda_postflop_solver LANGUAGES CXX C)
 
@@ -57,6 +50,9 @@ else()
     enable_language(CUDA)
     set(CMAKE_CUDA_STANDARD 17)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    
+    # ИСПРАВЛЕНИЕ: Включаем раздельную компиляцию CUDA (Relocatable Device Code)
+    set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 
     if(NOT DEFINED CUDA_ARCH)
         set(CUDA_ARCH 75)   # Tesla T4
@@ -86,41 +82,33 @@ endif()
 # ── Tests ───────────────────────────────────────────────────────────────
 enable_testing()
 
-# Evaluator distribution test (133M hands, ~4s CPU)
 add_executable(test_evaluator tests/test_evaluator.cpp)
 target_link_libraries(test_evaluator PRIVATE postflop_core)
 add_test(NAME evaluator COMMAND test_evaluator)
 
-# Real poker integration test (27 tests)
 add_executable(test_real_poker tests/test_real_poker.cpp)
 target_link_libraries(test_real_poker PRIVATE postflop_core)
 add_test(NAME real_poker COMMAND test_real_poker)
 
-# DCFR correctness test (19 tests including regret matching, discount params, exploitability)
 add_executable(test_dcfr tests/test_dcfr_correctness.cpp)
 target_link_libraries(test_dcfr PRIVATE postflop_core)
 add_test(NAME dcfr COMMAND test_dcfr)
 
-# BFS arena layout test (10 tests validating BUG #1 fix)
 add_executable(test_bfs tests/test_bfs_layout.cpp)
 target_link_libraries(test_bfs PRIVATE postflop_core)
 add_test(NAME bfs COMMAND test_bfs)
 
-# GPU solver smoke test (verifies init/solve/copy-back architecture)
 add_executable(test_gpu tests/test_gpu_solver.cpp)
 target_link_libraries(test_gpu PRIVATE postflop_core)
 add_test(NAME gpu COMMAND test_gpu)
 
-# V5 bug fix verification (ScratchArena growth, apply_added_lines, GPU dispatch)
 add_executable(test_v5 tests/test_v5_fixes.cpp)
 target_link_libraries(test_v5 PRIVATE postflop_core)
 add_test(NAME v5 COMMAND test_v5)
 
-# V6 multi-game state isolation (verify no static GpuMemory pollution)
 add_executable(test_v6 tests/test_v6_multi_game.cpp)
 target_link_libraries(test_v6 PRIVATE postflop_core)
 add_test(NAME v6 COMMAND test_v6)
 
-# Benchmarks
 add_executable(bench_solver bench/bench_solver.cpp)
 target_link_libraries(bench_solver PRIVATE postflop_core)
