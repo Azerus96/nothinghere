@@ -13,8 +13,8 @@
 #pragma nv_diag_suppress 20015
 #endif
 
-// Глобальный символ constant memory для GPU (без namespace mangling)
 #ifdef __CUDACC__
+// Глобальное объявление внешнего символа для всех .cu файлов
 extern __constant__ int32_t g_hand_table_device[4824];
 #endif
 
