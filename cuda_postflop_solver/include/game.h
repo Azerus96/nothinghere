@@ -58,19 +58,22 @@ struct StrengthItem {
 };
 
 struct CardConfig {
+    int num_players = 2; // Поддержка мультивея (до 6)
+    std::vector<Range> ranges; // Диапазоны всех игроков
+
+    // Оставлено для обратной совместимости со старыми тестами
     Range range_oop;          
     Range range_ip;           
+    
     Card  flop[3];            
     Card  turn;               
     Card  river;              
 
-    std::vector<std::pair<Card, Card>> private_cards[2];   
-    std::vector<float>                initial_weights[2];  
-    std::vector<uint16_t>             same_hand_index[2];  
-    std::vector<uint16_t>             valid_indices_flop[2];
-    std::vector<std::array<std::vector<uint16_t>, 2>> valid_indices_turn;
-    std::vector<std::array<std::vector<uint16_t>, 2>> valid_indices_river;
-    std::vector<std::array<std::vector<StrengthItem>, 2>> hand_strength;
+    // Векторы размером num_players
+    std::vector<std::vector<std::pair<Card, Card>>> private_cards;   
+    std::vector<std::vector<float>>                 initial_weights;  
+    std::vector<std::vector<uint16_t>>              same_hand_index;  
+    std::vector<std::vector<StrengthItem>>          hand_strength;
 
     bool has_flop() const  { return flop[0] != NOT_DEALT; }
     bool has_turn() const  { return turn != NOT_DEALT; }
@@ -93,6 +96,7 @@ public:
     friend void finalize(PostFlopGame& game);
     friend float compute_exploitability(const PostFlopGame& game);
 
+    int num_players() const { return card_config_.num_players; }
     int num_private_hands(int player) const { return (int)card_config_.private_cards[player].size(); }
     const std::vector<float>& initial_weights(int player) const { return card_config_.initial_weights[player]; }
     const std::vector<std::pair<Card, Card>>& private_cards(int player) const { return card_config_.private_cards[player]; }
@@ -125,7 +129,6 @@ public:
     float* storage_ip_data_mut() { return storage_ip_.data(); }
     float* storage_chance_data_mut() { return storage_chance_.data(); }
 
-    // Геттеры размеров хранилищ в байтах для GPU
     size_t storage1_bytes() const { return storage1_.size() * sizeof(float); }
     size_t storage_ip_bytes() const { return storage_ip_.size() * sizeof(float); }
     size_t storage_chance_bytes() const { return storage_chance_.size() * sizeof(float); }
@@ -160,7 +163,6 @@ private:
     uint64_t num_storage_chance_ = 0;
 
     void build_node_arena();
-    void compute_card_data();   
     void compute_hand_strength_for_all_boards();
 };
 
