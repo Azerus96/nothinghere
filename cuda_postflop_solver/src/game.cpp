@@ -54,21 +54,6 @@ void PostFlopGame::prepare() {
         }
     }
 
-    // ПРИМЕЧАНИЕ (не тронуто сознательно): same_hand_index здесь считается
-    // только для n==2 (Z.ai, баг #6). Формат card_config_.same_hand_index[p]
-    // — это ОДИН индекс на "оппонента" и рассчитан именно на HU. В мультивее
-    // "оппонентов" несколько, и это поле не может корректно хранить индексы
-    // сразу для всех — потребовалась бы полная переделка структуры данных
-    // ([player][opponent] -> vector<uint16_t>) плюс правки во всех местах,
-    // где same_hand_index читается. Делать это вслепую, без возможности
-    // скомпилировать и прогнать тесты, слишком рискованно для регрессии.
-    // Вместо этого card-removal для мультивея реализован в gpu_solver.cu
-    // через прямое суммирование reach по картам (blocked-by-card), которое
-    // не требует same_hand_index вовсе. Единственная просадка точности —
-    // отсутствует поправка на «оппонент держит точно такую же комбинацию»
-    // (что физически невозможно относительно ваших же карт, но возможно
-    // относительно карт ДРУГОГО активного оппонента) — это second-order
-    // эффект, независимо отмеченный и Z.ai, и мной как некритичный.
     for (int p = 0; p < n; ++p) {
         card_config_.same_hand_index[p].assign(card_config_.private_cards[p].size(), 0xFFFF);
         if (n == 2) {
@@ -93,6 +78,7 @@ void PostFlopGame::prepare() {
 
 void PostFlopGame::build_node_arena() {
     node_arena_.clear();
+    nodes_by_depth_.clear(); // ИСПРАВЛЕНИЕ: Очистка массива глубин
 
     struct QueueItem {
         const ActionTreeNode* atn;
@@ -109,24 +95,20 @@ void PostFlopGame::build_node_arena() {
         auto cur = bfs_order[head];
         const ActionTreeNode* atn = cur.atn;
 
+        // ИСПРАВЛЕНИЕ: Заполнение массива узлов по уровням глубины
+        if (cur.depth >= nodes_by_depth_.size()) {
+            nodes_by_depth_.resize(cur.depth + 1);
+        }
+        nodes_by_depth_[cur.depth].push_back((int)head);
+
         PostFlopNode node;
         node.player = atn->player;
         node.turn = card_config_.turn;
         node.river = card_config_.river;
         node.active_mask = atn->active_mask;
         node.amount = atn->amount;
-        node.children_offset = 0; // заполняется ниже, после постановки детей в очередь
+        node.children_offset = 0; 
 
-        // FIX #3 (Z.ai, подтверждено): раньше здесь стояло
-        //   node.num_children = (uint16_t)atn->actions.size();
-        // Для chance-узлов `actions` пуст (ребёнок для перехода улицы
-        // добавляется напрямую в `children`, минуя `actions`), поэтому
-        // num_children всегда получался 0 для chance — даже после фикса
-        // битовой коллизии PLAYER_CHANCE циклы `for (a < num_actions)` в
-        // kernel_down_pass/kernel_up_pass ни разу не выполнялись бы для
-        // chance-узлов. `children.size()` корректен универсально: для
-        // обычных action-узлов actions.size()==children.size() (1:1), для
-        // chance — 1, для terminal — 0.
         node.num_children = (uint16_t)atn->children.size();
 
         int p = node.get_player();
