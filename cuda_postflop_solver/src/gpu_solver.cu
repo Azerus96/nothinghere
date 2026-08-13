@@ -101,15 +101,18 @@ void kernel_terminal_fold(
     int node_idx = d_fold_nodes[idx];
     const PostFlopNode& node = d_nodes[node_idx];
     
-    int folded_player = node.player & 7;
+    // ИСПРАВЛЕНО: В узле фолда player содержит ID Победителя!
+    int winner = node.player & 7;
     int tid = threadIdx.x;
     int my_hands = d_num_hands[updating_player];
 
-    if (updating_player == folded_player) {
+    if (updating_player != winner) {
+        // Мы сбросили карты. Наш выигрыш = 0.
         for (int h = tid; h < my_hands; h += blockDim.x) {
             d_node_cfv[node_idx * MAX_HANDS + h] = 0.0f;
         }
     } else {
+        // Мы победили! Забираем банк.
         double pot = starting_pot + NUM_PLAYERS * node.amount;
         double win_prob = 1.0;
 
@@ -117,7 +120,6 @@ void kernel_terminal_fold(
             if (p == updating_player) continue;
             const float* cfreach = &d_all_reaches[p * (total_num_nodes * MAX_HANDS) + node_idx * MAX_HANDS];
             double sum_reach = 0.0;
-            // ИСПРАВЛЕНО: Надежный цикл вместо сломанного Warp Reduction
             for (int i = 0; i < d_num_hands[p]; ++i) {
                 sum_reach += cfreach[i];
             }
@@ -140,7 +142,7 @@ void kernel_terminal_showdown(
     Card** d_private_cards,
     const int* __restrict__ d_num_hands,
     int starting_pot, Card flop0, Card flop1, Card flop2,
-    int total_num_nodes, int updating_player) // ИСПРАВЛЕНО: Запускаем строго для одного игрока
+    int total_num_nodes, int updating_player)
 {
     int idx = blockIdx.x;
     if (idx >= num_nodes) return;
@@ -153,6 +155,15 @@ void kernel_terminal_showdown(
     int my_hands = d_num_hands[updating_player];
     double pot = starting_pot + NUM_PLAYERS * node.amount;
 
+    // ИСПРАВЛЕНО: Если мы сбросили карты до шоудауна, наш EV = 0
+    bool am_i_active = (node.active_mask & (1 << updating_player)) != 0;
+    if (!am_i_active) {
+        for (int h = tid; h < my_hands; h += blockDim.x) {
+            d_node_cfv[node_idx * MAX_HANDS + h] = 0.0f;
+        }
+        return;
+    }
+
     for (int h = tid; h < my_hands; h += blockDim.x) {
         Card c1 = d_private_cards[updating_player][h*2];
         Card c2 = d_private_cards[updating_player][h*2+1];
@@ -164,17 +175,29 @@ void kernel_terminal_showdown(
             if (p == updating_player) continue;
             
             const float* cfreach = &d_all_reaches[p * (total_num_nodes * MAX_HANDS) + node_idx * MAX_HANDS];
+            bool is_opp_active = (node.active_mask & (1 << p)) != 0;
             double beat_reach = 0.0;
             
-            for (int oh = 0; oh < d_num_hands[p]; ++oh) {
-                float w = cfreach[oh];
-                if (w > 0.0f) {
-                    Card oc1 = d_private_cards[p][oh*2];
-                    Card oc2 = d_private_cards[p][oh*2+1];
-                    Card ocards[7] = {oc1, oc2, flop0, flop1, flop2, turn, river};
-                    uint16_t opp_strength = evaluate(ocards, 7);
-                    if (my_strength > opp_strength) {
-                        beat_reach += w;
+            if (!is_opp_active) {
+                // Оппонент сбросил. Мы бьем его 100% времени.
+                for (int oh = 0; oh < d_num_hands[p]; ++oh) {
+                    beat_reach += cfreach[oh];
+                }
+            } else {
+                // Оппонент в игре. Сравниваем силы рук.
+                for (int oh = 0; oh < d_num_hands[p]; ++oh) {
+                    float w = cfreach[oh];
+                    if (w > 0.0f) {
+                        Card oc1 = d_private_cards[p][oh*2];
+                        Card oc2 = d_private_cards[p][oh*2+1];
+                        Card ocards[7] = {oc1, oc2, flop0, flop1, flop2, turn, river};
+                        uint16_t opp_strength = evaluate(ocards, 7);
+                        
+                        if (my_strength > opp_strength) {
+                            beat_reach += w;
+                        } else if (my_strength == opp_strength) {
+                            beat_reach += w * 0.5f; // ИСПРАВЛЕНО: Ничья делит банк
+                        }
                     }
                 }
             }
@@ -222,7 +245,6 @@ void kernel_up_pass(
         int node_player = node.player & 7;
         float my_cfv = 0.0f;
 
-        // ИСПРАВЛЕНО: Жесткое разделение логики для нашего узла и узла оппонента
         if (node_player == updating_player) {
             float sum_pos = 0.0f;
             float s2 = node.scale2; if (s2 == 0.0f) s2 = 1.0f;
@@ -248,7 +270,6 @@ void kernel_up_pass(
                 my_cfv += strat_val * child_cfv;
             }
         } else {
-            // На чужом узле мы просто суммируем CFV (стратегия оппонента уже учтена в Reach)
             for (int a = 0; a < num_actions; ++a) {
                 my_cfv += d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
             }
@@ -256,7 +277,6 @@ void kernel_up_pass(
         
         d_node_cfv[node_idx * MAX_HANDS + h] = my_cfv;
 
-        // Обновляем регреты ТОЛЬКО если это наш узел
         if (node_player == updating_player) {
             float s1 = node.scale1; if (s1 == 0.0f) s1 = 1.0f;
             float decode_mult1 = is_compressed ? (s1 / 32767.0f) : 1.0f;
@@ -410,9 +430,8 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
             );
         }
         if (gpu.num_showdown_nodes > 0) {
-            // ИСПРАВЛЕНО: Запускаем ядро строго для игрока p
             kernel_terminal_showdown<NUM_PLAYERS><<<gpu.num_showdown_nodes, 256>>>(
-                gpu.d_showdown_nodes, gpu.num_showdown_nodes, gpu.d_nodes, gpu.d_all_reaches, gpu.d_node_cfv,
+                gpu.d_showdown_nodes, gpu.num_showdown_nodes, gpu.d_nodes, gpu.d_all_reaches, d_node_cfv,
                 gpu.d_private_cards_ptrs, gpu.d_num_hands, gpu.starting_pot,
                 gpu.flop[0], gpu.flop[1], gpu.flop[2], gpu.num_nodes, p
             );
