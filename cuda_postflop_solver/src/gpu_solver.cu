@@ -50,7 +50,7 @@ void kernel_down_pass(
         return;
     }
 
-    int node_player = node.player & 7; // Маска для мультивея
+    int node_player = node.player & 7;
     
     for (int opp_h = tid; opp_h < num_hands_opp; opp_h += blockDim.x) {
         float my_reach = d_opp_reach[node_idx * MAX_HANDS + opp_h];
@@ -144,7 +144,6 @@ void kernel_terminal_fold(
             d_node_cfv[node_idx * MAX_HANDS + h] = (float)(payoff * total);
         }
     } else {
-        // Multiway Fold (Упрощенный)
         int tid = threadIdx.x;
         if (updating_player == folded_player) {
             for (int h = tid; h < num_hands; h += blockDim.x) {
@@ -157,7 +156,6 @@ void kernel_terminal_fold(
             for (int i = tid; i < opp_num_hands; i += blockDim.x) {
                 sum_reach += cfreach[i];
             }
-            // Warp reduction
             for (int offset = 16; offset > 0; offset /= 2) {
                 sum_reach += __shfl_down_sync(0xffffffff, sum_reach, offset);
             }
@@ -258,7 +256,6 @@ void kernel_terminal_showdown(
                 amount_win * win_cfreach + amount_lose * lose_cfreach + amount_tie * tie_cfreach);
         }
     } else {
-        // Multiway Showdown (Упрощенный)
         double pot = starting_pot + NUM_PLAYERS * node.amount;
         extern __shared__ uint16_t s_opp_strengths[]; 
         
@@ -471,7 +468,7 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
     DiscountParams params = DiscountParams::from_iteration(current_iter);
 
     for (int p = 0; p < NUM_PLAYERS; ++p) {
-        int opp = (p + 1) % NUM_PLAYERS; // Для HU это 1-p
+        int opp = (p + 1) % NUM_PLAYERS; 
         int num_hands_p = gpu.num_hands[p];
         int num_hands_opp = gpu.num_hands[opp];
 
@@ -513,18 +510,23 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
     return 0;
 }
 
+// Восстановленная функция для старых унит-тестов (обратная совместимость)
+int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter) {
+    if (!gpu.initialized) return -1;
+    switch (gpu.num_players) {
+        case 2: return gpu_solve_step_impl<2>(gpu, current_iter);
+        case 3: return gpu_solve_step_impl<3>(gpu, current_iter);
+        case 4: return gpu_solve_step_impl<4>(gpu, current_iter);
+        case 5: return gpu_solve_step_impl<5>(gpu, current_iter);
+        case 6: return gpu_solve_step_impl<6>(gpu, current_iter);
+        default: return -1;
+    }
+}
+
 int gpu_solve_step_dispatch(PostFlopGame& game, uint32_t current_iter) {
     GpuMemory* gpu = game.gpu_mem();
     if (!gpu || !gpu->initialized) return -1;
-
-    switch (gpu->num_players) {
-        case 2: return gpu_solve_step_impl<2>(*gpu, current_iter);
-        case 3: return gpu_solve_step_impl<3>(*gpu, current_iter);
-        case 4: return gpu_solve_step_impl<4>(*gpu, current_iter);
-        case 5: return gpu_solve_step_impl<5>(*gpu, current_iter);
-        case 6: return gpu_solve_step_impl<6>(*gpu, current_iter);
-        default: return -1;
-    }
+    return gpu_solve_step(*gpu, current_iter);
 }
 
 bool gpu_solver_copy_back(PostFlopGame& game, GpuMemory& gpu) {
