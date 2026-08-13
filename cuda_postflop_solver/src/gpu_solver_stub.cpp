@@ -1,10 +1,6 @@
 // ════════════════════════════════════════════════════════════════════════
 // gpu_solver_stub.cpp — CPU-only stub for GPU solver
 // ════════════════════════════════════════════════════════════════════════
-// When CUDA is not available (CPU_ONLY build), these stubs allow the
-// code to link. They print a warning and return false/-1.
-// The real implementation is in gpu_solver.cu (compiled by nvcc).
-// ════════════════════════════════════════════════════════════════════════
 #include "gpu_solver.h"
 #include <cstdio>
 
@@ -19,6 +15,11 @@ bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
 
 int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter) {
     (void)gpu; (void)current_iter;
+    return -1;
+}
+
+int gpu_solve_step_dispatch(PostFlopGame& game, uint32_t current_iter) {
+    (void)game; (void)current_iter;
     return -1;
 }
 
