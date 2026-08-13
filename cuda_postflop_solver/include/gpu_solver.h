@@ -23,7 +23,6 @@ struct GpuMemory {
     uint16_t*     d_same_hand_idx[6];
     float*        d_initial_weights[6];
     int           num_hands[6];
-    int           num_players;
 
     // BFS Level data
     float*        d_node_cfreach; 
@@ -50,7 +49,7 @@ struct GpuMemory {
     int   starting_pot;
     float rake_rate;
     float rake_cap;
-
+    int   num_players; // Порядок исправлен
     bool  initialized;
     bool  is_compressed;
 
@@ -60,7 +59,8 @@ struct GpuMemory {
                   d_levels(nullptr), level_sizes(nullptr),
                   d_fold_nodes(nullptr), d_showdown_nodes(nullptr),
                   num_nodes(0), num_storage(0), num_storage_ip(0),
-                  num_storage_chance(0), num_players(2), initialized(false), is_compressed(false) {
+                  num_storage_chance(0), starting_pot(0), rake_rate(0.0f), rake_cap(0.0f),
+                  num_players(2), initialized(false), is_compressed(false) {
         for (int i = 0; i < 6; ++i) {
             d_private_cards[i] = nullptr;
             d_same_hand_idx[i] = nullptr;
@@ -71,6 +71,7 @@ struct GpuMemory {
 };
 
 bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu);
+int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter); // Восстановлено для старых тестов
 int gpu_solve_step_dispatch(PostFlopGame& game, uint32_t current_iter);
 bool gpu_solver_copy_back(PostFlopGame& game, GpuMemory& gpu);
 void gpu_solver_cleanup(GpuMemory& gpu);
