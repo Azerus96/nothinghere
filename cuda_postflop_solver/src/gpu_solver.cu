@@ -26,7 +26,7 @@ void kernel_down_pass(
     const int* __restrict__ d_num_hands,
     int updating_player,
     bool is_compressed,
-    int total_num_nodes) // <--- ИСПРАВЛЕНО: Передаем точный размер
+    int total_num_nodes)
 {
     int idx = blockIdx.x;
     if (idx >= num_nodes_this_depth) return;
@@ -43,7 +43,6 @@ void kernel_down_pass(
         if (p == updating_player) continue;
         
         int hands_p = d_num_hands[p];
-        // ИСПРАВЛЕНО: Используем total_num_nodes вместо gridDim.x
         float* p_reach_in = &d_all_reaches[p * (total_num_nodes * MAX_HANDS) + node_idx * MAX_HANDS];
         
         for (int h = tid; h < hands_p; h += blockDim.x) {
@@ -95,7 +94,7 @@ void kernel_terminal_fold(
     const float* __restrict__ d_all_reaches, float* __restrict__ d_node_cfv,
     const int* __restrict__ d_num_hands,
     int starting_pot, int updating_player,
-    int total_num_nodes) // <--- ИСПРАВЛЕНО
+    int total_num_nodes)
 {
     int idx = blockIdx.x;
     if (idx >= num_nodes) return;
@@ -118,16 +117,11 @@ void kernel_terminal_fold(
             if (p == updating_player) continue;
             const float* cfreach = &d_all_reaches[p * (total_num_nodes * MAX_HANDS) + node_idx * MAX_HANDS];
             double sum_reach = 0.0;
-            for (int i = tid; i < d_num_hands[p]; i += blockDim.x) {
+            // ИСПРАВЛЕНО: Надежный цикл вместо сломанного Warp Reduction
+            for (int i = 0; i < d_num_hands[p]; ++i) {
                 sum_reach += cfreach[i];
             }
-            for (int offset = 16; offset > 0; offset /= 2) {
-                sum_reach += __shfl_down_sync(0xffffffff, sum_reach, offset);
-            }
-            __shared__ double s_sum;
-            if (tid == 0) s_sum = sum_reach;
-            __syncthreads();
-            win_prob *= s_sum;
+            win_prob *= sum_reach;
         }
         
         for (int h = tid; h < my_hands; h += blockDim.x) {
@@ -146,7 +140,7 @@ void kernel_terminal_showdown(
     Card** d_private_cards,
     const int* __restrict__ d_num_hands,
     int starting_pot, Card flop0, Card flop1, Card flop2,
-    int total_num_nodes) // <--- ИСПРАВЛЕНО
+    int total_num_nodes, int updating_player) // ИСПРАВЛЕНО: Запускаем строго для одного игрока
 {
     int idx = blockIdx.x;
     if (idx >= num_nodes) return;
@@ -156,7 +150,6 @@ void kernel_terminal_showdown(
     Card turn = node.turn;
     Card river = node.river;
     int tid = threadIdx.x;
-    int updating_player = blockIdx.y; 
     int my_hands = d_num_hands[updating_player];
     double pot = starting_pot + NUM_PLAYERS * node.amount;
 
@@ -227,41 +220,59 @@ void kernel_up_pass(
         }
 
         int node_player = node.player & 7;
-
-        float sum_pos = 0.0f;
-        float s2 = node.scale2; if (s2 == 0.0f) s2 = 1.0f;
-        float decode_mult = is_compressed ? (s2 / 32767.0f) : 1.0f;
-        
-        for (int a = 0; a < num_actions; ++a) {
-            int mem_idx = node.storage2_offset + a * my_hands + h;
-            float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
-                                    : ((const float*)d_storage2)[mem_idx];
-            if (r > 0.0f) sum_pos += r;
-        }
-        
-        float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
-        float uniform = 1.0f / num_actions;
-
         float my_cfv = 0.0f;
-        for (int a = 0; a < num_actions; ++a) {
-            int mem_idx = node.storage2_offset + a * my_hands + h;
-            float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
-                                    : ((const float*)d_storage2)[mem_idx];
-            float strat_val = (sum_pos > 1e-7f) ? ((r > 0.0f) ? (r * inv) : 0.0f) : uniform;
+
+        // ИСПРАВЛЕНО: Жесткое разделение логики для нашего узла и узла оппонента
+        if (node_player == updating_player) {
+            float sum_pos = 0.0f;
+            float s2 = node.scale2; if (s2 == 0.0f) s2 = 1.0f;
+            float decode_mult = is_compressed ? (s2 / 32767.0f) : 1.0f;
             
-            float child_cfv = d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
-            if (node_player == updating_player) {
+            for (int a = 0; a < num_actions; ++a) {
+                int mem_idx = node.storage2_offset + a * my_hands + h;
+                float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
+                                        : ((const float*)d_storage2)[mem_idx];
+                if (r > 0.0f) sum_pos += r;
+            }
+            
+            float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
+            float uniform = 1.0f / num_actions;
+
+            for (int a = 0; a < num_actions; ++a) {
+                int mem_idx = node.storage2_offset + a * my_hands + h;
+                float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
+                                        : ((const float*)d_storage2)[mem_idx];
+                float strat_val = (sum_pos > 1e-7f) ? ((r > 0.0f) ? (r * inv) : 0.0f) : uniform;
+                
+                float child_cfv = d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
                 my_cfv += strat_val * child_cfv;
-            } else {
-                my_cfv += child_cfv;
+            }
+        } else {
+            // На чужом узле мы просто суммируем CFV (стратегия оппонента уже учтена в Reach)
+            for (int a = 0; a < num_actions; ++a) {
+                my_cfv += d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
             }
         }
+        
         d_node_cfv[node_idx * MAX_HANDS + h] = my_cfv;
 
+        // Обновляем регреты ТОЛЬКО если это наш узел
         if (node_player == updating_player) {
             float s1 = node.scale1; if (s1 == 0.0f) s1 = 1.0f;
             float decode_mult1 = is_compressed ? (s1 / 32767.0f) : 1.0f;
             
+            float sum_pos = 0.0f;
+            float s2 = node.scale2; if (s2 == 0.0f) s2 = 1.0f;
+            float decode_mult = is_compressed ? (s2 / 32767.0f) : 1.0f;
+            for (int a = 0; a < num_actions; ++a) {
+                int mem_idx = node.storage2_offset + a * my_hands + h;
+                float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
+                                        : ((const float*)d_storage2)[mem_idx];
+                if (r > 0.0f) sum_pos += r;
+            }
+            float inv = (sum_pos > 1e-7f) ? (1.0f / sum_pos) : 0.0f;
+            float uniform = 1.0f / num_actions;
+
             for (int a = 0; a < num_actions; ++a) {
                 int mem_idx1 = node.storage1_offset + a * my_hands + h;
                 int mem_idx2 = node.storage2_offset + a * my_hands + h;
@@ -399,11 +410,11 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
             );
         }
         if (gpu.num_showdown_nodes > 0) {
-            dim3 blocks(gpu.num_showdown_nodes, NUM_PLAYERS);
-            kernel_terminal_showdown<NUM_PLAYERS><<<blocks, 256>>>(
+            // ИСПРАВЛЕНО: Запускаем ядро строго для игрока p
+            kernel_terminal_showdown<NUM_PLAYERS><<<gpu.num_showdown_nodes, 256>>>(
                 gpu.d_showdown_nodes, gpu.num_showdown_nodes, gpu.d_nodes, gpu.d_all_reaches, gpu.d_node_cfv,
                 gpu.d_private_cards_ptrs, gpu.d_num_hands, gpu.starting_pot,
-                gpu.flop[0], gpu.flop[1], gpu.flop[2], gpu.num_nodes
+                gpu.flop[0], gpu.flop[1], gpu.flop[2], gpu.num_nodes, p
             );
         }
 
