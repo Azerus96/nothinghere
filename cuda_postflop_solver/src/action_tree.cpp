@@ -29,7 +29,7 @@ static std::vector<BetSize> parse_bet_size_list(const std::string& s, bool is_ra
                     if (!is_raise) throw std::invalid_argument("'x' only valid for raises: " + t);
                     double r = std::stod(t.substr(0, t.size() - 1));
                     if (r <= 1.0) throw std::invalid_argument("raise multiplier must be > 1: " + t);
-                    result.push_back(BetSize::PrevRelative(r));
+                    result.push_back(BetSize::PrevBetRelative(r));
                 } else if (t.find('e') != std::string::npos || t.find('E') != std::string::npos) {
                     int n = 1;
                     double max_ratio = 1e9;
@@ -157,7 +157,7 @@ int32_t ActionTree::compute_bet_size(const BetSize& bs, int32_t pot, int32_t cur
     switch (bs.kind) {
         case BetSize::Kind::PotRelative:
             return std::max(1, std::min((int32_t)(bs.pot_rel * (pot + to_call)) + current_bet, my_stack));
-        case BetSize::Kind::PrevRelative: 
+        case BetSize::Kind::PrevBetRelative: 
             return std::max(1, std::min((int32_t)(current_bet * bs.prev_rel), my_stack));
         case BetSize::Kind::Additive:
             return std::max(1, std::min(bs.additive_base + current_bet, my_stack));
