@@ -51,7 +51,6 @@ else()
     set(CMAKE_CUDA_STANDARD 17)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
     
-    # ИСПРАВЛЕНИЕ: Включаем раздельную компиляцию CUDA (Relocatable Device Code)
     set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 
     if(NOT DEFINED CUDA_ARCH)
@@ -112,3 +111,7 @@ add_test(NAME v6 COMMAND test_v6)
 
 add_executable(bench_solver bench/bench_solver.cpp)
 target_link_libraries(bench_solver PRIVATE postflop_core)
+
+# ── 4-Way Experiment ────────────────────────────────────────────────────
+add_executable(experiment_4way tests/experiment_4way.cpp)
+target_link_libraries(experiment_4way PRIVATE postflop_core)
