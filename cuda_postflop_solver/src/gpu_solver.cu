@@ -8,11 +8,32 @@
 #include "hand_evaluator.h"
 #include <cstdio>
 #include <cmath>
+#include <vector>
 
 namespace postflop {
 
-#define PLAYER_FOLD_FLAG 24
+// FIX #5 (новая находка, никто из 4 ИИ не заметил): раньше здесь стоял
+// локальный `#define PLAYER_FOLD_FLAG 24`, который тихо ЗАТЕНЯЛ настоящую
+// константу `postflop::PLAYER_FOLD_FLAG = 32` из action_tree.h (24 =
+// TERMINAL_FLAG(16)|CHANCE_FLAG(8) — вообще не тот бит). Из-за этого
+// классификация fold/showdown терминалов в gpu_solver_init() была неверна
+// НЕЗАВИСИМО от бага с потерей FOLD_FLAG в action_tree.cpp. Макрос удалён —
+// используется настоящая constexpr-константа из заголовка (она уже видна
+// через #include "game.h" → "action_tree.h", namespace postflop).
 #define MAX_HANDS 1326
+
+// FIX #10 (я, Claude): единая точка проверки ошибок CUDA. Раньше не было
+// ни одной проверки — при падении конфигурации запуска ядро тихо не
+// выполнялось бы, оставляя буферы нетронутыми, и это выглядело бы точно
+// так же, как "стратегия не сходится".
+#define CUDA_CHECK(call)                                                          \
+    do {                                                                          \
+        cudaError_t _err = (call);                                                \
+        if (_err != cudaSuccess) {                                                \
+            fprintf(stderr, "[CUDA ERROR] %s:%d: %s -> %s\n",                     \
+                    __FILE__, __LINE__, #call, cudaGetErrorString(_err));         \
+        }                                                                         \
+    } while (0)
 
 // ── ЯДРО 1: Проход ВНИЗ ─────────────────────────────────────────────────
 template <int NUM_PLAYERS>
@@ -33,9 +54,11 @@ void kernel_down_pass(
     
     int node_idx = d_nodes_at_depth[idx];
     const PostFlopNode& node = d_nodes[node_idx];
+    // Корректно только для НАСТОЯЩИХ terminal-узлов теперь, что chance-узлы
+    // сюда больше не попадают (см. FIX #2 в action_tree.h/.cpp).
     if (node.is_terminal()) return;
 
-    int node_player = node.player & 7;
+    int node_player = node.player & PLAYER_MASK;
     int num_actions = node.num_children;
     int tid = threadIdx.x; 
 
@@ -49,8 +72,15 @@ void kernel_down_pass(
             float my_reach = p_reach_in[h];
             
             if (node.is_chance()) {
-                float chance_factor = (node.turn == 255) ? 45.0f : 44.0f;
-                float scaled = my_reach / chance_factor;
+                // FIX #6 (Z.ai, подтверждено): раньше reach делился на
+                // фиктивные 44/45 "исходов", хотя в этом дереве у
+                // chance-узла ВСЕГДА ровно один (детерминированный)
+                // ребёнок (борд фиксирован заранее в CardConfig). Деление
+                // на 44 было систематической ошибкой масштаба reach на
+                // каждом переходе улицы. Корректно — просто 1/num_actions
+                // (при num_actions=1 это тождественный пробросс).
+                float scale = (num_actions > 0) ? (1.0f / (float)num_actions) : 1.0f;
+                float scaled = my_reach * scale;
                 for (int a = 0; a < num_actions; ++a) {
                     d_all_reaches[p * (total_num_nodes * MAX_HANDS) + (node.children_offset + a) * MAX_HANDS + h] = scaled;
                 }
@@ -92,6 +122,7 @@ void kernel_terminal_fold(
     const int* __restrict__ d_fold_nodes, int num_nodes, 
     const PostFlopNode* __restrict__ d_nodes,
     const float* __restrict__ d_all_reaches, float* __restrict__ d_node_cfv,
+    Card** d_private_cards,                       // FIX #7: добавлен параметр для card-removal
     const int* __restrict__ d_num_hands,
     int starting_pot, int updating_player,
     int total_num_nodes)
@@ -100,39 +131,88 @@ void kernel_terminal_fold(
     if (idx >= num_nodes) return;
     int node_idx = d_fold_nodes[idx];
     const PostFlopNode& node = d_nodes[node_idx];
-    
-    int winner = node.player & 7;
+
+    // Теперь корректно: FOLD_FLAG больше не теряется (см. FIX #4), поэтому
+    // node.player & PLAYER_MASK действительно содержит id того, кто
+    // сбросил на этом терминале (совпадает с семантикой CPU-референса
+    // evaluate_terminal_mw: folded_player = node.player & PLAYER_MASK).
+    int folded_player = node.player & PLAYER_MASK;
     int tid = threadIdx.x;
     int my_hands = d_num_hands[updating_player];
 
-    if (updating_player != winner) {
+    // Защитная проверка (не было в оригинале): если updating_player сам
+    // уже не активен на этом терминале (сбросил раньше, на другом узле
+    // этого же поддерева) — его cfv здесь равно 0, он не может выиграть
+    // банк, даже если он не тот, кто сбросил ИМЕННО на этом узле.
+    bool am_i_active = (node.active_mask & (1 << updating_player)) != 0;
+
+    if (!am_i_active || updating_player == folded_player) {
         for (int h = tid; h < my_hands; h += blockDim.x) {
             d_node_cfv[node_idx * MAX_HANDS + h] = 0.0f;
         }
-    } else {
-        // ИСПРАВЛЕНО: Честный размер банка
-        double pot = starting_pot + node.amount; 
-        
-        // ИСПРАВЛЕНО: Надежное суммирование вероятностей оппонентов
-        __shared__ double s_win_prob;
-        if (tid == 0) {
-            double win_prob = 1.0;
-            for (int p = 0; p < NUM_PLAYERS; ++p) {
-                if (p == updating_player) continue;
-                const float* cfreach = &d_all_reaches[p * (total_num_nodes * MAX_HANDS) + node_idx * MAX_HANDS];
-                double sum_reach = 0.0;
-                for (int i = 0; i < d_num_hands[p]; ++i) {
-                    sum_reach += cfreach[i];
-                }
-                win_prob *= sum_reach;
+        return;
+    }
+
+    // FIX #8: банк считается так же, как в CPU-референсе
+    // (evaluate_terminal / evaluate_terminal_mw): starting_pot +
+    // NUM_PLAYERS * node.amount. Раньше здесь было
+    // `starting_pot + node.amount` — без множителя на число игроков,
+    // что давало систематически заниженный (и непропорционально по
+    // разным веткам дерева искажённый) банк относительно showdown-кернела
+    // и CPU-версии.
+    double pot = (double)starting_pot + (double)NUM_PLAYERS * (double)node.amount;
+
+    // FIX #7 (Z.ai, подтверждено): раньше win_prob был ОДНИМ числом на
+    // весь узел (произведение сумм reach оппонентов), одинаковым для ВСЕХ
+    // рук updating_player — то есть regret обновлялся одинаково для любой
+    // руки, и стратегия никогда не дифференцировалась по силе/типу руки.
+    // Теперь для каждой руки h вычисляется compat-reach с учётом
+    // конфликта карт: сколько из reach-массы оппонента физически
+    // совместимо с тем, что игрок держит именно карты (c1, c2).
+    // Используем ТУ ЖЕ конвенцию, что и раньше (и что использует CPU
+    // evaluate_terminal_mw): win_prob — это произведение СЫРЫХ
+    // (ненормированных) reach-масс, а НЕ вероятность в [0,1]. Это важно
+    // сохранить, иначе cfv fold-терминала перестанет быть в одном
+    // масштабе с cfv showdown-терминала того же дерева.
+    __shared__ float s_blocked[6][52];
+    __shared__ float s_total[6];
+
+    for (int p = 0; p < NUM_PLAYERS; ++p) {
+        if (p == updating_player) continue;
+        if (tid == 0) s_total[p] = 0.0f;
+        for (int c = tid; c < 52; c += blockDim.x) s_blocked[p][c] = 0.0f;
+    }
+    __syncthreads();
+
+    for (int p = 0; p < NUM_PLAYERS; ++p) {
+        if (p == updating_player) continue;
+        const float* cfreach = &d_all_reaches[p * (total_num_nodes * MAX_HANDS) + node_idx * MAX_HANDS];
+        int nh = d_num_hands[p];
+        for (int i = tid; i < nh; i += blockDim.x) {
+            float w = cfreach[i];
+            if (w != 0.0f) {
+                Card c1 = d_private_cards[p][i * 2];
+                Card c2 = d_private_cards[p][i * 2 + 1];
+                atomicAdd(&s_blocked[p][c1], w);
+                atomicAdd(&s_blocked[p][c2], w);
+                atomicAdd(&s_total[p], w);
             }
-            s_win_prob = win_prob;
         }
-        __syncthreads();
-        
-        for (int h = tid; h < my_hands; h += blockDim.x) {
-            d_node_cfv[node_idx * MAX_HANDS + h] = (float)(pot * s_win_prob);
+    }
+    __syncthreads();
+
+    for (int h = tid; h < my_hands; h += blockDim.x) {
+        Card c1 = d_private_cards[updating_player][h * 2];
+        Card c2 = d_private_cards[updating_player][h * 2 + 1];
+
+        double win_prob = 1.0;
+        for (int p = 0; p < NUM_PLAYERS; ++p) {
+            if (p == updating_player) continue;
+            double compat = (double)s_total[p] - (double)s_blocked[p][c1] - (double)s_blocked[p][c2];
+            if (compat < 0.0) compat = 0.0;
+            win_prob *= compat; // ВАЖНО: без деления на total — сохраняем исходную "сырую" конвенцию
         }
+        d_node_cfv[node_idx * MAX_HANDS + h] = (float)(pot * win_prob);
     }
 }
 
@@ -146,7 +226,7 @@ void kernel_terminal_showdown(
     Card** d_private_cards,
     const int* __restrict__ d_num_hands,
     int starting_pot, Card flop0, Card flop1, Card flop2,
-    int total_num_nodes, int updating_player) // ИСПРАВЛЕНО: Запускаем строго для одного игрока
+    int total_num_nodes, int updating_player)
 {
     int idx = blockIdx.x;
     if (idx >= num_nodes) return;
@@ -157,7 +237,9 @@ void kernel_terminal_showdown(
     Card river = node.river;
     int tid = threadIdx.x;
     int my_hands = d_num_hands[updating_player];
-    double pot = starting_pot + node.amount; // ИСПРАВЛЕНО: Честный банк
+
+    // FIX #8: тот же банк, что и в fold-кернеле и в CPU-референсе.
+    double pot = (double)starting_pot + (double)NUM_PLAYERS * (double)node.amount;
 
     bool am_i_active = (node.active_mask & (1 << updating_player)) != 0;
     if (!am_i_active) {
@@ -167,7 +249,6 @@ void kernel_terminal_showdown(
         return;
     }
 
-    // ИСПРАВЛЕНО: Кэшируем силы рук оппонентов в Shared Memory (Ускорение в 1000 раз)
     __shared__ uint16_t s_opp_str[6][MAX_HANDS];
     for (int p = 0; p < NUM_PLAYERS; ++p) {
         if (p == updating_player) continue;
@@ -197,6 +278,12 @@ void kernel_terminal_showdown(
             double beat_reach = 0.0;
             
             if (!is_opp_active) {
+                // Оппонент уже сфолдил раньше на этом пути — не участвует в
+                // сравнении силы, его reach-масса просто множится целиком
+                // (как и было). Card-removal для сфолдивших оппонентов на
+                // шоудауне сознательно не добавлен — это тот же
+                // second-order эффект, что и с same_hand_index (см.
+                // комментарий в game.cpp), пока не трогаем.
                 for (int oh = 0; oh < d_num_hands[p]; ++oh) {
                     beat_reach += cfreach[oh];
                 }
@@ -204,11 +291,20 @@ void kernel_terminal_showdown(
                 for (int oh = 0; oh < d_num_hands[p]; ++oh) {
                     float w = cfreach[oh];
                     if (w > 0.0f) {
+                        // FIX #12: card-removal между рукой updating_player
+                        // и рукой активного оппонента — раньше отсутствовало
+                        // вовсе, комбинации, физически невозможные (делящие
+                        // с моей рукой карту), участвовали в equity наравне
+                        // со всеми остальными.
+                        Card oc1 = d_private_cards[p][oh*2];
+                        Card oc2 = d_private_cards[p][oh*2+1];
+                        if (oc1 == c1 || oc1 == c2 || oc2 == c1 || oc2 == c2) continue;
+
                         uint16_t opp_strength = s_opp_str[p][oh];
                         if (my_strength > opp_strength) {
                             beat_reach += w;
                         } else if (my_strength == opp_strength) {
-                            beat_reach += w * 0.5f; // ИСПРАВЛЕНО: Ничья делит банк
+                            beat_reach += w * 0.5f;
                         }
                     }
                 }
@@ -254,7 +350,7 @@ void kernel_up_pass(
             continue;
         }
 
-        int node_player = node.player & 7;
+        int node_player = node.player & PLAYER_MASK;
         float my_cfv = 0.0f;
 
         if (node_player == updating_player) {
@@ -316,13 +412,39 @@ void kernel_up_pass(
 
                 float old_s = is_compressed ? (float)((int16_t*)d_storage1)[mem_idx1] * decode_mult1 : ((float*)d_storage1)[mem_idx1];
                 float new_s = old_s * gamma_t + strat_val;
-                if (!is_compressed) ((float*)d_storage1)[mem_idx1] = new_s;
 
                 float old_r = is_compressed ? (float)((int16_t*)d_storage2)[mem_idx2] * decode_mult : ((float*)d_storage2)[mem_idx2];
                 float coef = (old_r >= 0.0f) ? alpha_t : beta_t;
                 float new_r = old_r * coef + (child_cfv - my_cfv);
                 new_r = (new_r > 0.0f) ? new_r : 0.0f;
-                if (!is_compressed) ((float*)d_storage2)[mem_idx2] = new_r;
+
+                if (!is_compressed) {
+                    ((float*)d_storage1)[mem_idx1] = new_s;
+                    ((float*)d_storage2)[mem_idx2] = new_r;
+                } else {
+                    // FIX #9 (я, Claude): раньше в compressed-режиме значения
+                    // new_s/new_r считались, но НИКУДА не записывались —
+                    // int16-ветка кодирования отсутствовала вообще, солвер
+                    // молча ничего не обновлял. Теперь пишем обратно через
+                    // текущий (статический) scale узла, с насыщением по
+                    // границам int16.
+                    // ПРИМЕЧАНИЕ: CPU-версия (solver.cpp) умеет ДИНАМИЧЕСКИ
+                    // пересчитывать scale1/scale2 при росте значений
+                    // (const_cast<PostFlopNode&>(node).scale1 = new_scale).
+                    // Эта адаптивная логика на GPU НЕ портирована — здесь
+                    // используется тот же статический scale, что и decode.
+                    // Если значения выйдут за диапазон текущего scale,
+                    // они будут насыщены (clamp), а не корректно
+                    // перемасштабированы. Для теста без compression
+                    // (allocate_memory(false)) это не имеет значения.
+                    float enc_s = new_s / decode_mult1;
+                    enc_s = enc_s > 32767.0f ? 32767.0f : (enc_s < -32767.0f ? -32767.0f : enc_s);
+                    ((int16_t*)d_storage1)[mem_idx1] = (int16_t)lrintf(enc_s);
+
+                    float enc_r = new_r / decode_mult;
+                    enc_r = enc_r > 32767.0f ? 32767.0f : (enc_r < -32767.0f ? -32767.0f : enc_r);
+                    ((int16_t*)d_storage2)[mem_idx2] = (int16_t)lrintf(enc_r);
+                }
             }
         }
     }
@@ -337,13 +459,20 @@ bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
     gpu.num_nodes = (int)arena.size();
     gpu.num_storage = (int)game.storage1_bytes();
     gpu.num_players = game.num_players();
-    
-    cudaMalloc(&gpu.d_num_hands, gpu.num_players * sizeof(int));
-    cudaMemcpy(gpu.d_num_hands, gpu.num_hands, gpu.num_players * sizeof(int), cudaMemcpyHostToDevice);
-    
+
+    // FIX #1 (ChatGPT, подтверждено — самостоятельно объясняет всю картину
+    // "delta=0.000000 forever"): раньше d_num_hands копировался на GPU
+    // ДО того, как gpu.num_hands[] заполнялся реальными значениями
+    // (GpuMemory зануляет num_hands[] в конструкторе). В итоге на девайсе
+    // всегда лежали одни нули, my_hands=0 во ВСЕХ ядрах, циклы
+    // `for (h < my_hands)` не выполнялись НИ РАЗУ, ядра запускались и
+    // мгновенно завершались (отсюда и подозрительно быстрые 0.3–0.6 мс на
+    // итерацию), storage1/storage2 никогда не трогались.
     for (int p = 0; p < gpu.num_players; ++p) {
         gpu.num_hands[p] = game.num_private_hands(p);
     }
+    CUDA_CHECK(cudaMalloc(&gpu.d_num_hands, gpu.num_players * sizeof(int)));
+    CUDA_CHECK(cudaMemcpy(gpu.d_num_hands, gpu.num_hands, gpu.num_players * sizeof(int), cudaMemcpyHostToDevice));
     
     gpu.starting_pot = game.tree_config().starting_pot;
     gpu.is_compressed = game.is_compression_enabled();
@@ -351,13 +480,13 @@ bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
     gpu.flop[0] = cc.flop[0]; gpu.flop[1] = cc.flop[1]; gpu.flop[2] = cc.flop[2];
     gpu.turn = cc.turn; gpu.river = cc.river;
 
-    cudaMalloc(&gpu.d_nodes, gpu.num_nodes * sizeof(PostFlopNode));
-    cudaMemcpy(gpu.d_nodes, arena.data(), gpu.num_nodes * sizeof(PostFlopNode), cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMalloc(&gpu.d_nodes, gpu.num_nodes * sizeof(PostFlopNode)));
+    CUDA_CHECK(cudaMemcpy(gpu.d_nodes, arena.data(), gpu.num_nodes * sizeof(PostFlopNode), cudaMemcpyHostToDevice));
 
-    cudaMalloc(&gpu.d_storage1, gpu.num_storage);
-    cudaMemcpy(gpu.d_storage1, game.storage1_data(), gpu.num_storage, cudaMemcpyHostToDevice);
-    cudaMalloc(&gpu.d_storage2, gpu.num_storage);
-    cudaMemcpy(gpu.d_storage2, game.storage2_data(), gpu.num_storage, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMalloc(&gpu.d_storage1, gpu.num_storage));
+    CUDA_CHECK(cudaMemcpy(gpu.d_storage1, game.storage1_data(), gpu.num_storage, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMalloc(&gpu.d_storage2, gpu.num_storage));
+    CUDA_CHECK(cudaMemcpy(gpu.d_storage2, game.storage2_data(), gpu.num_storage, cudaMemcpyHostToDevice));
 
     Card* h_private_cards_ptrs[6];
     for (int p = 0; p < gpu.num_players; ++p) {
@@ -367,30 +496,34 @@ bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
             cards_flat[i*2]   = cc.private_cards[p][i].first;
             cards_flat[i*2+1] = cc.private_cards[p][i].second;
         }
-        cudaMalloc(&gpu.d_private_cards[p], nh * 2 * sizeof(Card));
-        cudaMemcpy(gpu.d_private_cards[p], cards_flat.data(), nh * 2 * sizeof(Card), cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMalloc(&gpu.d_private_cards[p], nh * 2 * sizeof(Card)));
+        CUDA_CHECK(cudaMemcpy(gpu.d_private_cards[p], cards_flat.data(), nh * 2 * sizeof(Card), cudaMemcpyHostToDevice));
         h_private_cards_ptrs[p] = gpu.d_private_cards[p];
         
-        cudaMalloc(&gpu.d_initial_weights[p], nh * sizeof(float));
-        cudaMemcpy(gpu.d_initial_weights[p], cc.initial_weights[p].data(), nh * sizeof(float), cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMalloc(&gpu.d_initial_weights[p], nh * sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(gpu.d_initial_weights[p], cc.initial_weights[p].data(), nh * sizeof(float), cudaMemcpyHostToDevice));
     }
-    cudaMalloc(&gpu.d_private_cards_ptrs, 6 * sizeof(Card*));
-    cudaMemcpy(gpu.d_private_cards_ptrs, h_private_cards_ptrs, 6 * sizeof(Card*), cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMalloc(&gpu.d_private_cards_ptrs, 6 * sizeof(Card*)));
+    CUDA_CHECK(cudaMemcpy(gpu.d_private_cards_ptrs, h_private_cards_ptrs, 6 * sizeof(Card*), cudaMemcpyHostToDevice));
 
     gpu.max_depth = game.max_tree_depth();
     gpu.level_sizes = new int[gpu.max_depth + 1];
     gpu.d_levels = new int*[gpu.max_depth + 1];
     for (int d = 0; d <= gpu.max_depth; ++d) {
         const auto& level_nodes = game.nodes_by_depth()[d];
-        gpu.level_sizes[d] = level_nodes.size();
+        gpu.level_sizes[d] = (int)level_nodes.size();
         if (gpu.level_sizes[d] > 0) {
-            cudaMalloc(&gpu.d_levels[d], gpu.level_sizes[d] * sizeof(int));
-            cudaMemcpy(gpu.d_levels[d], level_nodes.data(), gpu.level_sizes[d] * sizeof(int), cudaMemcpyHostToDevice);
+            CUDA_CHECK(cudaMalloc(&gpu.d_levels[d], gpu.level_sizes[d] * sizeof(int)));
+            CUDA_CHECK(cudaMemcpy(gpu.d_levels[d], level_nodes.data(), gpu.level_sizes[d] * sizeof(int), cudaMemcpyHostToDevice));
         } else {
             gpu.d_levels[d] = nullptr;
         }
     }
 
+    // Теперь, когда FOLD_FLAG больше не теряется (FIX #4) и локальный
+    // макрос PLAYER_FOLD_FLAG больше не расходится с header'ом (FIX #5),
+    // эта классификация действительно разносит fold- и showdown-терминалы
+    // по разным спискам.
     std::vector<int> fold_nodes, showdown_nodes;
     for (int i = 0; i < gpu.num_nodes; ++i) {
         if (arena[i].is_terminal()) {
@@ -398,19 +531,24 @@ bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
             else showdown_nodes.push_back(i);
         }
     }
-    gpu.num_fold_nodes = fold_nodes.size();
-    gpu.num_showdown_nodes = showdown_nodes.size();
+    gpu.num_fold_nodes = (int)fold_nodes.size();
+    gpu.num_showdown_nodes = (int)showdown_nodes.size();
     if (gpu.num_fold_nodes > 0) {
-        cudaMalloc(&gpu.d_fold_nodes, gpu.num_fold_nodes * sizeof(int));
-        cudaMemcpy(gpu.d_fold_nodes, fold_nodes.data(), gpu.num_fold_nodes * sizeof(int), cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMalloc(&gpu.d_fold_nodes, gpu.num_fold_nodes * sizeof(int)));
+        CUDA_CHECK(cudaMemcpy(gpu.d_fold_nodes, fold_nodes.data(), gpu.num_fold_nodes * sizeof(int), cudaMemcpyHostToDevice));
     }
     if (gpu.num_showdown_nodes > 0) {
-        cudaMalloc(&gpu.d_showdown_nodes, gpu.num_showdown_nodes * sizeof(int));
-        cudaMemcpy(gpu.d_showdown_nodes, showdown_nodes.data(), gpu.num_showdown_nodes * sizeof(int), cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMalloc(&gpu.d_showdown_nodes, gpu.num_showdown_nodes * sizeof(int)));
+        CUDA_CHECK(cudaMemcpy(gpu.d_showdown_nodes, showdown_nodes.data(), gpu.num_showdown_nodes * sizeof(int), cudaMemcpyHostToDevice));
     }
 
-    cudaMalloc(&gpu.d_all_reaches, gpu.num_players * gpu.num_nodes * MAX_HANDS * sizeof(float));
-    cudaMalloc(&gpu.d_node_cfv, gpu.num_nodes * MAX_HANDS * sizeof(float));
+    CUDA_CHECK(cudaMalloc(&gpu.d_all_reaches, (size_t)gpu.num_players * gpu.num_nodes * MAX_HANDS * sizeof(float)));
+    // FIX #11 (Z.ai/Gemini): обнуляем сразу при выделении, чтобы узлы, до
+    // которых по какой-то причине не дойдёт down-pass (например, из-за
+    // active_mask), не содержали мусор при первом обращении.
+    CUDA_CHECK(cudaMemset(gpu.d_all_reaches, 0, (size_t)gpu.num_players * gpu.num_nodes * MAX_HANDS * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&gpu.d_node_cfv, (size_t)gpu.num_nodes * MAX_HANDS * sizeof(float)));
+    CUDA_CHECK(cudaMemset(gpu.d_node_cfv, 0, (size_t)gpu.num_nodes * MAX_HANDS * sizeof(float)));
 
     gpu.initialized = true;
     return true;
@@ -421,10 +559,18 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
     DiscountParams params = DiscountParams::from_iteration(current_iter);
 
     for (int p = 0; p < NUM_PLAYERS; ++p) {
+        // FIX #11 (Z.ai/Gemini): полное обнуление d_all_reaches перед каждым
+        // проходом за игрока p. Раньше инициализировался только root
+        // (строка ниже), а reach на остальных узлах — оставался от
+        // предыдущей итерации/предыдущего p, что при любых пропусках узлов
+        // в down-pass (например, из-за active_mask или незаполненных
+        // ветвей) давало «протухшие» данные.
+        CUDA_CHECK(cudaMemset(gpu.d_all_reaches, 0, (size_t)gpu.num_players * gpu.num_nodes * MAX_HANDS * sizeof(float)));
+
         for (int opp = 0; opp < NUM_PLAYERS; ++opp) {
             if (opp == p) continue;
-            cudaMemcpy(gpu.d_all_reaches + opp * (gpu.num_nodes * MAX_HANDS), 
-                       gpu.d_initial_weights[opp], gpu.num_hands[opp] * sizeof(float), cudaMemcpyDeviceToDevice);
+            CUDA_CHECK(cudaMemcpy(gpu.d_all_reaches + (size_t)opp * (gpu.num_nodes * MAX_HANDS), 
+                       gpu.d_initial_weights[opp], gpu.num_hands[opp] * sizeof(float), cudaMemcpyDeviceToDevice));
         }
 
         for (int d = 0; d <= gpu.max_depth; ++d) {
@@ -433,21 +579,24 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
                 gpu.d_levels[d], gpu.level_sizes[d], gpu.d_nodes, gpu.d_storage2, gpu.d_all_reaches,
                 gpu.d_num_hands, p, gpu.is_compressed, gpu.num_nodes
             );
+            CUDA_CHECK(cudaGetLastError());
         }
 
         if (gpu.num_fold_nodes > 0) {
             kernel_terminal_fold<NUM_PLAYERS><<<gpu.num_fold_nodes, 256>>>(
                 gpu.d_fold_nodes, gpu.num_fold_nodes, gpu.d_nodes, gpu.d_all_reaches, gpu.d_node_cfv,
+                gpu.d_private_cards_ptrs,
                 gpu.d_num_hands, gpu.starting_pot, p, gpu.num_nodes
             );
+            CUDA_CHECK(cudaGetLastError());
         }
         if (gpu.num_showdown_nodes > 0) {
-            // ИСПРАВЛЕНО: Запускаем ядро строго для игрока p (1D сетка)
             kernel_terminal_showdown<NUM_PLAYERS><<<gpu.num_showdown_nodes, 256>>>(
                 gpu.d_showdown_nodes, gpu.num_showdown_nodes, gpu.d_nodes, gpu.d_all_reaches, gpu.d_node_cfv,
                 gpu.d_private_cards_ptrs, gpu.d_num_hands, gpu.starting_pot,
                 gpu.flop[0], gpu.flop[1], gpu.flop[2], gpu.num_nodes, p
             );
+            CUDA_CHECK(cudaGetLastError());
         }
 
         for (int d = gpu.max_depth; d >= 0; --d) {
@@ -456,9 +605,10 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
                 gpu.d_levels[d], gpu.level_sizes[d], gpu.d_nodes, gpu.d_storage1, gpu.d_storage2, gpu.d_node_cfv,
                 params.alpha_t, params.beta_t, params.gamma_t, gpu.d_num_hands, p, gpu.is_compressed
             );
+            CUDA_CHECK(cudaGetLastError());
         }
     }
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
     return 0;
 }
 
@@ -482,8 +632,8 @@ int gpu_solve_step_dispatch(PostFlopGame& game, uint32_t current_iter) {
 
 bool gpu_solver_copy_back(PostFlopGame& game, GpuMemory& gpu) {
     if (!gpu.initialized) return false;
-    cudaMemcpy(game.storage1_data_mut(), gpu.d_storage1, gpu.num_storage, cudaMemcpyDeviceToHost);
-    cudaMemcpy(game.storage2_data_mut(), gpu.d_storage2, gpu.num_storage, cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(game.storage1_data_mut(), gpu.d_storage1, gpu.num_storage, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(game.storage2_data_mut(), gpu.d_storage2, gpu.num_storage, cudaMemcpyDeviceToHost));
     return true;
 }
 
