@@ -13,6 +13,7 @@
 #include "action_tree.h"
 #include "game.h"
 #include "solver.h"
+#include "gpu_solver.h"
 
 using namespace postflop;
 
@@ -74,6 +75,12 @@ int main() {
     auto [uncomp, comp] = game.memory_usage();
     std::cout << "Memory Required: " << uncomp / (1024 * 1024) << " MB\n\n";
 
+    // Инициализация стратегии
+    if (game.is_gpu_enabled() && game.gpu_mem_initialized()) {
+        gpu_solver_copy_back(game, *game.gpu_mem());
+    }
+    std::vector<float> old_strat = game.root_strategy();
+
     // 3. Запуск DCFR
     std::cout << "Starting DCFR on GPU...\n";
     std::cout << "------------------------------------------------------\n";
@@ -82,7 +89,6 @@ int main() {
               << std::setw(15) << "Max Strat Delta" << "\n";
     std::cout << "------------------------------------------------------\n";
 
-    std::vector<float> old_strat = game.root_strategy();
     auto t_start = std::chrono::high_resolution_clock::now();
 
     for (uint32_t iter = 1; iter <= 1000; ++iter) {
@@ -94,6 +100,11 @@ int main() {
         double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
         if (iter % 100 == 0 || iter == 1) {
+            // КОПИРУЕМ ДАННЫЕ ИЗ VRAM В RAM ПЕРЕД ЗАМЕРОМ СТРАТЕГИИ!
+            if (game.is_gpu_enabled() && game.gpu_mem_initialized()) {
+                gpu_solver_copy_back(game, *game.gpu_mem());
+            }
+            
             std::vector<float> new_strat = game.root_strategy();
             float delta = compute_strategy_delta(old_strat, new_strat);
             old_strat = new_strat;
@@ -108,6 +119,11 @@ int main() {
     double total_sec = std::chrono::duration<double>(t_end - t_start).count();
     std::cout << "------------------------------------------------------\n";
     std::cout << "Total Time: " << total_sec << " seconds.\n\n";
+
+    // Синхронизируем перед финальным выводом
+    if (game.is_gpu_enabled() && game.gpu_mem_initialized()) {
+        gpu_solver_copy_back(game, *game.gpu_mem());
+    }
 
     // 4. Вывод итоговой стратегии для P0 (UTG)
     std::cout << "=== FINAL STRATEGY FOR P0 (UTG) AT ROOT ===\n";
