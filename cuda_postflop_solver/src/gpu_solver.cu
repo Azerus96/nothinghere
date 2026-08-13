@@ -25,7 +25,8 @@ void kernel_down_pass(
     float* __restrict__ d_all_reaches,
     const int* __restrict__ d_num_hands,
     int updating_player,
-    bool is_compressed)
+    bool is_compressed,
+    int total_num_nodes) // <--- ИСПРАВЛЕНО: Передаем точный размер
 {
     int idx = blockIdx.x;
     if (idx >= num_nodes_this_depth) return;
@@ -42,7 +43,8 @@ void kernel_down_pass(
         if (p == updating_player) continue;
         
         int hands_p = d_num_hands[p];
-        float* p_reach_in = &d_all_reaches[p * (gridDim.x * MAX_HANDS) + node_idx * MAX_HANDS];
+        // ИСПРАВЛЕНО: Используем total_num_nodes вместо gridDim.x
+        float* p_reach_in = &d_all_reaches[p * (total_num_nodes * MAX_HANDS) + node_idx * MAX_HANDS];
         
         for (int h = tid; h < hands_p; h += blockDim.x) {
             float my_reach = p_reach_in[h];
@@ -51,7 +53,7 @@ void kernel_down_pass(
                 float chance_factor = (node.turn == 255) ? 45.0f : 44.0f;
                 float scaled = my_reach / chance_factor;
                 for (int a = 0; a < num_actions; ++a) {
-                    d_all_reaches[p * (gridDim.x * MAX_HANDS) + (node.children_offset + a) * MAX_HANDS + h] = scaled;
+                    d_all_reaches[p * (total_num_nodes * MAX_HANDS) + (node.children_offset + a) * MAX_HANDS + h] = scaled;
                 }
             } else if (node_player == p) {
                 float sum_pos = 0.0f;
@@ -73,11 +75,11 @@ void kernel_down_pass(
                     float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
                                             : ((const float*)d_storage2)[mem_idx];
                     float strat_val = (sum_pos > 1e-7f) ? ((r > 0.0f) ? (r * inv) : 0.0f) : uniform;
-                    d_all_reaches[p * (gridDim.x * MAX_HANDS) + (node.children_offset + a) * MAX_HANDS + h] = my_reach * strat_val;
+                    d_all_reaches[p * (total_num_nodes * MAX_HANDS) + (node.children_offset + a) * MAX_HANDS + h] = my_reach * strat_val;
                 }
             } else {
                 for (int a = 0; a < num_actions; ++a) {
-                    d_all_reaches[p * (gridDim.x * MAX_HANDS) + (node.children_offset + a) * MAX_HANDS + h] = my_reach;
+                    d_all_reaches[p * (total_num_nodes * MAX_HANDS) + (node.children_offset + a) * MAX_HANDS + h] = my_reach;
                 }
             }
         }
@@ -92,7 +94,8 @@ void kernel_terminal_fold(
     const PostFlopNode* __restrict__ d_nodes,
     const float* __restrict__ d_all_reaches, float* __restrict__ d_node_cfv,
     const int* __restrict__ d_num_hands,
-    int starting_pot, int updating_player)
+    int starting_pot, int updating_player,
+    int total_num_nodes) // <--- ИСПРАВЛЕНО
 {
     int idx = blockIdx.x;
     if (idx >= num_nodes) return;
@@ -113,7 +116,7 @@ void kernel_terminal_fold(
 
         for (int p = 0; p < NUM_PLAYERS; ++p) {
             if (p == updating_player) continue;
-            const float* cfreach = &d_all_reaches[p * (gridDim.x * MAX_HANDS) + node_idx * MAX_HANDS];
+            const float* cfreach = &d_all_reaches[p * (total_num_nodes * MAX_HANDS) + node_idx * MAX_HANDS];
             double sum_reach = 0.0;
             for (int i = tid; i < d_num_hands[p]; i += blockDim.x) {
                 sum_reach += cfreach[i];
@@ -133,7 +136,7 @@ void kernel_terminal_fold(
     }
 }
 
-// ── ЯДРО 3: Терминальный Showdown (ИДЕАЛЬНАЯ МАТЕМАТИКА МУЛЬТИВЕЯ) ──────
+// ── ЯДРО 3: Терминальный Showdown ───────────────────────────────────────
 template <int NUM_PLAYERS>
 __global__ 
 void kernel_terminal_showdown(
@@ -142,7 +145,8 @@ void kernel_terminal_showdown(
     const float* __restrict__ d_all_reaches, float* __restrict__ d_node_cfv,
     Card** d_private_cards,
     const int* __restrict__ d_num_hands,
-    int starting_pot, Card flop0, Card flop1, Card flop2)
+    int starting_pot, Card flop0, Card flop1, Card flop2,
+    int total_num_nodes) // <--- ИСПРАВЛЕНО
 {
     int idx = blockIdx.x;
     if (idx >= num_nodes) return;
@@ -152,7 +156,7 @@ void kernel_terminal_showdown(
     Card turn = node.turn;
     Card river = node.river;
     int tid = threadIdx.x;
-    int updating_player = blockIdx.y; // Запускаем 2D сетку: x=узлы, y=игроки
+    int updating_player = blockIdx.y; 
     int my_hands = d_num_hands[updating_player];
     double pot = starting_pot + NUM_PLAYERS * node.amount;
 
@@ -163,11 +167,10 @@ void kernel_terminal_showdown(
         uint16_t my_strength = evaluate(mcards, 7);
 
         double win_prob = 1.0;
-        // ЧЕСТНЫЙ ЦИКЛ ПО ВСЕМ ОППОНЕНТАМ
         for (int p = 0; p < NUM_PLAYERS; ++p) {
             if (p == updating_player) continue;
             
-            const float* cfreach = &d_all_reaches[p * (gridDim.x * MAX_HANDS) + node_idx * MAX_HANDS];
+            const float* cfreach = &d_all_reaches[p * (total_num_nodes * MAX_HANDS) + node_idx * MAX_HANDS];
             double beat_reach = 0.0;
             
             for (int oh = 0; oh < d_num_hands[p]; ++oh) {
@@ -385,14 +388,14 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
             if (gpu.level_sizes[d] == 0) continue;
             kernel_down_pass<NUM_PLAYERS><<<gpu.level_sizes[d], 256>>>(
                 gpu.d_levels[d], gpu.level_sizes[d], gpu.d_nodes, gpu.d_storage2, gpu.d_all_reaches,
-                gpu.d_num_hands, p, gpu.is_compressed
+                gpu.d_num_hands, p, gpu.is_compressed, gpu.num_nodes
             );
         }
 
         if (gpu.num_fold_nodes > 0) {
             kernel_terminal_fold<NUM_PLAYERS><<<gpu.num_fold_nodes, 256>>>(
                 gpu.d_fold_nodes, gpu.num_fold_nodes, gpu.d_nodes, gpu.d_all_reaches, gpu.d_node_cfv,
-                gpu.d_num_hands, gpu.starting_pot, p
+                gpu.d_num_hands, gpu.starting_pot, p, gpu.num_nodes
             );
         }
         if (gpu.num_showdown_nodes > 0) {
@@ -400,7 +403,7 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
             kernel_terminal_showdown<NUM_PLAYERS><<<blocks, 256>>>(
                 gpu.d_showdown_nodes, gpu.num_showdown_nodes, gpu.d_nodes, gpu.d_all_reaches, gpu.d_node_cfv,
                 gpu.d_private_cards_ptrs, gpu.d_num_hands, gpu.starting_pot,
-                gpu.flop[0], gpu.flop[1], gpu.flop[2]
+                gpu.flop[0], gpu.flop[1], gpu.flop[2], gpu.num_nodes
             );
         }
 
