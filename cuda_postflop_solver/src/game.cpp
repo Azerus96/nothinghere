@@ -1,6 +1,3 @@
-// ════════════════════════════════════════════════════════════════════════
-// game.cpp — PostFlopGame implementation
-// ════════════════════════════════════════════════════════════════════════
 #include "game.h"
 #include "solver.h"
 #include "gpu_solver.h"
@@ -30,7 +27,6 @@ void PostFlopGame::set_gpu_mem(std::unique_ptr<GpuMemory> m) { gpu_mem_ = std::m
 bool PostFlopGame::gpu_mem_initialized() const { return gpu_mem_ != nullptr; }
 
 void PostFlopGame::prepare() {
-    // Обратная совместимость: если ranges пуст, берем range_oop и range_ip
     if (card_config_.ranges.empty()) {
         card_config_.ranges.push_back(card_config_.range_oop);
         card_config_.ranges.push_back(card_config_.range_ip);
@@ -58,7 +54,6 @@ void PostFlopGame::prepare() {
         }
     }
 
-    // same_hand_index (оставляем точный расчет для HU, для мультивея заполняем 0xFFFF)
     for (int p = 0; p < n; ++p) {
         card_config_.same_hand_index[p].assign(card_config_.private_cards[p].size(), 0xFFFF);
         if (n == 2) {
@@ -115,7 +110,7 @@ void PostFlopGame::build_node_arena() {
         node.player = atn->player;
         node.turn = card_config_.turn;
         node.river = card_config_.river;
-        node.is_locked = 0;
+        node.active_mask = atn->active_mask; // <--- ИСПРАВЛЕНО
         node.amount = atn->amount;
         node.num_children = (uint16_t)atn->actions.size();
         node.children_offset = (uint32_t)(bfs_order.size());  
