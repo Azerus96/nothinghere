@@ -42,10 +42,9 @@ void print_node_strategy(const PostFlopGame& game, int node_idx, int player, con
     for (const auto& target : target_hands) {
         Card c1, c2;
         
-        // Простой парсер для вывода (например "AA" или "AcKc")
         if (target.length() == 2) {
-            c1 = make_card(card_rank(card_from_string(target.substr(0,1) + "s")), 3); // Spades
-            c2 = make_card(card_rank(card_from_string(target.substr(1,1) + "h")), 2); // Hearts
+            c1 = make_card(card_rank(card_from_string(target.substr(0,1) + "s")), 3); 
+            c2 = make_card(card_rank(card_from_string(target.substr(1,1) + "h")), 2); 
         } else if (target.length() == 4) {
             c1 = card_from_string(target.substr(0,2));
             c2 = card_from_string(target.substr(2,2));
@@ -83,13 +82,11 @@ int main() {
     CardConfig cc;
     cc.num_players = 4;
     
-    // Диапазоны 4 игроков
     cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo"));                             // P0 (UTG)
     cc.ranges.push_back(Range::from_string("88+, ATs+, KQs, AQo+"));                        // P1 (CO)
     cc.ranges.push_back(Range::from_string("55+, A8s+, KJs+, QJs, AJo+"));                  // P2 (BTN)
     cc.ranges.push_back(Range::from_string("22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, 87s, ATo+, KTo+")); // P3 (BB)
 
-    // Борд
     cc.flop[0] = card_from_string("As");
     cc.flop[1] = card_from_string("Td");
     cc.flop[2] = card_from_string("7c");
@@ -104,19 +101,21 @@ int main() {
     tc.rake_rate = 0;
     tc.rake_cap = 0;
     
-    // Жесткое урезание сайзингов для 4-Way (чтобы влезло в память)
-    tc.flop_bet_sizes[0] = { {BetSize::PotRelative(0.50)}, {BetSize::PrevRelative(2.0)} };
-    tc.turn_bet_sizes[0] = { {BetSize::PotRelative(0.50)}, {BetSize::PrevRelative(2.0)} };
-    tc.river_bet_sizes[0] = { {BetSize::PotRelative(0.50)}, {BetSize::PrevRelative(2.0)} };
+    // ИСПРАВЛЕНИЕ: Даем всем 4 игрокам одинаковые права на ставки (1 сайзинг)
+    for (int i = 0; i < 4; ++i) {
+        tc.flop_bet_sizes[i] = { {BetSize::PotRelative(0.50)}, {} };
+        tc.turn_bet_sizes[i] = { {BetSize::PotRelative(0.50)}, {} };
+        tc.river_bet_sizes[i] = { {BetSize::PotRelative(0.50)}, {} };
+    }
 
     std::cout << "Building 4-Way Game Tree...\n";
     PostFlopGame game(std::move(cc), tc);
     game.prepare();
-    game.allocate_memory(false); // false = без сжатия FP16 для чистоты эксперимента
+    game.allocate_memory(false); 
     
     std::cout << "Tree built successfully! Total Nodes: " << game.num_nodes() << "\n\n";
 
-    // --- ИСПРАВЛЕНИЕ: ПРАВИЛЬНАЯ ИНИЦИАЛИЗАЦИЯ GPU ---
+    // ИСПРАВЛЕНИЕ: Правильная инициализация GPU
     game.set_gpu_enabled(true);
     if (game.is_gpu_enabled()) {
         auto gpu_mem = std::make_unique<GpuMemory>();
@@ -145,7 +144,7 @@ int main() {
     for (uint32_t iter = 1; iter <= 1000; ++iter) {
         auto t0 = std::chrono::high_resolution_clock::now();
         
-        // --- ИСПРАВЛЕНИЕ: ПРОВЕРКА ОШИБОК ВЫПОЛНЕНИЯ ---
+        // ИСПРАВЛЕНИЕ: Проверка ошибок выполнения
         int res = gpu_solve_step_dispatch(game, iter);
         if (res != 0) {
             std::cerr << "\nFATAL ERROR: gpu_solve_step_dispatch failed at iter " << iter << " with code " << res << "!\n";
@@ -156,7 +155,6 @@ int main() {
         double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
         if (iter % 100 == 0 || iter == 1) {
-            // Копируем данные с GPU на CPU для вывода
             gpu_solver_copy_back(game, *game.gpu_mem());
             
             std::vector<float> new_strat = game.root_strategy();
@@ -174,7 +172,6 @@ int main() {
     std::cout << "------------------------------------------------------\n";
     std::cout << "Total Time: " << total_sec << " seconds.\n";
 
-    // Финальное копирование перед печатью стратегий
     gpu_solver_copy_back(game, *game.gpu_mem());
 
     std::cout << "\n======================================================\n";
@@ -199,7 +196,6 @@ int main() {
 
     std::cout << "\n======================================================\n";
     
-    // Очистка памяти GPU
     gpu_solver_cleanup(*game.gpu_mem());
     
     return 0;
