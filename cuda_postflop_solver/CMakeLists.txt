@@ -115,3 +115,6 @@ target_link_libraries(bench_solver PRIVATE postflop_core)
 # ── 4-Way Experiment ────────────────────────────────────────────────────
 add_executable(experiment_4way tests/experiment_4way.cpp)
 target_link_libraries(experiment_4way PRIVATE postflop_core)
+
+add_executable(experiment_2way tests/experiment_2way.cpp)
+target_link_libraries(experiment_2way PRIVATE postflop_core)
