@@ -79,9 +79,9 @@ int main() {
     CardConfig cc;
     cc.num_players = 2;
     
-    // Классические диапазоны: OOP (BB Defend) vs IP (BTN Open)
-    cc.ranges.push_back(Range::from_string("88-22, AJs-A2s, KQs-K9s, QJs-Q9s, JTs-J9s, T9s, 98s, 87s, 76s, AQo-ATo, KJo+")); // P0 (OOP)
-    cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo, KQs"));                                                              // P1 (IP)
+    // ИСПРАВЛЕНО: Диапазоны через плюсы '+' без дефисов!
+    cc.ranges.push_back(Range::from_string("22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, 87s, 76s, A2o+, KTo+, QTo+, JTo")); // P0 (OOP)
+    cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo, KQs"));                                                      // P1 (IP)
 
     cc.flop[0] = card_from_string("As");
     cc.flop[1] = card_from_string("Td");
@@ -97,13 +97,12 @@ int main() {
     tc.rake_rate = 0;
     tc.rake_cap = 0;
     
-    // Стандартные сайзинги Heads-Up
-    tc.flop_bet_sizes[0]  = { {BetSize::PotRelative(0.33)}, {BetSize::PotRelative(0.50)} }; // OOP
-    tc.flop_bet_sizes[1]  = { {BetSize::PotRelative(0.33)}, {BetSize::PotRelative(0.50)} }; // IP
-    tc.turn_bet_sizes[0]  = { {BetSize::PotRelative(0.66)}, {BetSize::AllIn()} };
-    tc.turn_bet_sizes[1]  = { {BetSize::PotRelative(0.66)}, {BetSize::AllIn()} };
-    tc.river_bet_sizes[0] = { {BetSize::PotRelative(0.66)}, {BetSize::AllIn()} };
-    tc.river_bet_sizes[1] = { {BetSize::PotRelative(0.66)}, {BetSize::AllIn()} };
+    tc.flop_bet_sizes[0]  = { {BetSize::PotRelative(0.33)}, {} }; 
+    tc.flop_bet_sizes[1]  = { {BetSize::PotRelative(0.33)}, {} }; 
+    tc.turn_bet_sizes[0]  = { {BetSize::PotRelative(0.66)}, {} };
+    tc.turn_bet_sizes[1]  = { {BetSize::PotRelative(0.66)}, {} };
+    tc.river_bet_sizes[0] = { {BetSize::PotRelative(0.66)}, {} };
+    tc.river_bet_sizes[1] = { {BetSize::PotRelative(0.66)}, {} };
 
     std::cout << "Building Heads-Up Game Tree...\n";
     PostFlopGame game(std::move(cc), tc);
