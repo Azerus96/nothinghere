@@ -1,6 +1,3 @@
-// ════════════════════════════════════════════════════════════════════════
-// action_tree.cpp — Game tree builder for NLHE postflop (Multiway Support)
-// ════════════════════════════════════════════════════════════════════════
 #include "action_tree.h"
 #include <algorithm>
 #include <stdexcept>
@@ -203,6 +200,13 @@ void ActionTree::merge_bet_actions(std::vector<Action>& actions, int32_t pot,
 void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int player, BuildInfo info) {
     if (state > config_.initial_state && (int)state > 2) return; 
 
+    // ИСПРАВЛЕНО: Заполняем маску активных игроков
+    uint8_t mask = 0;
+    for (int i = 0; i < config_.num_players; ++i) {
+        if (!info.folded[i]) mask |= (1 << i);
+    }
+    node.active_mask = mask;
+
     if (info.active_players == 1) {
         node.player = player | PLAYER_TERMINAL_FLAG;
         return;
@@ -316,7 +320,6 @@ void ActionTree::apply_added_lines() {
                 node->actions.push_back(act);
                 auto child = std::make_unique<ActionTreeNode>();
                 
-                // Multiway aware player assignment
                 int current_player = node->player & PLAYER_MASK;
                 int next_p = (current_player + 1) % config_.num_players;
                 child->player = (uint8_t)next_p;
