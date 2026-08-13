@@ -38,6 +38,10 @@ struct GpuMemory {
     int           num_fold_nodes;
     int           num_showdown_nodes;
 
+    // Новые указатели для идеальной математики мультивея на GPU
+    int*          d_num_hands;
+    Card**        d_private_cards_ptrs;
+
     Card          flop[3];
     Card          turn;
     Card          river;
@@ -49,7 +53,7 @@ struct GpuMemory {
     int   starting_pot;
     float rake_rate;
     float rake_cap;
-    int   num_players; // Порядок исправлен
+    int   num_players;
     bool  initialized;
     bool  is_compressed;
 
@@ -58,6 +62,7 @@ struct GpuMemory {
                   d_node_cfreach(nullptr), d_node_cfv(nullptr), d_all_reaches(nullptr),
                   d_levels(nullptr), level_sizes(nullptr),
                   d_fold_nodes(nullptr), d_showdown_nodes(nullptr),
+                  d_num_hands(nullptr), d_private_cards_ptrs(nullptr),
                   num_nodes(0), num_storage(0), num_storage_ip(0),
                   num_storage_chance(0), starting_pot(0), rake_rate(0.0f), rake_cap(0.0f),
                   num_players(2), initialized(false), is_compressed(false) {
@@ -71,7 +76,7 @@ struct GpuMemory {
 };
 
 bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu);
-int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter); // Восстановлено для старых тестов
+int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter);
 int gpu_solve_step_dispatch(PostFlopGame& game, uint32_t current_iter);
 bool gpu_solver_copy_back(PostFlopGame& game, GpuMemory& gpu);
 void gpu_solver_cleanup(GpuMemory& gpu);
