@@ -13,11 +13,18 @@ namespace postflop {
 
 constexpr uint8_t PLAYER_OOP           = 0;
 constexpr uint8_t PLAYER_IP            = 1;
-constexpr uint8_t PLAYER_CHANCE        = 254; 
-constexpr uint8_t PLAYER_MASK          = 7;   
+constexpr uint8_t PLAYER_MASK          = 7;
 constexpr uint8_t PLAYER_CHANCE_FLAG   = 8;
 constexpr uint8_t PLAYER_TERMINAL_FLAG = 16;
 constexpr uint8_t PLAYER_FOLD_FLAG     = 32;
+
+// FIX #2 (Z.ai, подтверждено): раньше PLAYER_CHANCE = 254 = 0b11111110,
+// что содержит биты PLAYER_TERMINAL_FLAG(16) и PLAYER_FOLD_FLAG(32).
+// Из-за этого is_terminal() возвращал true для chance-узлов, и
+// kernel_down_pass/kernel_up_pass делали ранний return, не пробрасывая
+// reach через переходы flop→turn→river. Теперь PLAYER_CHANCE — это просто
+// алиас PLAYER_CHANCE_FLAG, без коллизий с другими битами.
+constexpr uint8_t PLAYER_CHANCE        = PLAYER_CHANCE_FLAG;
 
 enum class BoardState : uint8_t { Flop = 0, Turn = 1, River = 2 };
 
@@ -119,7 +126,7 @@ struct ActionTreeNode {
     uint8_t  player = 0;             
     BoardState board_state = BoardState::Flop;
     int32_t amount = 0;                        
-    uint8_t active_mask = 0; // <--- ИСПРАВЛЕНО
+    uint8_t active_mask = 0;
     std::vector<Action> actions;              
     std::vector<std::unique_ptr<ActionTreeNode>> children;
 };
