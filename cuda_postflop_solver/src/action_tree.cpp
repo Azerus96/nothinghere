@@ -29,7 +29,7 @@ static std::vector<BetSize> parse_bet_size_list(const std::string& s, bool is_ra
                     if (!is_raise) throw std::invalid_argument("'x' only valid for raises: " + t);
                     double r = std::stod(t.substr(0, t.size() - 1));
                     if (r <= 1.0) throw std::invalid_argument("raise multiplier must be > 1: " + t);
-                    result.push_back(BetSize::PrevBetRelative(r));
+                    result.push_back(BetSize::PrevRelative(r));
                 } else if (t.find('e') != std::string::npos || t.find('E') != std::string::npos) {
                     int n = 1;
                     double max_ratio = 1e9;
