@@ -107,7 +107,7 @@ void PostFlopGame::build_node_arena() {
         node.river = card_config_.river;
         node.active_mask = atn->active_mask;
         node.amount = atn->amount;
-        node.children_offset = 0; 
+        node.children_offset = (uint32_t)bfs_order.size(); 
 
         node.num_children = (uint16_t)atn->children.size();
 
