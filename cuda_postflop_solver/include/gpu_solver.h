@@ -20,7 +20,10 @@ struct GpuMemory {
     
     // Поддержка до 6 игроков
     Card*         d_private_cards[6];   
-    uint16_t*     d_same_hand_idx[6];
+    uint16_t*     d_same_hand_idx[6];   // не используется в текущей версии
+                                         // мультивей card-removal (см.
+                                         // gpu_solver.cu), оставлено для
+                                         // будущей полноценной реализации
     float*        d_initial_weights[6];
     int           num_hands[6];
 
