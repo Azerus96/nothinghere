@@ -1,6 +1,3 @@
-// ════════════════════════════════════════════════════════════════════════
-// action_tree.h — Game tree builder for NLHE postflop
-// ════════════════════════════════════════════════════════════════════════
 #ifndef ACTION_TREE_H
 #define ACTION_TREE_H
 
@@ -14,26 +11,23 @@
 
 namespace postflop {
 
-// ── Player flag constants ───────────────────────────────────────────────
 constexpr uint8_t PLAYER_OOP           = 0;
 constexpr uint8_t PLAYER_IP            = 1;
-constexpr uint8_t PLAYER_CHANCE        = 254; // Изменено для мультивея, чтобы не пересекалось с ID игроков
-constexpr uint8_t PLAYER_MASK          = 7;   // Поддержка до 8 игроков (0-7)
+constexpr uint8_t PLAYER_CHANCE        = 254; 
+constexpr uint8_t PLAYER_MASK          = 7;   
 constexpr uint8_t PLAYER_CHANCE_FLAG   = 8;
 constexpr uint8_t PLAYER_TERMINAL_FLAG = 16;
 constexpr uint8_t PLAYER_FOLD_FLAG     = 32;
 
-// ── BoardState ──────────────────────────────────────────────────────────
 enum class BoardState : uint8_t { Flop = 0, Turn = 1, River = 2 };
 
-// ── Action ──────────────────────────────────────────────────────────────
 struct Action {
     enum class Type : uint8_t {
         None, Fold, Check, Call, Bet, Raise, AllIn, Chance
     };
     Type   type = Type::None;
-    int32_t amount = 0;   // for Bet/Raise/AllIn
-    Card   card = NOT_DEALT;  // for Chance
+    int32_t amount = 0;   
+    Card   card = NOT_DEALT;  
 
     bool operator==(const Action& o) const {
         if (type != o.type) return false;
@@ -66,7 +60,6 @@ struct Action {
     }
 };
 
-// ── Bet size specifications ─────────────────────────────────────────────
 struct BetSize {
     enum class Kind : uint8_t {
         PotRelative, PrevBetRelative, Additive, Geometric, AllIn
@@ -105,15 +98,14 @@ struct DonkSizeOptions {
     std::vector<BetSize> donk;    
 };
 
-// ── Tree configuration ──────────────────────────────────────────────────
 struct TreeConfig {
-    int               num_players = 2; // Поддержка мультивея
+    int               num_players = 2; 
     BoardState        initial_state = BoardState::Flop;
     int32_t           starting_pot = 0;
     int32_t           effective_stack = 0;
     double            rake_rate = 0;
     double            rake_cap = 0;
-    std::array<BetSizeOptions, 6> flop_bet_sizes;   // Расширено до 6
+    std::array<BetSizeOptions, 6> flop_bet_sizes;   
     std::array<BetSizeOptions, 6> turn_bet_sizes;
     std::array<BetSizeOptions, 6> river_bet_sizes;
     DonkSizeOptions*  turn_donk_sizes = nullptr;
@@ -123,16 +115,15 @@ struct TreeConfig {
     double            merging_threshold = 0.0;
 };
 
-// ── Action tree node ────────────────────────────────────────────────────
 struct ActionTreeNode {
     uint8_t  player = 0;             
     BoardState board_state = BoardState::Flop;
     int32_t amount = 0;                        
+    uint8_t active_mask = 0; // <--- ИСПРАВЛЕНО
     std::vector<Action> actions;              
     std::vector<std::unique_ptr<ActionTreeNode>> children;
 };
 
-// ── Action tree ─────────────────────────────────────────────────────────
 class ActionTree {
 public:
     ActionTree(const TreeConfig& cfg,
@@ -151,7 +142,6 @@ private:
     std::vector<std::vector<Action>> removed_lines_;
     std::unique_ptr<ActionTreeNode> root_;
 
-    // Build state passed through recursion (Multiway Aware)
     struct BuildInfo {
         std::vector<int32_t> stacks;
         std::vector<int32_t> invested_this_street;
