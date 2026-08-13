@@ -36,22 +36,18 @@ int main() {
     CardConfig cc;
     cc.num_players = 4;
     
-    // Задаем диапазоны (немного сужены для наглядности логов)
-    // P0 (UTG): Сильный спектр
+    // Задаем диапазоны 4 игроков
     cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo"));
-    // P1 (CO): Средний спектр
     cc.ranges.push_back(Range::from_string("88+, ATs+, KQs, AQo+"));
-    // P2 (BTN): Широкий спектр
     cc.ranges.push_back(Range::from_string("55+, A8s+, KJs+, QJs, AJo+"));
-    // P3 (BB): Защитный спектр
     cc.ranges.push_back(Range::from_string("22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, 87s, ATo+, KTo+"));
 
-    // Экшен-флоп
+    // Полный борд для 7-карточной оценки рук
     cc.flop[0] = card_from_string("As");
     cc.flop[1] = card_from_string("Td");
     cc.flop[2] = card_from_string("7c");
-    cc.turn = NOT_DEALT;
-    cc.river = NOT_DEALT;
+    cc.turn    = card_from_string("2d");
+    cc.river   = card_from_string("3h");
 
     // 2. Настройка дерева (Action Pruning)
     TreeConfig tc;
@@ -70,12 +66,13 @@ int main() {
     std::cout << "Building 4-Way Game Tree...\n";
     PostFlopGame game(std::move(cc), tc);
     game.prepare();
-    game.allocate_memory(true); // Включаем FP16 компрессию
+    game.allocate_memory(false); // Выключаем сжатие для максимальной точности
+    game.set_gpu_enabled(true);  // ВКЛЮЧАЕМ GPU!
 
     std::cout << "Tree built successfully!\n";
     std::cout << "Total Nodes: " << game.num_nodes() << "\n";
     auto [uncomp, comp] = game.memory_usage();
-    std::cout << "VRAM Required: " << comp / (1024 * 1024) << " MB\n\n";
+    std::cout << "Memory Required: " << uncomp / (1024 * 1024) << " MB\n\n";
 
     // 3. Запуск DCFR
     std::cout << "Starting DCFR on GPU...\n";
@@ -86,7 +83,6 @@ int main() {
     std::cout << "------------------------------------------------------\n";
 
     std::vector<float> old_strat = game.root_strategy();
-    
     auto t_start = std::chrono::high_resolution_clock::now();
 
     for (uint32_t iter = 1; iter <= 1000; ++iter) {
@@ -120,19 +116,16 @@ int main() {
     int num_actions = root.num_actions();
     int num_hands = game.num_private_hands(0);
 
-    // Выведем стратегию для пары конкретных рук
     std::vector<std::string> target_hands = {"AA", "KK", "77", "AcKc"};
     
     for (const auto& target : target_hands) {
         Card c1 = card_from_string(target.substr(0, 2));
         Card c2 = card_from_string(target.substr(2, 2));
         if (c1 == NOT_DEALT || c2 == NOT_DEALT) {
-            // Если масти не указаны (например "AA"), берем пики и черви
             c1 = make_card(card_rank(card_from_string(target.substr(0,1) + "s")), 3);
             c2 = make_card(card_rank(card_from_string(target.substr(1,1) + "h")), 2);
         }
 
-        // Ищем индекс руки
         int hand_idx = -1;
         const auto& p0_cards = game.private_cards(0);
         for (int i = 0; i < num_hands; ++i) {
