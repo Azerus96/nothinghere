@@ -37,7 +37,8 @@ void print_node_strategy(PostFlopGame& game, int node_idx, int player_id, const 
     if (num_actions == 0 || num_hands == 0) return;
 
     std::vector<float> strat(node.num_elements);
-    if (game.is_compressed()) {
+    // ИСПРАВЛЕНО: is_compression_enabled()
+    if (game.is_compression_enabled()) {
         const int16_t* src = (const int16_t*)game.storage1_data() + node.storage1_offset;
         float decode_mult = node.scale1 / 32767.0f;
         for (size_t i = 0; i < strat.size(); ++i) strat[i] = (float)src[i] * decode_mult;
