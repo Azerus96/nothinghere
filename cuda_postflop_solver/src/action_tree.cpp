@@ -269,7 +269,7 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
             case Action::Type::Fold:
                 child_info.folded[player] = true;
                 child_info.active_players--;
-                child->player = (uint8_t)(next_p | PLAYER_FOLD_FLAG); 
+                child->player = (uint8_t)(player | PLAYER_FOLD_FLAG); 
                 break;
             case Action::Type::Check:
                 child->player = (uint8_t)next_p;
