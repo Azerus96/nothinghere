@@ -54,6 +54,21 @@ void PostFlopGame::prepare() {
         }
     }
 
+    // ПРИМЕЧАНИЕ (не тронуто сознательно): same_hand_index здесь считается
+    // только для n==2 (Z.ai, баг #6). Формат card_config_.same_hand_index[p]
+    // — это ОДИН индекс на "оппонента" и рассчитан именно на HU. В мультивее
+    // "оппонентов" несколько, и это поле не может корректно хранить индексы
+    // сразу для всех — потребовалась бы полная переделка структуры данных
+    // ([player][opponent] -> vector<uint16_t>) плюс правки во всех местах,
+    // где same_hand_index читается. Делать это вслепую, без возможности
+    // скомпилировать и прогнать тесты, слишком рискованно для регрессии.
+    // Вместо этого card-removal для мультивея реализован в gpu_solver.cu
+    // через прямое суммирование reach по картам (blocked-by-card), которое
+    // не требует same_hand_index вовсе. Единственная просадка точности —
+    // отсутствует поправка на «оппонент держит точно такую же комбинацию»
+    // (что физически невозможно относительно ваших же карт, но возможно
+    // относительно карт ДРУГОГО активного оппонента) — это second-order
+    // эффект, независимо отмеченный и Z.ai, и мной как некритичный.
     for (int p = 0; p < n; ++p) {
         card_config_.same_hand_index[p].assign(card_config_.private_cards[p].size(), 0xFFFF);
         if (n == 2) {
@@ -77,43 +92,42 @@ void PostFlopGame::prepare() {
 }
 
 void PostFlopGame::build_node_arena() {
-    struct BFSItem {
-        const ActionTreeNode* node;
-        BoardState state;
-        int arena_idx;       
-        int parent_idx;      
-        int depth;           
-    };
-
-    std::vector<BFSItem> bfs_order;
-    bfs_order.reserve(256);
-    bfs_order.push_back({&action_tree_->root(), tree_config_.initial_state, 0, -1, 0});
-    
     node_arena_.clear();
-    node_arena_.reserve(256);
-    nodes_by_depth_.clear();
-    max_tree_depth_ = 0;
+
+    struct QueueItem {
+        const ActionTreeNode* atn;
+        BoardState state;
+        int my_idx;
+        int parent_idx;
+        int depth;
+    };
+    std::vector<QueueItem> bfs_order;
+    bfs_order.push_back({&action_tree_->root(), tree_config_.initial_state, 0, -1, 0});
 
     size_t head = 0;
     while (head < bfs_order.size()) {
-        BFSItem& cur = bfs_order[head];
-        const ActionTreeNode* atn = cur.node;
-        int my_idx = cur.arena_idx;
+        auto cur = bfs_order[head];
+        const ActionTreeNode* atn = cur.atn;
 
-        if (cur.depth >= (int)nodes_by_depth_.size()) {
-            nodes_by_depth_.push_back(std::vector<int>());
-        }
-        nodes_by_depth_[cur.depth].push_back(my_idx);
-        if (cur.depth > max_tree_depth_) max_tree_depth_ = cur.depth;
-
-        PostFlopNode node{};
+        PostFlopNode node;
         node.player = atn->player;
         node.turn = card_config_.turn;
         node.river = card_config_.river;
-        node.active_mask = atn->active_mask; // <--- ИСПРАВЛЕНО
+        node.active_mask = atn->active_mask;
         node.amount = atn->amount;
-        node.num_children = (uint16_t)atn->actions.size();
-        node.children_offset = (uint32_t)(bfs_order.size());  
+        node.children_offset = 0; // заполняется ниже, после постановки детей в очередь
+
+        // FIX #3 (Z.ai, подтверждено): раньше здесь стояло
+        //   node.num_children = (uint16_t)atn->actions.size();
+        // Для chance-узлов `actions` пуст (ребёнок для перехода улицы
+        // добавляется напрямую в `children`, минуя `actions`), поэтому
+        // num_children всегда получался 0 для chance — даже после фикса
+        // битовой коллизии PLAYER_CHANCE циклы `for (a < num_actions)` в
+        // kernel_down_pass/kernel_up_pass ни разу не выполнялись бы для
+        // chance-узлов. `children.size()` корректен универсально: для
+        // обычных action-узлов actions.size()==children.size() (1:1), для
+        // chance — 1, для terminal — 0.
+        node.num_children = (uint16_t)atn->children.size();
 
         int p = node.get_player();
         if (!node.is_terminal() && !node.is_chance() && p < card_config_.num_players) {
@@ -124,7 +138,7 @@ void PostFlopGame::build_node_arena() {
         node.num_elements_ip = 0;
         node.scale1 = 1.0f;
         node.scale2 = 1.0f;
-        node.scale3 = 1.0f;
+        node.scale3 = 0.0f;
         node.storage1_offset = 0;
         node.storage2_offset = 0;
         node.storage3_offset = 0;
@@ -133,7 +147,7 @@ void PostFlopGame::build_node_arena() {
 
         for (const auto& child : atn->children) {
             int child_idx = (int)bfs_order.size();
-            bfs_order.push_back({child.get(), atn->board_state, child_idx, my_idx, cur.depth + 1});
+            bfs_order.push_back({child.get(), atn->board_state, child_idx, cur.my_idx, cur.depth + 1});
         }
         ++head;
     }
