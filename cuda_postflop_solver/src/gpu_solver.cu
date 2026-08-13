@@ -101,18 +101,15 @@ void kernel_terminal_fold(
     int node_idx = d_fold_nodes[idx];
     const PostFlopNode& node = d_nodes[node_idx];
     
-    // ИСПРАВЛЕНО: В узле фолда player содержит ID Победителя!
     int winner = node.player & 7;
     int tid = threadIdx.x;
     int my_hands = d_num_hands[updating_player];
 
     if (updating_player != winner) {
-        // Мы сбросили карты. Наш выигрыш = 0.
         for (int h = tid; h < my_hands; h += blockDim.x) {
             d_node_cfv[node_idx * MAX_HANDS + h] = 0.0f;
         }
     } else {
-        // Мы победили! Забираем банк.
         double pot = starting_pot + NUM_PLAYERS * node.amount;
         double win_prob = 1.0;
 
@@ -155,7 +152,6 @@ void kernel_terminal_showdown(
     int my_hands = d_num_hands[updating_player];
     double pot = starting_pot + NUM_PLAYERS * node.amount;
 
-    // ИСПРАВЛЕНО: Если мы сбросили карты до шоудауна, наш EV = 0
     bool am_i_active = (node.active_mask & (1 << updating_player)) != 0;
     if (!am_i_active) {
         for (int h = tid; h < my_hands; h += blockDim.x) {
@@ -179,12 +175,10 @@ void kernel_terminal_showdown(
             double beat_reach = 0.0;
             
             if (!is_opp_active) {
-                // Оппонент сбросил. Мы бьем его 100% времени.
                 for (int oh = 0; oh < d_num_hands[p]; ++oh) {
                     beat_reach += cfreach[oh];
                 }
             } else {
-                // Оппонент в игре. Сравниваем силы рук.
                 for (int oh = 0; oh < d_num_hands[p]; ++oh) {
                     float w = cfreach[oh];
                     if (w > 0.0f) {
@@ -196,7 +190,7 @@ void kernel_terminal_showdown(
                         if (my_strength > opp_strength) {
                             beat_reach += w;
                         } else if (my_strength == opp_strength) {
-                            beat_reach += w * 0.5f; // ИСПРАВЛЕНО: Ничья делит банк
+                            beat_reach += w * 0.5f;
                         }
                     }
                 }
@@ -430,8 +424,9 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
             );
         }
         if (gpu.num_showdown_nodes > 0) {
+            // ИСПРАВЛЕНО: gpu.d_node_cfv
             kernel_terminal_showdown<NUM_PLAYERS><<<gpu.num_showdown_nodes, 256>>>(
-                gpu.d_showdown_nodes, gpu.num_showdown_nodes, gpu.d_nodes, gpu.d_all_reaches, d_node_cfv,
+                gpu.d_showdown_nodes, gpu.num_showdown_nodes, gpu.d_nodes, gpu.d_all_reaches, gpu.d_node_cfv,
                 gpu.d_private_cards_ptrs, gpu.d_num_hands, gpu.starting_pot,
                 gpu.flop[0], gpu.flop[1], gpu.flop[2], gpu.num_nodes, p
             );
