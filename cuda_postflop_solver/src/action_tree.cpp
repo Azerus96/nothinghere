@@ -200,7 +200,6 @@ void ActionTree::merge_bet_actions(std::vector<Action>& actions, int32_t pot,
 void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int player, BuildInfo info) {
     if (state > config_.initial_state && (int)state > 2) return; 
 
-    // ИСПРАВЛЕНО: Заполняем маску активных игроков
     uint8_t mask = 0;
     for (int i = 0; i < config_.num_players; ++i) {
         if (!info.folded[i]) mask |= (1 << i);
@@ -208,7 +207,19 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
     node.active_mask = mask;
 
     if (info.active_players == 1) {
-        node.player = player | PLAYER_TERMINAL_FLAG;
+        // FIX #4 (Z.ai, подтверждено): раньше здесь стояло
+        //   node.player = player | PLAYER_TERMINAL_FLAG;
+        // что ПОЛНОСТЬЮ перезаписывало node.player, стирая FOLD_FLAG,
+        // который вызывающий код (Action::Type::Fold, строка выше по стеку)
+        // уже проставил через `child->player = player | PLAYER_FOLD_FLAG`.
+        // В итоге fold_nodes на GPU был всегда пуст, а fold-терминалы
+        // ошибочно обсчитывались как showdown.
+        // Единственный способ попасть в active_players==1 — это именно фолд
+        // (active_players уменьшается только в ветке Action::Type::Fold),
+        // поэтому node.player на входе сюда уже корректно содержит
+        // (folder_id | PLAYER_FOLD_FLAG). Просто добавляем TERMINAL_FLAG,
+        // не трогая остальные биты.
+        node.player |= PLAYER_TERMINAL_FLAG;
         return;
     }
 
@@ -386,14 +397,23 @@ void ActionTree::apply_removed_lines() {
 }
 
 std::array<uint64_t, 3> ActionTree::count_num_action_nodes() const {
+    // FIX (побочная находка): раньше `if (n.player >= PLAYER_CHANCE) return;`
+    // полагался на то, что PLAYER_CHANCE=254 — максимально возможное значение
+    // байта, поэтому под это условие НЕ попадали terminal-узлы (16..53), но
+    // при этом рекурсия обрывалась НАВСЕГДА на первом chance-узле, ни разу не
+    // спускаясь в поддерево turn/river (они просто не подсчитывались).
+    // Это чисто диагностическая функция (используется только в
+    // tests/test_real_poker.cpp и bench/bench_solver.cpp для печати
+    // статистики), в CFR-обучении не участвует. Переписано на явные
+    // битовые проверки, с корректным продолжением рекурсии в детей.
     std::array<uint64_t, 3> counts = {0, 0, 0};
     std::function<void(const ActionTreeNode&, BoardState)> visit =
         [&](const ActionTreeNode& n, BoardState state) {
-        if (n.player >= PLAYER_CHANCE) return;  
-        counts[(int)state]++;
+        bool node_is_chance   = (n.player & PLAYER_CHANCE_FLAG) != 0;
+        bool node_is_terminal = (n.player & PLAYER_TERMINAL_FLAG) != 0;
+        if (!node_is_chance && !node_is_terminal) counts[(int)state]++;
         for (const auto& c : n.children) {
-            BoardState cs = (n.player == (PLAYER_CHANCE | PLAYER_CHANCE_FLAG))
-                          ? n.board_state : state;
+            BoardState cs = node_is_chance ? n.board_state : state;
             visit(*c, cs);
         }
     };
