@@ -35,7 +35,7 @@ namespace postflop {
         }                                                                         \
     } while (0)
 
-// ── ЯДРО 1: Проход ВНИЗ ─────────────────────────────────────────────────
+// ── ИСПРАВЛЕННОЕ ЯДРО 1: Проход ВНИЗ (Multiway Safe) ───────────────────
 template <int NUM_PLAYERS>
 __global__
 void kernel_down_pass(
@@ -54,17 +54,15 @@ void kernel_down_pass(
     
     int node_idx = d_nodes_at_depth[idx];
     const PostFlopNode& node = d_nodes[node_idx];
-    // Корректно только для НАСТОЯЩИХ terminal-узлов теперь, что chance-узлы
-    // сюда больше не попадают (см. FIX #2 в action_tree.h/.cpp).
     if (node.is_terminal()) return;
 
     int node_player = node.player & PLAYER_MASK;
     int num_actions = node.num_children;
     int tid = threadIdx.x; 
 
+    // ИСПРАВЛЕНИЕ: Каждый игрок пробрасывает ТОЛЬКО СВОЙ reach!
+    // Никаких гонок данных.
     for (int p = 0; p < NUM_PLAYERS; ++p) {
-        if (p == updating_player) continue;
-        
         int hands_p = d_num_hands[p];
         float* p_reach_in = &d_all_reaches[p * (total_num_nodes * MAX_HANDS) + node_idx * MAX_HANDS];
         
@@ -72,19 +70,13 @@ void kernel_down_pass(
             float my_reach = p_reach_in[h];
             
             if (node.is_chance()) {
-                // FIX #6 (Z.ai, подтверждено): раньше reach делился на
-                // фиктивные 44/45 "исходов", хотя в этом дереве у
-                // chance-узла ВСЕГДА ровно один (детерминированный)
-                // ребёнок (борд фиксирован заранее в CardConfig). Деление
-                // на 44 было систематической ошибкой масштаба reach на
-                // каждом переходе улицы. Корректно — просто 1/num_actions
-                // (при num_actions=1 это тождественный пробросс).
                 float scale = (num_actions > 0) ? (1.0f / (float)num_actions) : 1.0f;
                 float scaled = my_reach * scale;
                 for (int a = 0; a < num_actions; ++a) {
                     d_all_reaches[p * (total_num_nodes * MAX_HANDS) + (node.children_offset + a) * MAX_HANDS + h] = scaled;
                 }
             } else if (node_player == p) {
+                // Если это узел текущего игрока, умножаем его reach на его стратегию
                 float sum_pos = 0.0f;
                 float s2 = node.scale2; if (s2 == 0.0f) s2 = 1.0f;
                 float decode_mult = is_compressed ? (s2 / 32767.0f) : 1.0f;
@@ -104,9 +96,12 @@ void kernel_down_pass(
                     float r = is_compressed ? (float)((const int16_t*)d_storage2)[mem_idx] * decode_mult
                                             : ((const float*)d_storage2)[mem_idx];
                     float strat_val = (sum_pos > 1e-7f) ? ((r > 0.0f) ? (r * inv) : 0.0f) : uniform;
+                    
+                    // Записываем новый reach для детей
                     d_all_reaches[p * (total_num_nodes * MAX_HANDS) + (node.children_offset + a) * MAX_HANDS + h] = my_reach * strat_val;
                 }
             } else {
+                // Если это узел чужого игрока, наш reach просто пробрасывается вниз без изменений
                 for (int a = 0; a < num_actions; ++a) {
                     d_all_reaches[p * (total_num_nodes * MAX_HANDS) + (node.children_offset + a) * MAX_HANDS + h] = my_reach;
                 }
@@ -114,6 +109,7 @@ void kernel_down_pass(
         }
     }
 }
+
 
 // ── ЯДРО 2: Терминальный Fold ───────────────────────────────────────────
 template <int NUM_PLAYERS>
