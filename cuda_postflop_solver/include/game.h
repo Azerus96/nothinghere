@@ -1,6 +1,3 @@
-// ════════════════════════════════════════════════════════════════════════
-// game.h — PostFlopGame: flat node arena + storage arenas (GPU-ready)
-// ════════════════════════════════════════════════════════════════════════
 #ifndef GAME_H
 #define GAME_H
 
@@ -22,7 +19,7 @@ struct PostFlopNode {
     uint8_t  player;             
     uint8_t  turn;               
     uint8_t  river;              
-    uint8_t  is_locked;          
+    uint8_t  active_mask;        // <--- ИСПРАВЛЕНО: Маска активных игроков
     int32_t  amount;             
     uint32_t children_offset;    
     uint16_t num_children;
@@ -58,10 +55,9 @@ struct StrengthItem {
 };
 
 struct CardConfig {
-    int num_players = 2; // Поддержка мультивея (до 6)
-    std::vector<Range> ranges; // Диапазоны всех игроков
+    int num_players = 2; 
+    std::vector<Range> ranges; 
 
-    // Оставлено для обратной совместимости со старыми тестами
     Range range_oop;          
     Range range_ip;           
     
@@ -69,7 +65,6 @@ struct CardConfig {
     Card  turn;               
     Card  river;              
 
-    // Векторы размером num_players
     std::vector<std::vector<std::pair<Card, Card>>> private_cards;   
     std::vector<std::vector<float>>                 initial_weights;  
     std::vector<std::vector<uint16_t>>              same_hand_index;  
