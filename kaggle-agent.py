@@ -16,7 +16,7 @@ from kaggle_secrets import UserSecretsClient
 from google import genai
 from google.genai import types
 
-# --- 1. СЕКРЕТЫ И НАСТРОЙКИ ---
+# --- 1. СЕКРЕТЫ И ИНИЦИАЛИЗАЦИЯ ---
 secrets = UserSecretsClient()
 GEMINI_KEY = secrets.get_secret("GEMINI_API_KEY")
 GITHUB_TOKEN = secrets.get_secret("GITHUB_TOKEN")
@@ -28,6 +28,11 @@ HISTORY_FILE = Path("/kaggle/working/session_history.json")
 
 app = FastAPI(title="Kaggle Vibe Agent")
 
+def log_console(msg: str):
+    """Принудительный вывод логов в ячейку Kaggle в реальном времени."""
+    timestamp = time.strftime("%H:%M:%S")
+    print(f"[{timestamp}] {msg}", flush=True)
+
 # --- 2. МАСКИРОВАНИЕ СЕКРЕТОВ ---
 def sanitize_logs(text: str) -> str:
     if GITHUB_TOKEN:
@@ -36,7 +41,39 @@ def sanitize_logs(text: str) -> str:
         text = text.replace(GEMINI_KEY, "AIza***HIDDEN_KEY***")
     return text
 
-# --- 3. RATE LIMITER ДЛЯ ЗАЩИТЫ ОТ 429 ---
+# --- 3. ДИНАМИЧЕСКИЙ СПИСОК ДОСТУПНЫХ МОДЕЛЕЙ ---
+def fetch_available_models() -> List[str]:
+    try:
+        raw = []
+        for m in client.models.list():
+            c_name = m.name.replace("models/", "")
+            if "gemini" in c_name and not any(x in c_name for x in ["embed", "image", "tts", "robotics", "computer-use"]):
+                raw.append(c_name)
+
+        priority = [
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite"
+        ]
+        sorted_models = [m for m in priority if m in raw]
+        for m in raw:
+            if m not in sorted_models:
+                sorted_models.append(m)
+        log_console(f"✅ Обнаружено моделей Google: {len(sorted_models)}. Приоритет: {sorted_models[:3]}")
+        return sorted_models if sorted_models else ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.5-flash"]
+    except Exception as e:
+        log_console(f"⚠️ Ошибка загрузки списка моделей: {e}")
+        return ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+
+AVAILABLE_MODELS = fetch_available_models()
+
+# --- 4. RATE LIMITER ---
 class RollingRateLimiter:
     def __init__(self, max_per_minute: int = 12):
         self.max_per_minute = max_per_minute
@@ -49,62 +86,28 @@ class RollingRateLimiter:
         if len(self.timestamps) >= self.max_per_minute:
             wait_time = 60 - (now - self.timestamps[0]) + 1.0
             if wait_time > 0:
+                log_console(f"⏳ [Rate Limiter] Пауза {wait_time:.1f}с для соблюдения квоты 12 RPM...")
                 await asyncio.sleep(wait_time)
         self.timestamps.append(time.time())
 
 limiter = RollingRateLimiter(max_per_minute=12)
 
-# --- 4. ДИНАМИЧЕСКИЙ СПИСОК ДОСТУПНЫХ МОДЕЛЕЙ ---
-def get_available_gemini_models() -> List[str]:
-    """Динамически запрашивает все доступные модели у Google API и выстраивает каскад приоритетов."""
-    try:
-        raw_models = []
-        for m in client.models.list():
-            clean_name = m.name.replace("models/", "")
-            # Фильтруем генеративные модели общего назначения
-            if "gemini" in clean_name and not any(x in clean_name for x in ["embed", "image", "tts", "robotics", "computer-use"]):
-                raw_models.append(clean_name)
-
-        # Желаемый порядок убывания интеллекта и агентных возможностей
-        preferred_hierarchy = [
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-pro-preview",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite"
-        ]
-
-        cascade = [m for m in preferred_hierarchy if m in raw_models]
-        for m in raw_models:
-            if m not in cascade:
-                cascade.append(m)
-
-        print(f"🤖 [Discovery] Доступный каскад моделей: {cascade}")
-        return cascade if cascade else ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.5-flash"]
-    except Exception as e:
-        print(f"⚠️ [Discovery Error] Ошибка запроса списка моделей: {e}. Используем базовый каскад.")
-        return ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
-
-AVAILABLE_MODELS = get_available_gemini_models()
-
-# --- 5. ИНСТРУМЕНТЫ АГЕНТА (TOOLS) ---
+# --- 5. ИНСТРУМЕНТЫ (TOOLS) ---
 def execute_bash(command: str) -> str:
-    """Выполняет bash-команду (компиляция, cmake, make, pip, pytest, nvidia-smi) в рабочем каталоге."""
+    log_console(f"💻 [Bash Запуск]: {command[:100]}...")
     try:
         res = subprocess.run(command, shell=True, text=True, capture_output=True, timeout=300, cwd=WORKDIR)
         out = res.stdout + ("\n[STDERR]:\n" + res.stderr if res.stderr else "")
+        log_console(f"💻 [Bash Результат]: код {res.returncode}, байт {len(out)}")
         return sanitize_logs(out.strip()) if out.strip() else "[Успешно без вывода]"
     except subprocess.TimeoutExpired:
+        log_console("❌ [Bash Ошибка]: Превышен таймаут 300с")
         return "[Ошибка: Превышен таймаут 300 секунд]"
     except Exception as e:
-        return f"[Исключение при выполнении: {str(e)}]"
+        log_console(f"❌ [Bash Исключение]: {e}")
+        return f"[Исключение: {str(e)}]"
 
 def read_file(path: str) -> str:
-    """Читает содержимое файла проекта."""
     p = WORKDIR / path if not Path(path).is_absolute() else Path(path)
     if not p.exists():
         return f"[Ошибка: Файл {path} не найден]"
@@ -114,17 +117,16 @@ def read_file(path: str) -> str:
         return f"[Ошибка чтения: {str(e)}]"
 
 def write_file(path: str, content: str) -> str:
-    """Создает или обновляет файл по указанному пути."""
     p = WORKDIR / path if not Path(path).is_absolute() else Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     try:
         p.write_text(content, encoding="utf-8")
+        log_console(f"📝 [Файл сохранен]: {path} ({len(content)} символов)")
         return f"Файл {path} успешно сохранен."
     except Exception as e:
         return f"[Ошибка записи: {str(e)}]"
 
 def list_files(directory: str = ".") -> str:
-    """Возвращает структуру каталогов и файлов."""
     p = WORKDIR / directory if not Path(directory).is_absolute() else Path(directory)
     if not p.exists():
         return f"[Директория {directory} не найдена]"
@@ -138,7 +140,6 @@ def list_files(directory: str = ".") -> str:
     return "\n".join(tree[:150]) if tree else "[Директория пуста]"
 
 def git_commit_and_push(branch: str = "main", message: str = "auto: updates by Kaggle Vibe Agent") -> str:
-    """Коммитит и пушит изменения в текущий репозиторий через GitHub Token."""
     script = f"""
     cd {WORKDIR}
     git config --global user.name "Kaggle Gemini Agent"
@@ -151,39 +152,11 @@ def git_commit_and_push(branch: str = "main", message: str = "auto: updates by K
     return execute_bash(script)
 
 def inspect_gpu() -> str:
-    """Проверяет утилизацию и память 2x Tesla T4."""
     return execute_bash("nvidia-smi --query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu --format=csv")
 
 tools_list = [execute_bash, read_file, write_file, list_files, git_commit_and_push, inspect_gpu]
 
-# --- 6. КАСКАДНЫЙ ИСПОЛНИТЕЛЬ С AUTO-RETRY ---
-async def call_gemini_cascade(contents: list, sys_inst: str):
-    last_err = None
-    for model_name in AVAILABLE_MODELS:
-        for attempt in range(3):
-            await limiter.acquire()
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=sys_inst,
-                        tools=tools_list,
-                        temperature=0.2,
-                    )
-                )
-                return response, model_name
-            except Exception as e:
-                err_str = str(e)
-                last_err = err_str
-                # Временные ошибки серверов или квот: ждем и повторяем
-                if any(code in err_str for code in ["503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]):
-                    await asyncio.sleep(2.5 * (attempt + 1))
-                else:
-                    break  # Если ошибка синтаксическая — переходим к следующей модели
-    raise Exception(f"Все доступные модели исчерпаны. Ошибка: {last_err}")
-
-# --- 7. ХРАНЕНИЕ ИСТОРИИ ---
+# --- 6. ИСТОРИЯ ДИАЛОГА ---
 def load_history() -> List[Dict[str, Any]]:
     if HISTORY_FILE.exists():
         try:
@@ -198,14 +171,81 @@ def save_history(history: List[Dict[str, Any]]):
     except Exception as e:
         print(f"Error saving history: {e}")
 
-# --- 8. ФРОНТЕНД ИНТЕРФЕЙС ---
+# --- 7. НЕБЛОКИРУЮЩИЙ КАСКАДНЫЙ ИНФЕРЕНС ---
+def sync_gemini_call(model_name: str, contents: list, config: types.GenerateContentConfig):
+    """Синхронный вызов, запускаемый в пуле потоков."""
+    return client.models.generate_content(
+        model=model_name,
+        contents=contents,
+        config=config
+    )
+
+async def call_gemini_async(contents: list, sys_inst: str, settings: dict):
+    selected_model = settings.get("model", "auto")
+    temperature = float(settings.get("temperature", 0.2))
+    top_p = float(settings.get("top_p", 0.95))
+    max_tokens = int(settings.get("max_tokens", 8192))
+    safety_level = settings.get("safety", "BLOCK_NONE")
+
+    # Формируем safety settings
+    safety_settings_list = []
+    if safety_level == "BLOCK_NONE":
+        threshold = types.HarmBlockThreshold.BLOCK_NONE
+    elif safety_level == "BLOCK_ONLY_HIGH":
+        threshold = types.HarmBlockThreshold.BLOCK_ONLY_HIGH
+    else:
+        threshold = types.HarmBlockThreshold.HARM_BLOCK_THRESHOLD_UNSPECIFIED
+
+    for cat in [
+        types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+        types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+    ]:
+        safety_settings_list.append(types.SafetySetting(category=cat, threshold=threshold))
+
+    config = types.GenerateContentConfig(
+        system_instruction=sys_inst,
+        tools=tools_list,
+        temperature=temperature,
+        top_p=top_p,
+        max_output_tokens=max_tokens,
+        safety_settings=safety_settings_list
+    )
+
+    models_queue = AVAILABLE_MODELS if selected_model == "auto" else [selected_model] + [m for m in AVAILABLE_MODELS if m != selected_model]
+    last_error = None
+
+    for m_name in models_queue:
+        for attempt in range(3):
+            await limiter.acquire()
+            try:
+                log_console(f"🤖 [Запрос к Gemini]: Модель {m_name} (Попытка {attempt+1})")
+                # Неблокирующий вызов через asyncio.to_thread
+                response = await asyncio.to_thread(sync_gemini_call, m_name, contents, config)
+                log_console(f"✨ [Ответ получен]: Модель {m_name} успешно сгенерировала ответ.")
+                return response, m_name
+            except Exception as e:
+                err_str = str(e)
+                last_error = err_str
+                log_console(f"⚠️ [Ошибка вызова {m_name}]: {err_str[:150]}")
+                if any(k in err_str for k in ["503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]):
+                    await asyncio.sleep(2.0 * (attempt + 1))
+                else:
+                    break
+        if selected_model != "auto":
+            break
+
+    raise Exception(f"Все попытки вызова моделей завершились ошибкой: {last_error}")
+
+# --- 8. WEB UI С ПАНЕЛЬЮ НАСТРОЕК ---
 HTML_CODE = """
 <!DOCTYPE html>
 <html lang="ru" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kaggle Vibe Agent (2x T4)</title>
+    <title>Kaggle Vibe Agent Studio (2x T4)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script>
@@ -214,10 +254,11 @@ HTML_CODE = """
             theme: {
                 extend: {
                     colors: {
-                        darkbg: '#090d16',
-                        cardbg: '#131b2e',
-                        bordercol: '#1e293b',
-                        terminalbg: '#02040a'
+                        darkbg: '#080c14',
+                        cardbg: '#111827',
+                        sidebg: '#0f172a',
+                        bordercol: '#1f2937',
+                        terminalbg: '#030712'
                     }
                 }
             }
@@ -225,67 +266,152 @@ HTML_CODE = """
     </script>
     <style>
         ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
         pre, code { font-family: 'JetBrains Mono', Consolas, Monaco, monospace; }
     </style>
 </head>
-<body class="bg-darkbg text-slate-100 h-screen flex flex-col antialiased">
+<body class="bg-darkbg text-slate-100 h-screen flex flex-col font-sans antialiased overflow-hidden">
     
-    <header class="bg-cardbg border-b border-bordercol px-6 py-3 flex justify-between items-center shadow-md">
+    <!-- Шапка -->
+    <header class="bg-cardbg border-b border-bordercol px-6 py-3 flex justify-between items-center z-10 shadow-md">
         <div class="flex items-center space-x-3">
             <div class="bg-gradient-to-tr from-cyan-500 to-indigo-600 p-2.5 rounded-xl shadow-lg">
                 <i class="fa-solid fa-microchip text-white text-lg"></i>
             </div>
             <div>
-                <h1 class="font-bold text-base text-white tracking-wide">Gemini Auto-Cascade Agent</h1>
-                <p id="modelCascadeList" class="text-xs text-slate-400">Target: 2x Tesla T4 (Arch 75) • Dynamic Discovery</p>
+                <h1 class="font-bold text-base text-white tracking-wide flex items-center gap-2">
+                    Gemini Agent Studio
+                    <span class="text-[11px] font-normal px-2 py-0.5 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded-md">2x Tesla T4</span>
+                </h1>
+                <p id="activeModelIndicator" class="text-xs text-slate-400">Режим: Авто-каскад активен</p>
             </div>
         </div>
         <div class="flex items-center space-x-3">
-            <span class="inline-flex items-center gap-1.5 py-1 px-3 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> 2x T4 Ready
-            </span>
-            <button onclick="clearHistory()" class="text-xs bg-slate-800 hover:bg-red-950/40 hover:text-red-400 text-slate-400 px-3 py-1.5 rounded-lg border border-bordercol transition">
+            <button onclick="toggleSettings()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-bordercol text-xs flex items-center gap-2 transition">
+                <i class="fa-solid fa-sliders text-indigo-400"></i>
+                <span>Параметры & Модели</span>
+            </button>
+            <button onclick="clearHistory()" class="bg-slate-800 hover:bg-red-950/50 hover:text-red-400 text-slate-400 px-3 py-1.5 rounded-lg border border-bordercol text-xs transition">
                 <i class="fa-solid fa-trash-can mr-1"></i> Сброс
             </button>
         </div>
     </header>
 
-    <main id="chatBox" class="flex-1 overflow-y-auto p-6 space-y-6 max-w-5xl w-full mx-auto"></main>
+    <div class="flex-1 flex overflow-hidden relative">
+        
+        <!-- Чат -->
+        <main class="flex-1 flex flex-col h-full bg-darkbg">
+            <div id="chatBox" class="flex-1 overflow-y-auto p-6 space-y-6 max-w-4xl w-full mx-auto"></div>
 
-    <footer class="bg-cardbg border-t border-bordercol p-4">
-        <div class="max-w-5xl mx-auto flex flex-col space-y-2">
-            <div id="fileBadge" class="hidden text-xs bg-indigo-950/60 text-indigo-300 border border-indigo-700/50 px-3 py-1.5 rounded-lg flex items-center justify-between w-fit gap-3">
-                <span id="fileBadgeName"><i class="fa-solid fa-paperclip mr-1.5"></i></span>
-                <button onclick="clearUploadedFile()" class="text-slate-400 hover:text-red-400"><i class="fa-solid fa-xmark"></i></button>
+            <!-- Нижняя панель ввода -->
+            <footer class="bg-cardbg border-t border-bordercol p-4">
+                <div class="max-w-4xl mx-auto flex flex-col space-y-2">
+                    <div id="fileBadge" class="hidden text-xs bg-indigo-950/60 text-indigo-300 border border-indigo-700/50 px-3 py-1.5 rounded-lg flex items-center justify-between w-fit gap-3">
+                        <span id="fileBadgeName"><i class="fa-solid fa-paperclip mr-1.5"></i></span>
+                        <button onclick="clearUploadedFile()" class="text-slate-400 hover:text-red-400"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+
+                    <div class="flex items-center space-x-3 bg-darkbg border border-bordercol rounded-2xl p-2.5 focus-within:border-indigo-500 transition shadow-inner">
+                        <label class="cursor-pointer text-slate-400 hover:text-indigo-400 p-2 transition">
+                            <i class="fa-solid fa-paperclip text-lg"></i>
+                            <input type="file" id="fileInput" class="hidden" onchange="uploadFile(this)">
+                        </label>
+                        <textarea id="promptInput" rows="1" placeholder="Поставьте задачу агенту (например: проверь файлы в repo, запусти сборку CUDA, проверь GPU)..." 
+                            class="flex-1 bg-transparent border-0 focus:ring-0 text-slate-100 placeholder-slate-500 resize-none outline-none text-sm leading-relaxed"
+                            onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); }"></textarea>
+                        <button onclick="sendPrompt()" id="sendBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl transition flex items-center gap-2 text-sm font-semibold shadow-md">
+                            <span>Запуск</span>
+                            <i class="fa-solid fa-paper-plane text-xs"></i>
+                        </button>
+                    </div>
+                </div>
+            </footer>
+        </main>
+
+        <!-- Боковая панель настроек (Drawer) -->
+        <aside id="settingsDrawer" class="w-80 bg-sidebg border-l border-bordercol flex flex-col h-full transform transition-all duration-300 ease-in-out p-5 overflow-y-auto">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="font-bold text-sm text-white flex items-center gap-2">
+                    <i class="fa-solid fa-sliders text-indigo-400"></i> Настройки Инференса
+                </h2>
+                <button onclick="toggleSettings()" class="text-slate-400 hover:text-slate-200"><i class="fa-solid fa-xmark"></i></button>
             </div>
 
-            <div class="flex items-center space-x-3 bg-darkbg border border-bordercol rounded-2xl p-2.5 focus-within:border-indigo-500 transition">
-                <label class="cursor-pointer text-slate-400 hover:text-indigo-400 p-2 transition">
-                    <i class="fa-solid fa-cloud-arrow-up text-lg"></i>
-                    <input type="file" id="fileInput" class="hidden" onchange="uploadFile(this)">
-                </label>
-                <textarea id="promptInput" rows="1" placeholder="Поставьте задачу (например: покажи файлы, собери solver, проверь GPU)..." 
-                    class="flex-1 bg-transparent border-0 focus:ring-0 text-slate-100 placeholder-slate-500 resize-none outline-none text-sm leading-relaxed"
-                    onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); }"></textarea>
-                <button onclick="sendPrompt()" id="sendBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl transition flex items-center gap-2 text-sm font-semibold shadow-md">
-                    <span>Запуск</span>
-                    <i class="fa-solid fa-paper-plane text-xs"></i>
-                </button>
+            <div class="space-y-5 text-xs">
+                <div>
+                    <label class="block font-semibold text-slate-300 mb-1.5">Модель Gemini</label>
+                    <select id="modelSelect" class="w-full bg-slate-900 border border-bordercol rounded-xl px-3 py-2 text-slate-200 outline-none focus:border-indigo-500">
+                        <option value="auto">⚡ Авто-каскад (Умный выбор)</option>
+                    </select>
+                </div>
+
+                <div>
+                    <div class="flex justify-between font-semibold text-slate-300 mb-1">
+                        <span>Temperature</span>
+                        <span id="tempVal" class="text-indigo-400">0.2</span>
+                    </div>
+                    <input type="range" id="tempRange" min="0" max="2" step="0.05" value="0.2" class="w-full accent-indigo-500" oninput="document.getElementById('tempVal').innerText = this.value">
+                </div>
+
+                <div>
+                    <div class="flex justify-between font-semibold text-slate-300 mb-1">
+                        <span>Top-P</span>
+                        <span id="toppVal" class="text-indigo-400">0.95</span>
+                    </div>
+                    <input type="range" id="toppRange" min="0" max="1" step="0.05" value="0.95" class="w-full accent-indigo-500" oninput="document.getElementById('toppVal').innerText = this.value">
+                </div>
+
+                <div>
+                    <label class="block font-semibold text-slate-300 mb-1.5">Max Output Tokens</label>
+                    <select id="maxTokensSelect" class="w-full bg-slate-900 border border-bordercol rounded-xl px-3 py-2 text-slate-200 outline-none focus:border-indigo-500">
+                        <option value="4096">4,096 токенов</option>
+                        <option value="8192" selected>8,192 токенов (Стандарт)</option>
+                        <option value="16384">16,384 токенов</option>
+                        <option value="65536">65,536 токенов (Максимум)</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block font-semibold text-slate-300 mb-1.5">Фильтры безопасности (Safety)</label>
+                    <select id="safetySelect" class="w-full bg-slate-900 border border-bordercol rounded-xl px-3 py-2 text-slate-200 outline-none focus:border-indigo-500">
+                        <option value="BLOCK_NONE" selected>🔓 BLOCK_NONE (Полная свобода кода)</option>
+                        <option value="BLOCK_ONLY_HIGH">🛡️ BLOCK_ONLY_HIGH</option>
+                        <option value="DEFAULT">🔒 DEFAULT (Стандартные)</option>
+                    </select>
+                </div>
+
+                <div class="pt-4 border-t border-bordercol">
+                    <span class="text-[11px] text-slate-400 leading-relaxed block">
+                        💡 Настройки применяются мгновенно ко всем следующим запросам агента.
+                    </span>
+                </div>
             </div>
-        </div>
-    </footer>
+        </aside>
+    </div>
 
     <script>
         let currentFile = null;
 
-        window.onload = async () => {
-            const modelsRes = await fetch("/api/models");
-            const modelsData = await modelsRes.json();
-            if (modelsData.models) {
-                document.getElementById("modelCascadeList").innerText = "Каскад: " + modelsData.models.slice(0, 3).join(" ➔ ");
-            }
+        function toggleSettings() {
+            const drawer = document.getElementById("settingsDrawer");
+            drawer.classList.toggle("hidden");
+        }
 
+        window.onload = async () => {
+            // Загрузка списка моделей
+            try {
+                const mRes = await fetch("/api/models");
+                const mData = await mRes.json();
+                const sel = document.getElementById("modelSelect");
+                for (const m of mData.models) {
+                    const opt = document.createElement("option");
+                    opt.value = m;
+                    opt.innerText = m;
+                    sel.appendChild(opt);
+                }
+            } catch (e) { console.error("Error loading models:", e); }
+
+            // Загрузка истории
             const res = await fetch("/api/history");
             const history = await res.json();
             for (const item of history) {
@@ -314,7 +440,7 @@ HTML_CODE = """
         }
 
         async function clearHistory() {
-            if (!confirm("Очистить историю диалога?")) return;
+            if (!confirm("Очистить всю историю диалога?")) return;
             await fetch("/api/clear", { method: "POST" });
             document.getElementById("chatBox").innerHTML = "";
         }
@@ -323,7 +449,7 @@ HTML_CODE = """
             const chat = document.getElementById("chatBox");
             const d = document.createElement("div");
             d.className = "flex justify-end";
-            d.innerHTML = `<div class="bg-indigo-600 text-white rounded-2xl rounded-tr-none px-4 py-3 max-w-2xl text-sm shadow-md">${text}</div>`;
+            d.innerHTML = `<div class="bg-indigo-600 text-white rounded-2xl rounded-tr-none px-4 py-3 max-w-2xl text-sm shadow-md leading-relaxed">${text}</div>`;
             chat.appendChild(d);
             chat.scrollTop = chat.scrollHeight;
         }
@@ -331,7 +457,7 @@ HTML_CODE = """
         function renderAgentEvents(events, modelName) {
             const chat = document.getElementById("chatBox");
             const container = document.createElement("div");
-            container.className = "flex flex-col space-y-3 max-w-4xl";
+            container.className = "flex flex-col space-y-3 max-w-3xl";
             container.innerHTML = `
                 <div class="flex items-center space-x-2 text-indigo-400 text-xs font-semibold">
                     <i class="fa-solid fa-robot"></i> <span>Agent (${modelName || 'Gemini'})</span>
@@ -347,19 +473,19 @@ HTML_CODE = """
                 if (ev.type === "thought") {
                     if (!thoughtDetails) {
                         thoughtDetails = document.createElement("details");
-                        thoughtDetails.className = "bg-slate-900/90 border border-slate-800 rounded-xl p-3 text-xs text-slate-300";
+                        thoughtDetails.className = "bg-slate-900/90 border border-bordercol rounded-xl p-3 text-xs text-slate-300";
                         thoughtDetails.innerHTML = `
                             <summary class="cursor-pointer text-indigo-400 font-semibold flex items-center gap-2">
                                 <i class="fa-solid fa-brain"></i> Рассуждения агента (View Thoughts)
                             </summary>
-                            <div class="thought-txt mt-2 text-slate-400 font-mono whitespace-pre-wrap border-t border-slate-800 pt-2 leading-relaxed"></div>
+                            <div class="thought-txt mt-2 text-slate-400 font-mono whitespace-pre-wrap border-t border-bordercol pt-2 leading-relaxed"></div>
                         `;
                         body.appendChild(thoughtDetails);
                     }
                     thoughtDetails.querySelector(".thought-txt").innerText += ev.content;
                 } else if (ev.type === "action") {
                     const act = document.createElement("div");
-                    act.className = "bg-terminalbg border border-slate-800/80 rounded-xl p-3 text-xs";
+                    act.className = "bg-terminalbg border border-slate-800 rounded-xl p-3 text-xs shadow-inner";
                     act.innerHTML = `
                         <div class="text-amber-400 font-semibold mb-1 flex items-center gap-2">
                             <i class="fa-solid fa-terminal"></i> ${ev.title}
@@ -391,13 +517,21 @@ HTML_CODE = """
             input.value = "";
             clearUploadedFile();
 
+            const settings = {
+                model: document.getElementById("modelSelect").value,
+                temperature: document.getElementById("tempRange").value,
+                top_p: document.getElementById("toppRange").value,
+                max_tokens: document.getElementById("maxTokensSelect").value,
+                safety: document.getElementById("safetySelect").value
+            };
+
             const chat = document.getElementById("chatBox");
             const container = document.createElement("div");
-            container.className = "flex flex-col space-y-3 max-w-4xl";
+            container.className = "flex flex-col space-y-3 max-w-3xl";
             container.innerHTML = `
                 <div class="flex items-center space-x-2 text-indigo-400 text-xs font-semibold">
                     <i class="fa-solid fa-robot"></i> <span class="agent-title-text">Gemini Agent</span>
-                    <span id="typingIndicator" class="text-slate-400 text-[10px] animate-pulse">● выполняет...</span>
+                    <span id="typingIndicator" class="text-slate-400 text-[11px] animate-pulse">● выполняет...</span>
                 </div>
                 <div class="agent-body space-y-3"></div>
             `;
@@ -408,7 +542,7 @@ HTML_CODE = """
             const res = await fetch("/api/agent_stream", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt: fullPrompt })
+                body: JSON.stringify({ prompt: fullPrompt, settings: settings })
             });
 
             const reader = res.body.getReader();
@@ -431,22 +565,23 @@ HTML_CODE = """
                         
                         if (ev.type === "model_info") {
                             titleEl.innerText = `Agent (${ev.model})`;
+                            document.getElementById("activeModelIndicator").innerText = `Активна: ${ev.model}`;
                         } else if (ev.type === "thought") {
                             if (!thoughtDetails) {
                                 thoughtDetails = document.createElement("details");
-                                thoughtDetails.className = "bg-slate-900/90 border border-slate-800 rounded-xl p-3 text-xs text-slate-300";
+                                thoughtDetails.className = "bg-slate-900/90 border border-bordercol rounded-xl p-3 text-xs text-slate-300";
                                 thoughtDetails.innerHTML = `
                                     <summary class="cursor-pointer text-indigo-400 font-semibold flex items-center gap-2">
                                         <i class="fa-solid fa-brain"></i> Рассуждения агента (View Thoughts)
                                     </summary>
-                                    <div class="thought-txt mt-2 text-slate-400 font-mono whitespace-pre-wrap border-t border-slate-800 pt-2 leading-relaxed"></div>
+                                    <div class="thought-txt mt-2 text-slate-400 font-mono whitespace-pre-wrap border-t border-bordercol pt-2 leading-relaxed"></div>
                                 `;
                                 body.appendChild(thoughtDetails);
                             }
                             thoughtDetails.querySelector(".thought-txt").innerText += ev.content;
                         } else if (ev.type === "action") {
                             const act = document.createElement("div");
-                            act.className = "bg-terminalbg border border-slate-800/80 rounded-xl p-3 text-xs";
+                            act.className = "bg-terminalbg border border-slate-800 rounded-xl p-3 text-xs";
                             act.innerHTML = `
                                 <div class="text-amber-400 font-semibold mb-1 flex items-center gap-2">
                                     <i class="fa-solid fa-terminal"></i> ${ev.title}
@@ -456,7 +591,7 @@ HTML_CODE = """
                             body.appendChild(act);
                         } else if (ev.type === "final_text") {
                             const txt = document.createElement("div");
-                            txt.className = "bg-cardbg border border-bordercol rounded-2xl p-4 text-sm text-slate-100 leading-relaxed";
+                            txt.className = "bg-cardbg border border-bordercol rounded-2xl p-4 text-sm text-slate-100 leading-relaxed shadow-sm";
                             txt.innerHTML = ev.content.replace(/\\n/g, "<br>");
                             body.appendChild(txt);
                         }
@@ -474,7 +609,7 @@ HTML_CODE = """
 </html>
 """
 
-# --- 9. FASTAPI РОУТЫ ---
+# --- 9. FASTAPI ЭНДПОИНТЫ ---
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
     return HTML_CODE
@@ -490,6 +625,7 @@ async def get_hist():
 @app.post("/api/clear")
 async def clear_hist():
     save_history([])
+    log_console("🗑️ История диалога очищена.")
     return {"status": "cleared"}
 
 @app.post("/api/upload")
@@ -497,12 +633,16 @@ async def handle_upload(file: UploadFile = File(...)):
     dest = WORKDIR / file.filename
     with open(dest, "wb") as f:
         f.write(await file.read())
+    log_console(f"📁 Загружен файл через UI: {file.filename}")
     return {"status": "ok", "filename": file.filename}
 
 @app.post("/api/agent_stream")
 async def agent_stream(req: Request):
     data = await req.json()
     user_prompt = data.get("prompt", "")
+    settings = data.get("settings", {})
+
+    log_console(f"📨 [Новое сообщение]: {user_prompt[:80]}...")
 
     history = load_history()
     history.append({"role": "user", "content": user_prompt})
@@ -519,11 +659,11 @@ async def agent_stream(req: Request):
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(text=item["content"])]))
 
         agent_events = []
-        active_model = AVAILABLE_MODELS[0] if AVAILABLE_MODELS else "gemini-3.7-flash"
+        active_model = "gemini-3.7-flash"
 
         for step in range(15):
             try:
-                response, active_model = await call_gemini_cascade(contents, sys_instruction)
+                response, active_model = await call_gemini_async(contents, sys_instruction, settings)
                 yield f"data: {json.dumps({'type': 'model_info', 'model': active_model})}\\n\\n"
             except Exception as e:
                 err_ev = {"type": "final_text", "content": f"[Ошибка: {str(e)}]"}
@@ -557,7 +697,7 @@ async def agent_stream(req: Request):
                         "git_commit_and_push": git_commit_and_push,
                         "inspect_gpu": inspect_gpu
                     }
-                    result = f_map[fn_name](**fn_args) if fn_name in f_map else "Unknown tool"
+                    result = await asyncio.to_thread(f_map[fn_name], **fn_args) if fn_name in f_map else "Unknown tool"
 
                     res_ev = {"type": "action", "title": f"Вывод {fn_name}", "detail": str(result)[:1500]}
                     agent_events.append(res_ev)
@@ -578,11 +718,19 @@ async def agent_stream(req: Request):
         history.append({"role": "agent", "events": agent_events, "model": active_model})
         save_history(history)
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
-# --- 10. ЗАПУСК СЕРВЕРА И SSH ТУННЕЛЯ ---
+# --- 10. ЗАПУСК UVICORN И SSH КИПАЛАЙВА ---
 def start_api():
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
 
 def run_ssh_keepalive_tunnel():
     cmd = [
@@ -597,9 +745,9 @@ def run_ssh_keepalive_tunnel():
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         for line in proc.stdout:
             if "lhr.life" in line or "localhost.run" in line:
-                print(f"\n========================================================")
-                print(f"🚀 ССЫЛКА НА ВАШ АГЕНТ: {line.strip()}")
-                print(f"========================================================\n")
+                print(f"\n========================================================", flush=True)
+                print(f"🚀 ССЫЛКА НА ВАШ АГЕНТ: {line.strip()}", flush=True)
+                print(f"========================================================\n", flush=True)
         proc.wait()
         time.sleep(3)
 
