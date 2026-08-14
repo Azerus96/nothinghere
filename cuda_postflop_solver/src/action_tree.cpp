@@ -207,19 +207,39 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
     node.active_mask = mask;
 
     if (info.active_players == 1) {
-        // FIX #4 (Z.ai, подтверждено): раньше здесь стояло
-        //   node.player = player | PLAYER_TERMINAL_FLAG;
-        // что ПОЛНОСТЬЮ перезаписывало node.player, стирая FOLD_FLAG,
-        // который вызывающий код (Action::Type::Fold, строка выше по стеку)
-        // уже проставил через `child->player = player | PLAYER_FOLD_FLAG`.
-        // В итоге fold_nodes на GPU был всегда пуст, а fold-терминалы
-        // ошибочно обсчитывались как showdown.
-        // Единственный способ попасть в active_players==1 — это именно фолд
-        // (active_players уменьшается только в ветке Action::Type::Fold),
-        // поэтому node.player на входе сюда уже корректно содержит
-        // (folder_id | PLAYER_FOLD_FLAG). Просто добавляем TERMINAL_FLAG,
-        // не трогая остальные биты.
         node.player |= PLAYER_TERMINAL_FLAG;
+        return;
+    }
+
+    // --- ИСПРАВЛЕНИЕ: ПРОВЕРКА ЕСЛИ ВСЕ В ОЛЛ-ИНЕ (УБИВАЕМ БЕСКОНЕЧНЫЙ ЦИКЛ) ---
+    bool all_active_allin = true;
+    for (int i = 0; i < config_.num_players; ++i) {
+        if (!info.folded[i] && !info.allin[i]) {
+            all_active_allin = false;
+            break;
+        }
+    }
+
+    if (all_active_allin) {
+        // Если все в олл-ине, торгов нет — переходим сразу на следующую улицу к шоудауну!
+        BoardState next_state = (BoardState)((int)state + 1);
+        if ((int)next_state > 2) {
+            node.player = player | PLAYER_TERMINAL_FLAG;
+        } else {
+            node.player = PLAYER_CHANCE | PLAYER_CHANCE_FLAG;
+            node.board_state = next_state;
+            
+            auto child = std::make_unique<ActionTreeNode>();
+            child->amount = node.amount;
+            BuildInfo child_info = info;
+            child_info.current_bet = 0;
+            child_info.num_raises = 0;
+            child_info.actions_this_street = 0;
+            child_info.invested_this_street.assign(config_.num_players, 0);
+            
+            build_recursive(*child, next_state, 0, child_info);
+            node.children.push_back(std::move(child));
+        }
         return;
     }
 
@@ -261,9 +281,12 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
         return;
     }
 
+    // Если текущий игрок в олл-ине/фолде, увеличиваем счетчик действий и передаем ход
     if (info.folded[player] || info.allin[player]) {
+        BuildInfo skip_info = info;
+        skip_info.actions_this_street++;
         int next_p = (player + 1) % config_.num_players;
-        build_recursive(node, state, next_p, info);
+        build_recursive(node, state, next_p, skip_info);
         return;
     }
 
