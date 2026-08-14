@@ -78,7 +78,7 @@ void PostFlopGame::prepare() {
 
 void PostFlopGame::build_node_arena() {
     node_arena_.clear();
-    nodes_by_depth_.clear(); // ИСПРАВЛЕНИЕ: Очистка массива глубин
+    nodes_by_depth_.clear();
 
     struct QueueItem {
         const ActionTreeNode* atn;
@@ -95,7 +95,6 @@ void PostFlopGame::build_node_arena() {
         auto cur = bfs_order[head];
         const ActionTreeNode* atn = cur.atn;
 
-        // ИСПРАВЛЕНИЕ: Заполнение массива узлов по уровням глубины
         if (cur.depth >= nodes_by_depth_.size()) {
             nodes_by_depth_.resize(cur.depth + 1);
         }
@@ -133,6 +132,8 @@ void PostFlopGame::build_node_arena() {
         }
         ++head;
     }
+
+    max_tree_depth_ = nodes_by_depth_.empty() ? 0 : (int)nodes_by_depth_.size() - 1;
 }
 
 void PostFlopGame::compute_hand_strength_for_all_boards() {
