@@ -5,6 +5,7 @@ import time
 import asyncio
 import threading
 import subprocess
+import re
 from pathlib import Path
 from collections import deque
 from typing import AsyncGenerator, List, Dict, Any
@@ -47,7 +48,7 @@ def fetch_available_models() -> List[str]:
         raw = []
         for m in client.models.list():
             c_name = m.name.replace("models/", "")
-            if "gemini" in c_name and not any(x in c_name for x in ["embed", "image", "tts", "robotics", "computer-use"]):
+            if "gemini" in c_name and not any(x in c_name for x in ["embed", "image", "tts", "robotics", "computer-use", "2.0"]):
                 raw.append(c_name)
 
         priority = [
@@ -58,7 +59,6 @@ def fetch_available_models() -> List[str]:
             "gemini-3.1-pro-preview",
             "gemini-3.1-flash-lite",
             "gemini-2.5-pro",
-            "gemini-2.5-flash",
             "gemini-2.5-flash-lite"
         ]
         sorted_models = [m for m in priority if m in raw]
@@ -66,10 +66,10 @@ def fetch_available_models() -> List[str]:
             if m not in sorted_models:
                 sorted_models.append(m)
         log_console(f"✅ Обнаружено моделей Google: {len(sorted_models)}. Приоритет: {sorted_models[:3]}")
-        return sorted_models if sorted_models else ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.5-flash"]
+        return sorted_models if sorted_models else ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]
     except Exception as e:
         log_console(f"⚠️ Ошибка загрузки списка моделей: {e}")
-        return ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+        return ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]
 
 AVAILABLE_MODELS = fetch_available_models()
 
@@ -225,7 +225,9 @@ async def call_gemini_async(contents: list, sys_inst: str, settings: dict):
             except Exception as e:
                 err_str = str(e)
                 last_error = err_str
-                log_console(f"⚠️ [Ошибка вызова {m_name}]: {err_str[:150]}")
+                log_console(f"⚠️ [Ошибка {m_name}]: {err_str[:120]}")
+                if "404" in err_str or "NOT_FOUND" in err_str:
+                    break # Не ретраим устаревшие модели
                 if any(k in err_str for k in ["503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]):
                     await asyncio.sleep(2.0 * (attempt + 1))
                 else:
@@ -235,7 +237,7 @@ async def call_gemini_async(contents: list, sys_inst: str, settings: dict):
 
     raise Exception(f"Все попытки вызова моделей завершились ошибкой: {last_error}")
 
-# --- 8. WEB UI С ПАНЕЛЬЮ НАСТРОЕК ---
+# --- 8. WEB UI (С MARKDOWN, HIGHLIGHT.JS И REAL-TIME SSE) ---
 HTML_CODE = """
 <!DOCTYPE html>
 <html lang="ru" class="dark">
@@ -245,6 +247,9 @@ HTML_CODE = """
     <title>Kaggle Vibe Agent Studio (2x T4)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -265,6 +270,10 @@ HTML_CODE = """
         ::-webkit-scrollbar { width: 5px; height: 5px; }
         ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
         pre, code { font-family: 'JetBrains Mono', Consolas, Monaco, monospace; }
+        .markdown-body pre { background-color: #030712 !important; border: 1px solid #1f2937; border-radius: 0.75rem; padding: 1rem; margin: 0.5rem 0; overflow-x: auto; }
+        .markdown-body code { font-size: 0.85rem; }
+        .markdown-body p { margin-bottom: 0.5rem; line-height: 1.6; }
+        .markdown-body ul { list-style-type: disc; margin-left: 1.25rem; margin-bottom: 0.5rem; }
     </style>
 </head>
 <body class="bg-darkbg text-slate-100 h-screen flex flex-col font-sans antialiased overflow-hidden">
@@ -432,7 +441,7 @@ HTML_CODE = """
             const chat = document.getElementById("chatBox");
             const d = document.createElement("div");
             d.className = "flex justify-end";
-            d.innerHTML = `<div class="bg-indigo-600 text-white rounded-2xl rounded-tr-none px-4 py-3 max-w-2xl text-sm shadow-md leading-relaxed">${text}</div>`;
+            d.innerHTML = `<div class="bg-indigo-600 text-white rounded-2xl rounded-tr-none px-4 py-3 max-w-2xl text-sm shadow-md leading-relaxed whitespace-pre-wrap">${text}</div>`;
             chat.appendChild(d);
             chat.scrollTop = chat.scrollHeight;
         }
@@ -478,8 +487,9 @@ HTML_CODE = """
                     body.appendChild(act);
                 } else if (ev.type === "final_text") {
                     const txt = document.createElement("div");
-                    txt.className = "bg-cardbg border border-bordercol rounded-2xl p-4 text-sm text-slate-100 leading-relaxed shadow-sm";
-                    txt.innerHTML = ev.content.replace(/\\n/g, "<br>");
+                    txt.className = "bg-cardbg border border-bordercol rounded-2xl p-4 text-sm text-slate-100 leading-relaxed shadow-sm markdown-body";
+                    txt.innerHTML = marked.parse(ev.content);
+                    txt.querySelectorAll('pre code').forEach((el) => { hljs.highlightElement(el); });
                     body.appendChild(txt);
                 }
             }
@@ -538,13 +548,14 @@ HTML_CODE = """
                 if (done) break;
                 buffer += decoder.decode(value, { stream: true });
 
-                const lines = buffer.split("\\n");
-                buffer = lines.pop();
+                const messages = buffer.split(String.fromCharCode(10) + String.fromCharCode(10));
+                buffer = messages.pop();
 
-                for (const line of lines) {
-                    if (!line.startsWith("data: ")) continue;
+                for (const msg of messages) {
+                    const cleanMsg = msg.trim();
+                    if (!cleanMsg.startsWith("data: ")) continue;
                     try {
-                        const ev = JSON.parse(line.substring(6));
+                        const ev = JSON.parse(cleanMsg.substring(6));
                         
                         if (ev.type === "model_info") {
                             titleEl.innerText = `Agent (${ev.model})`;
@@ -574,13 +585,14 @@ HTML_CODE = """
                             body.appendChild(act);
                         } else if (ev.type === "final_text") {
                             const txt = document.createElement("div");
-                            txt.className = "bg-cardbg border border-bordercol rounded-2xl p-4 text-sm text-slate-100 leading-relaxed";
-                            txt.innerHTML = ev.content.replace(/\\n/g, "<br>");
+                            txt.className = "bg-cardbg border border-bordercol rounded-2xl p-4 text-sm text-slate-100 leading-relaxed shadow-sm markdown-body";
+                            txt.innerHTML = marked.parse(ev.content);
+                            txt.querySelectorAll('pre code').forEach((el) => { hljs.highlightElement(el); });
                             body.appendChild(txt);
                         }
                         chat.scrollTop = chat.scrollHeight;
                     } catch (err) {
-                        console.error("JSON parse error:", err);
+                        console.error("JSON parse error:", err, cleanMsg);
                     }
                 }
             }
@@ -647,11 +659,11 @@ async def agent_stream(req: Request):
         for step in range(15):
             try:
                 response, active_model = await call_gemini_async(contents, sys_instruction, settings)
-                yield f"data: {json.dumps({'type': 'model_info', 'model': active_model})}\\n\\n"
+                yield f"data: {json.dumps({'type': 'model_info', 'model': active_model})}\n\n"
             except Exception as e:
                 err_ev = {"type": "final_text", "content": f"[Ошибка: {str(e)}]"}
                 agent_events.append(err_ev)
-                yield f"data: {json.dumps(err_ev)}\\n\\n"
+                yield f"data: {json.dumps(err_ev)}\n\n"
                 break
 
             # 1. Мысли (Thoughts)
@@ -660,7 +672,7 @@ async def agent_stream(req: Request):
                     if getattr(part, 'thought', False):
                         th_ev = {"type": "thought", "content": part.text}
                         agent_events.append(th_ev)
-                        yield f"data: {json.dumps(th_ev)}\\n\\n"
+                        yield f"data: {json.dumps(th_ev)}\n\n"
 
             # 2. Вызовы инструментов (Tools)
             if response.function_calls:
@@ -670,7 +682,7 @@ async def agent_stream(req: Request):
 
                     call_ev = {"type": "action", "title": f"Команда: {fn_name}", "detail": json.dumps(fn_args, ensure_ascii=False, indent=2)}
                     agent_events.append(call_ev)
-                    yield f"data: {json.dumps(call_ev)}\\n\\n"
+                    yield f"data: {json.dumps(call_ev)}\\n\\n".replace("\\n", "\n")
 
                     f_map = {
                         "execute_bash": execute_bash,
@@ -684,7 +696,7 @@ async def agent_stream(req: Request):
 
                     res_ev = {"type": "action", "title": f"Вывод {fn_name}", "detail": str(result)[:1500]}
                     agent_events.append(res_ev)
-                    yield f"data: {json.dumps(res_ev)}\\n\\n"
+                    yield f"data: {json.dumps(res_ev)}\n\n"
 
                     contents.append(response.candidates[0].content)
                     contents.append(types.Content(
@@ -695,7 +707,7 @@ async def agent_stream(req: Request):
                 final_text = response.text or "Готово."
                 fin_ev = {"type": "final_text", "content": final_text}
                 agent_events.append(fin_ev)
-                yield f"data: {json.dumps(fin_ev)}\\n\\n"
+                yield f"data: {json.dumps(fin_ev)}\n\n"
                 break
 
         history.append({"role": "agent", "events": agent_events, "model": active_model})
@@ -711,13 +723,15 @@ async def agent_stream(req: Request):
         }
     )
 
-# --- 10. ЗАПУСК UVICORN И SSH С МГНОВЕННЫМ TTY-ВЫВОДОМ ---
+# --- 10. ЗАПУСК UVICORN И ЧИСТЫЙ SSH ТУННЕЛЬ ---
 def start_api():
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
 
 def run_ssh_keepalive_tunnel():
     log_console("🌐 [Туннель] Запуск SSH Keep-Alive соединения...")
     cmd = "ssh -tt -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=5 -R 80:localhost:8000 nokey@localhost.run"
+    
+    url_regex = re.compile(r'https?://[a-zA-Z0-9.-]+\.lhr\.life')
     
     while True:
         proc = subprocess.Popen(
@@ -730,15 +744,13 @@ def run_ssh_keepalive_tunnel():
             universal_newlines=True
         )
         for line in iter(proc.stdout.readline, ''):
-            clean_line = line.strip()
-            if not clean_line:
-                continue
-            if "lhr.life" in clean_line or "localhost.run" in clean_line or "http" in clean_line:
+            clean = line.strip()
+            match = url_regex.search(clean)
+            if match:
+                url = match.group(0)
                 print(f"\n========================================================", flush=True)
-                print(f"🚀 ССЫЛКА НА ВАШ АГЕНТ: {clean_line}", flush=True)
+                print(f"🚀 ССЫЛКА НА ВАШ АГЕНТ: {url}", flush=True)
                 print(f"========================================================\n", flush=True)
-            else:
-                print(f"[SSH] {clean_line}", flush=True)
         proc.wait()
         time.sleep(3)
 
