@@ -78,13 +78,11 @@ int main() {
         std::cout << "   🚀 2-WAY (HEADS-UP) DCFR TEST ON GPU 🚀           \n";
         std::cout << "======================================================\n";
 
-        std::cout << "[DEBUG 1] Инициализация конфигурации карт..." << std::endl;
         CardConfig cc;
         cc.num_players = 2;
         
-        // Используем 100% проверенные диапазоны из 4-Way теста
-        cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo"));            // P0 (OOP)
-        cc.ranges.push_back(Range::from_string("88+, ATs+, KQs, AQo+"));       // P1 (IP)
+        cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo"));            
+        cc.ranges.push_back(Range::from_string("88+, ATs+, KQs, AQo+"));       
 
         cc.flop[0] = card_from_string("As");
         cc.flop[1] = card_from_string("Td");
@@ -92,7 +90,6 @@ int main() {
         cc.turn    = card_from_string("2d");
         cc.river   = card_from_string("3h");
 
-        std::cout << "[DEBUG 2] Инициализация конфигурации дерева..." << std::endl;
         TreeConfig tc;
         tc.num_players = 2;
         tc.initial_state = BoardState::Flop;
@@ -108,18 +105,12 @@ int main() {
         tc.river_bet_sizes[0] = { {BetSize::PotRelative(0.50)}, {} };
         tc.river_bet_sizes[1] = { {BetSize::PotRelative(0.50)}, {} };
 
-        std::cout << "[DEBUG 3] Создание объекта PostFlopGame..." << std::endl;
         PostFlopGame game(std::move(cc), tc);
-
-        std::cout << "[DEBUG 4] Вызов game.prepare()..." << std::endl;
         game.prepare();
-
-        std::cout << "[DEBUG 5] Вызов game.allocate_memory(false)..." << std::endl;
         game.allocate_memory(false); 
         
         std::cout << "Tree built successfully! Total Nodes: " << game.num_nodes() << "\n" << std::endl;
 
-        std::cout << "[DEBUG 6] Включение и выделение GPU памяти..." << std::endl;
         game.set_gpu_enabled(true);
         if (game.is_gpu_enabled()) {
             auto gpu_mem = std::make_unique<GpuMemory>();
@@ -131,7 +122,6 @@ int main() {
             std::cout << "✅ GPU Memory Initialized Successfully!\n" << std::endl;
         }
 
-        std::cout << "[DEBUG 7] Получение начальной стратегии корня..." << std::endl;
         std::vector<float> old_strat = game.root_strategy();
 
         std::cout << "Starting 2-Way DCFR on GPU...\n";
@@ -185,10 +175,7 @@ int main() {
         return 0;
 
     } catch (const std::exception& e) {
-        std::cerr << "\n❌ ИСКЛЮЧЕНИЕ C++ CATCH: " << e.what() << "\n" << std::endl;
-        return 1;
-    } catch (...) {
-        std::cerr << "\n❌ НЕИЗВЕСТНЫЙ СБОЙ ПАМЯТИ (UNKNOWN CRASH)!\n" << std::endl;
+        std::cerr << "\n❌ ИСКЛЮЧЕНИЕ C++: " << e.what() << "\n" << std::endl;
         return 1;
     }
 }
