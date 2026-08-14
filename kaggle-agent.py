@@ -29,8 +29,6 @@ HISTORY_FILE = Path("/kaggle/working/session_history.json")
 
 app = FastAPI(title="Kaggle Vibe Agent")
 
-EXHAUSTED_MODELS = set() # Запоминаем модели, исчерпавшие суточный лимит 429
-
 def log_console(msg: str):
     timestamp = time.strftime("%H:%M:%S")
     print(f"[{timestamp}] {msg}", flush=True)
@@ -43,40 +41,42 @@ def sanitize_logs(text: str) -> str:
         text = text.replace(GEMINI_KEY, "AIza***HIDDEN_KEY***")
     return text
 
-# --- 3. ДИНАМИЧЕСКИЙ СПИСОК МОДЕЛЕЙ ---
+# --- 3. ИНТЕЛЛЕКТУАЛЬНЫЙ СПИСОК МОДЕЛЕЙ (С УЧЕТОМ КВОТ 500+ RPD) ---
 def fetch_available_models() -> List[str]:
     try:
         raw = []
         for m in client.models.list():
             c_name = m.name.replace("models/", "")
-            if "gemini" in c_name and not any(x in c_name for x in ["embed", "image", "tts", "robotics", "computer-use", "2.0", "2.5-flash"]):
+            if any(x in c_name for x in ["gemini", "antigravity", "gemma"]) and not any(x in c_name for x in ["embed", "image", "tts", "robotics", "computer-use", "2.0"]):
                 raw.append(c_name)
 
+        # Ставим вперед модели с большими квотами (500 RPD, 100 RPD, 14.4K RPD), затем превью
         priority = [
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash-lite",      # 500 RPD, 15 RPM (ОСНОВНАЯ РАБОЧАЯ ЛОШАДКА)
+            "gemini-3.1-flash-lite",      # 500 RPD, 15 RPM
+            "antigravity-preview-05-2026",# 100 RPD, 60 RPM
+            "gemini-3.7-flash",           # 20 RPD (Превью)
+            "gemini-3.6-flash",           # 20 RPD (Превью)
+            "gemini-3.5-flash",           # 20 RPD (Превью)
             "gemini-3.1-pro-preview",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-pro",
-            "gemini-2.5-flash-lite"
+            "gemma-4-31b-it",             # 14.4K RPD
+            "gemma-4-26b-a4b-it"          # 14.4K RPD
         ]
         sorted_models = [m for m in priority if m in raw]
         for m in raw:
             if m not in sorted_models:
                 sorted_models.append(m)
-        log_console(f"✅ Доступно моделей: {len(sorted_models)}. Приоритет: {sorted_models[:3]}")
-        return sorted_models if sorted_models else ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
+        log_console(f"✅ Доступно моделей в пуле: {len(sorted_models)}. Приоритет: {sorted_models[:4]}")
+        return sorted_models if sorted_models else ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash"]
     except Exception as e:
         log_console(f"⚠️ Ошибка списка моделей: {e}")
-        return ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
+        return ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash"]
 
 AVAILABLE_MODELS = fetch_available_models()
 
-# --- 4. RATE LIMITER (С ПАУЗАМИ ДЛЯ СОБЛЮДЕНИЯ RPM) ---
+# --- 4. RATE LIMITER (14 RPM) ---
 class RollingRateLimiter:
-    def __init__(self, max_per_minute: int = 10):
+    def __init__(self, max_per_minute: int = 14):
         self.max_per_minute = max_per_minute
         self.timestamps = deque()
 
@@ -85,15 +85,15 @@ class RollingRateLimiter:
         while self.timestamps and self.timestamps[0] <= now - 60:
             self.timestamps.popleft()
         if len(self.timestamps) >= self.max_per_minute:
-            wait_time = 60 - (now - self.timestamps[0]) + 1.5
+            wait_time = 60 - (now - self.timestamps[0]) + 0.8
             if wait_time > 0:
-                log_console(f"⏳ [Rate Limiter] Ожидание {wait_time:.1f}с для квоты RPM...")
+                log_console(f"⏳ [Rate Limiter] Пауза {wait_time:.1f}с...")
                 await asyncio.sleep(wait_time)
         self.timestamps.append(time.time())
 
-limiter = RollingRateLimiter(max_per_minute=10)
+limiter = RollingRateLimiter(max_per_minute=14)
 
-# --- 5. ИНСТРУМЕНТЫ (TOOLS) ---
+# --- 5. TOOLS ---
 def execute_bash(command: str) -> str:
     log_console(f"💻 [Bash]: {command[:100]}...")
     try:
@@ -172,7 +172,7 @@ def save_history(history: List[Dict[str, Any]]):
     except Exception as e:
         print(f"Error saving history: {e}")
 
-# --- 7. ВЫЗОВ GEMINI С АВТО-ИСКЛЮЧЕНИЕМ ИСЧЕРПАННЫХ МОДЕЛЕЙ ---
+# --- 7. БЕСШОВНЫЙ ВЫЗОВ С ПЕРЕЛИВОМ КВОТ ---
 def sync_gemini_call(model_name: str, contents: list, config: types.GenerateContentConfig):
     return client.models.generate_content(
         model=model_name,
@@ -212,13 +212,11 @@ async def call_gemini_async(contents: list, sys_inst: str, settings: dict):
         safety_settings=safety_settings_list
     )
 
-    # Формируем очередь, пропуская исчерпавшие лимит модели
-    if selected_model == "auto":
-        models_queue = [m for m in AVAILABLE_MODELS if m not in EXHAUSTED_MODELS]
-        if not models_queue:
-            models_queue = AVAILABLE_MODELS # Сброс, если все помечены
+    # Каскадная очередь: пробуем выбранную, если лимит — мгновенно берем 3.5-flash-lite / 3.1-flash-lite
+    if selected_model != "auto":
+        models_queue = [selected_model] + [m for m in AVAILABLE_MODELS if m != selected_model]
     else:
-        models_queue = [selected_model]
+        models_queue = AVAILABLE_MODELS
 
     last_error = None
 
@@ -226,17 +224,17 @@ async def call_gemini_async(contents: list, sys_inst: str, settings: dict):
         for attempt in range(2):
             await limiter.acquire()
             try:
-                log_console(f"🤖 [Gemini]: Модель {m_name} (Попытка {attempt+1})")
+                log_console(f"🤖 [Запрос к Gemini]: Модель {m_name}")
                 response = await asyncio.to_thread(sync_gemini_call, m_name, contents, config)
-                log_console(f"✨ [Gemini]: Ответ от {m_name} успешно получен.")
+                log_console(f"✨ [Успех]: Модель {m_name} сгенерировала ответ.")
                 return response, m_name
             except Exception as e:
                 err_str = str(e)
                 last_error = err_str
-                log_console(f"⚠️ [Ошибка {m_name}]: {err_str[:120]}")
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    EXHAUSTED_MODELS.add(m_name)
-                    log_console(f"🚫 Модель {m_name} добавлена в Blacklist на эту сессию (квота исчерпана).")
+                log_console(f"⚠️ [Лимит/Ошибка {m_name}]: {err_str[:120]}")
+                # Если 429 Quota Exceeded (20/20 исчерпано) — мгновенно идем к следующей модели пула
+                if any(k in err_str for k in ["429", "RESOURCE_EXHAUSTED", "404", "NOT_FOUND"]):
+                    log_console(f"🔀 Модель {m_name} исчерпана. Переключаем на следующую модель пула...")
                     break
                 elif "503" in err_str or "UNAVAILABLE" in err_str:
                     await asyncio.sleep(2.0 * (attempt + 1))
@@ -296,7 +294,7 @@ HTML_CODE = """
                     Gemini Agent Studio
                     <span class="text-[11px] font-normal px-2 py-0.5 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded-md">2x Tesla T4</span>
                 </h1>
-                <p id="activeModelIndicator" class="text-xs text-slate-400">Режим: Авто-каскад активен</p>
+                <p id="activeModelIndicator" class="text-xs text-slate-400">Пул квот: 500+ RPD Активен</p>
             </div>
         </div>
         <div class="flex items-center space-x-3">
@@ -348,9 +346,9 @@ HTML_CODE = """
 
             <div class="space-y-5 text-xs">
                 <div>
-                    <label class="block font-semibold text-slate-300 mb-1.5">Модель Gemini</label>
+                    <label class="block font-semibold text-slate-300 mb-1.5">Приоритетная модель</label>
                     <select id="modelSelect" class="w-full bg-slate-900 border border-bordercol rounded-xl px-3 py-2 text-slate-200 outline-none focus:border-indigo-500">
-                        <option value="auto">⚡ Авто-каскад (3.6 ➔ 3.5 ➔ Lite)</option>
+                        <option value="auto">⚡ Авто-балансировка пула (500+ RPD)</option>
                     </select>
                 </div>
 
@@ -612,7 +610,7 @@ HTML_CODE = """
 </html>
 """
 
-# --- 9. FASTAPI РОУТЫ ---
+# --- 9. FASTAPI ЭНДПОИНТЫ ---
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
     return HTML_CODE
@@ -651,12 +649,11 @@ async def agent_stream(req: Request):
     history.append({"role": "user", "content": user_prompt})
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        # СТРОГАЯ ЗАЩИТА ОТ САМОДЕЯТЕЛЬНОСТИ
         sys_instruction = """Ты — автономный Senior C++/CUDA разработчик в Kaggle (2x Tesla T4, Turing sm_75).
-        ПРАВИЛА ПОВЕДЕНИЯ:
-        1. Если пользователь просто здоровается ("Привет", "Hi") или задает общий вопрос — НЕ ВЫЗЫВАЙ bash/tools! Просто кратко ответь текстом и спроси конкретную задачу.
-        2. Вызывай execute_bash, чтение или запись файлов ТОЛЬКО если пользователь дал прямую инструкцию (например: "собери solver", "прогони тесты", "покажи файлы", "исправь ошибку").
-        3. Не делай больше 2-3 вызовов инструментов подряд за один ход."""
+        ПРАВИЛА:
+        1. На приветствия и общие вопросы отвечай сразу текстом без запуска bash.
+        2. Запускай bash (cmake, ctest, файлы) только по прямой просьбе пользователя.
+        3. Не делай больше 2-3 вызовов подряд за один ход."""
 
         contents = []
         for item in history:
@@ -664,9 +661,8 @@ async def agent_stream(req: Request):
                 contents.append(types.Content(role="user", parts=[types.Part.from_text(text=item["content"])]))
 
         agent_events = []
-        active_model = "gemini-3.6-flash"
+        active_model = "gemini-3.5-flash-lite"
 
-        # Лимит шагов снижен до 4 для экономии лимитов
         for step in range(4):
             try:
                 response, active_model = await call_gemini_async(contents, sys_instruction, settings)
@@ -714,7 +710,7 @@ async def agent_stream(req: Request):
                         role="tool",
                         parts=[types.Part.from_function_response(name=fn_name, response={"result": result})]
                     ))
-                await asyncio.sleep(1.5) # Пауза между шагами
+                await asyncio.sleep(1.2)
             else:
                 final_text = response.text or "Готово."
                 fin_ev = {"type": "final_text", "content": final_text}
@@ -735,7 +731,7 @@ async def agent_stream(req: Request):
         }
     )
 
-# --- 10. УСТОЙЧИВЫЙ SSH ТУННЕЛЬ ---
+# --- 10. SSH ТУННЕЛЬ ---
 def start_api():
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
 
