@@ -173,7 +173,6 @@ def save_history(history: List[Dict[str, Any]]):
 
 # --- 7. НЕБЛОКИРУЮЩИЙ КАСКАДНЫЙ ИНФЕРЕНС ---
 def sync_gemini_call(model_name: str, contents: list, config: types.GenerateContentConfig):
-    """Синхронный вызов, запускаемый в пуле потоков."""
     return client.models.generate_content(
         model=model_name,
         contents=contents,
@@ -187,7 +186,6 @@ async def call_gemini_async(contents: list, sys_inst: str, settings: dict):
     max_tokens = int(settings.get("max_tokens", 8192))
     safety_level = settings.get("safety", "BLOCK_NONE")
 
-    # Формируем safety settings
     safety_settings_list = []
     if safety_level == "BLOCK_NONE":
         threshold = types.HarmBlockThreshold.BLOCK_NONE
@@ -221,7 +219,6 @@ async def call_gemini_async(contents: list, sys_inst: str, settings: dict):
             await limiter.acquire()
             try:
                 log_console(f"🤖 [Запрос к Gemini]: Модель {m_name} (Попытка {attempt+1})")
-                # Неблокирующий вызов через asyncio.to_thread
                 response = await asyncio.to_thread(sync_gemini_call, m_name, contents, config)
                 log_console(f"✨ [Ответ получен]: Модель {m_name} успешно сгенерировала ответ.")
                 return response, m_name
@@ -272,7 +269,6 @@ HTML_CODE = """
 </head>
 <body class="bg-darkbg text-slate-100 h-screen flex flex-col font-sans antialiased overflow-hidden">
     
-    <!-- Шапка -->
     <header class="bg-cardbg border-b border-bordercol px-6 py-3 flex justify-between items-center z-10 shadow-md">
         <div class="flex items-center space-x-3">
             <div class="bg-gradient-to-tr from-cyan-500 to-indigo-600 p-2.5 rounded-xl shadow-lg">
@@ -298,12 +294,9 @@ HTML_CODE = """
     </header>
 
     <div class="flex-1 flex overflow-hidden relative">
-        
-        <!-- Чат -->
         <main class="flex-1 flex flex-col h-full bg-darkbg">
             <div id="chatBox" class="flex-1 overflow-y-auto p-6 space-y-6 max-w-4xl w-full mx-auto"></div>
 
-            <!-- Нижняя панель ввода -->
             <footer class="bg-cardbg border-t border-bordercol p-4">
                 <div class="max-w-4xl mx-auto flex flex-col space-y-2">
                     <div id="fileBadge" class="hidden text-xs bg-indigo-950/60 text-indigo-300 border border-indigo-700/50 px-3 py-1.5 rounded-lg flex items-center justify-between w-fit gap-3">
@@ -316,7 +309,7 @@ HTML_CODE = """
                             <i class="fa-solid fa-paperclip text-lg"></i>
                             <input type="file" id="fileInput" class="hidden" onchange="uploadFile(this)">
                         </label>
-                        <textarea id="promptInput" rows="1" placeholder="Поставьте задачу агенту (например: проверь файлы в repo, запусти сборку CUDA, проверь GPU)..." 
+                        <textarea id="promptInput" rows="1" placeholder="Поставьте задачу агенту (например: покажи файлы, собери solver с CUDA_ARCH=75, запусти тесты)..." 
                             class="flex-1 bg-transparent border-0 focus:ring-0 text-slate-100 placeholder-slate-500 resize-none outline-none text-sm leading-relaxed"
                             onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); }"></textarea>
                         <button onclick="sendPrompt()" id="sendBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl transition flex items-center gap-2 text-sm font-semibold shadow-md">
@@ -328,8 +321,7 @@ HTML_CODE = """
             </footer>
         </main>
 
-        <!-- Боковая панель настроек (Drawer) -->
-        <aside id="settingsDrawer" class="w-80 bg-sidebg border-l border-bordercol flex flex-col h-full transform transition-all duration-300 ease-in-out p-5 overflow-y-auto">
+        <aside id="settingsDrawer" class="w-80 bg-sidebg border-l border-bordercol flex flex-col h-full transform transition-all duration-300 ease-in-out p-5 overflow-y-auto hidden">
             <div class="flex justify-between items-center mb-6">
                 <h2 class="font-bold text-sm text-white flex items-center gap-2">
                     <i class="fa-solid fa-sliders text-indigo-400"></i> Настройки Инференса
@@ -379,12 +371,6 @@ HTML_CODE = """
                         <option value="DEFAULT">🔒 DEFAULT (Стандартные)</option>
                     </select>
                 </div>
-
-                <div class="pt-4 border-t border-bordercol">
-                    <span class="text-[11px] text-slate-400 leading-relaxed block">
-                        💡 Настройки применяются мгновенно ко всем следующим запросам агента.
-                    </span>
-                </div>
             </div>
         </aside>
     </div>
@@ -393,12 +379,10 @@ HTML_CODE = """
         let currentFile = null;
 
         function toggleSettings() {
-            const drawer = document.getElementById("settingsDrawer");
-            drawer.classList.toggle("hidden");
+            document.getElementById("settingsDrawer").classList.toggle("hidden");
         }
 
         window.onload = async () => {
-            // Загрузка списка моделей
             try {
                 const mRes = await fetch("/api/models");
                 const mData = await mRes.json();
@@ -411,7 +395,6 @@ HTML_CODE = """
                 }
             } catch (e) { console.error("Error loading models:", e); }
 
-            // Загрузка истории
             const res = await fetch("/api/history");
             const history = await res.json();
             for (const item of history) {
@@ -591,7 +574,7 @@ HTML_CODE = """
                             body.appendChild(act);
                         } else if (ev.type === "final_text") {
                             const txt = document.createElement("div");
-                            txt.className = "bg-cardbg border border-bordercol rounded-2xl p-4 text-sm text-slate-100 leading-relaxed shadow-sm";
+                            txt.className = "bg-cardbg border border-bordercol rounded-2xl p-4 text-sm text-slate-100 leading-relaxed";
                             txt.innerHTML = ev.content.replace(/\\n/g, "<br>");
                             body.appendChild(txt);
                         }
@@ -728,26 +711,34 @@ async def agent_stream(req: Request):
         }
     )
 
-# --- 10. ЗАПУСК UVICORN И SSH КИПАЛАЙВА ---
+# --- 10. ЗАПУСК UVICORN И SSH С МГНОВЕННЫМ TTY-ВЫВОДОМ ---
 def start_api():
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
 
 def run_ssh_keepalive_tunnel():
-    cmd = [
-        "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "ServerAliveInterval=15",
-        "-o", "ServerAliveCountMax=5",
-        "-R", "80:localhost:8000",
-        "nokey@localhost.run"
-    ]
+    log_console("🌐 [Туннель] Запуск SSH Keep-Alive соединения...")
+    cmd = "ssh -tt -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=5 -R 80:localhost:8000 nokey@localhost.run"
+    
     while True:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for line in proc.stdout:
-            if "lhr.life" in line or "localhost.run" in line:
+        proc = subprocess.Popen(
+            cmd,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True
+        )
+        for line in iter(proc.stdout.readline, ''):
+            clean_line = line.strip()
+            if not clean_line:
+                continue
+            if "lhr.life" in clean_line or "localhost.run" in clean_line or "http" in clean_line:
                 print(f"\n========================================================", flush=True)
-                print(f"🚀 ССЫЛКА НА ВАШ АГЕНТ: {line.strip()}", flush=True)
+                print(f"🚀 ССЫЛКА НА ВАШ АГЕНТ: {clean_line}", flush=True)
                 print(f"========================================================\n", flush=True)
+            else:
+                print(f"[SSH] {clean_line}", flush=True)
         proc.wait()
         time.sleep(3)
 
