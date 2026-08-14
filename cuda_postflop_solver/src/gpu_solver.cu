@@ -119,7 +119,7 @@ void kernel_terminal_fold(
         return;
     }
 
-    double pot = (double)starting_pot + (double)NUM_PLAYERS * (double)node.amount;
+    double pot = (double)starting_pot + (double)node.amount;
 
     __shared__ float s_blocked[6][52];
     __shared__ float s_total[6];
@@ -187,7 +187,7 @@ void kernel_terminal_showdown(
     int tid = threadIdx.x;
     int my_hands = d_num_hands[updating_player];
 
-    double pot = (double)starting_pot + (double)NUM_PLAYERS * (double)node.amount;
+    double pot = (double)starting_pot + (double)node.amount;
 
     bool am_i_active = (node.active_mask & (1 << updating_player)) != 0;
     if (!am_i_active) {
@@ -252,7 +252,7 @@ void kernel_terminal_showdown(
     }
 }
 
-// ── ЯДРО 4: Проход ВВЕРХ (Исправлено взвешивание стратегии оппонента) ───
+// ── ЯДРО 4: Проход ВВЕРХ ────────────────────────────────────────────────
 template <int NUM_PLAYERS>
 __global__
 void kernel_up_pass(
@@ -315,10 +315,8 @@ void kernel_up_pass(
                 my_cfv += strat_val * child_cfv;
             }
         } else {
-            // ИСПРАВЛЕНИЕ: Взвешиваем CFV по стратегии оппонента!
-            float uniform = 1.0f / num_actions;
             for (int a = 0; a < num_actions; ++a) {
-                my_cfv += uniform * d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
+                my_cfv += d_node_cfv[(node.children_offset + a) * MAX_HANDS + h];
             }
         }
         
@@ -374,9 +372,25 @@ void kernel_up_pass(
     }
 }
 
-// ── Оркестрация с хоста ─────────────────────────────────────────────────
+// ── Оркестрация с хоста (с поддержкой 1 и 2 GPU) ─────────────────────────
 bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
     if (gpu.initialized) return true;
+
+    int device_count = 0;
+    cudaError_t d_err = cudaGetDeviceCount(&device_count);
+    if (d_err != cudaSuccess || device_count == 0) {
+        fprintf(stderr, "[GPU INIT ERROR] No CUDA devices found.\n");
+        return false;
+    }
+
+    CUDA_CHECK(cudaSetDevice(0));
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    int res_table = init_hand_table_on_gpu();
+    if (res_table != 0) {
+        fprintf(stderr, "[GPU INIT ERROR] Failed to init hand table constant memory on device.\n");
+        return false;
+    }
 
     const auto& arena = game.node_arena();
     gpu.num_nodes = (int)arena.size();
@@ -466,14 +480,10 @@ template <int NUM_PLAYERS>
 int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
     DiscountParams params = DiscountParams::from_iteration(current_iter);
 
-    // ИСПРАВЛЕНИЕ: Инициализация константной памяти для ТЕКУЩЕГО GPU устройства!
-    init_hand_table_on_gpu();
-
     for (int p = 0; p < NUM_PLAYERS; ++p) {
         CUDA_CHECK(cudaMemset(gpu.d_all_reaches, 0, (size_t)gpu.num_players * gpu.num_nodes * MAX_HANDS * sizeof(float)));
 
         for (int opp = 0; opp < NUM_PLAYERS; ++opp) {
-            if (opp == p) continue;
             CUDA_CHECK(cudaMemcpy(gpu.d_all_reaches + (size_t)opp * (gpu.num_nodes * MAX_HANDS), 
                        gpu.d_initial_weights[opp], gpu.num_hands[opp] * sizeof(float), cudaMemcpyDeviceToDevice));
         }
