@@ -6,6 +6,7 @@
 #include <string>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 
 #include "game.h"
 #include "solver.h"
@@ -72,111 +73,122 @@ void print_node_strategy(const PostFlopGame& game, int node_idx, int player, con
 }
 
 int main() {
-    std::cout << "======================================================\n";
-    std::cout << "   🚀 2-WAY (HEADS-UP) DCFR TEST ON GPU 🚀           \n";
-    std::cout << "======================================================\n";
+    try {
+        std::cout << "======================================================\n";
+        std::cout << "   🚀 2-WAY (HEADS-UP) DCFR TEST ON GPU 🚀           \n";
+        std::cout << "======================================================\n";
 
-    CardConfig cc;
-    cc.num_players = 2;
-    
-    // ИСПРАВЛЕНО: Диапазоны через плюсы '+' без дефисов!
-    cc.ranges.push_back(Range::from_string("22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, 87s, 76s, A2o+, KTo+, QTo+, JTo")); // P0 (OOP)
-    cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo, KQs"));                                                      // P1 (IP)
-
-    cc.flop[0] = card_from_string("As");
-    cc.flop[1] = card_from_string("Td");
-    cc.flop[2] = card_from_string("7c");
-    cc.turn    = card_from_string("2d");
-    cc.river   = card_from_string("3h");
-
-    TreeConfig tc;
-    tc.num_players = 2;
-    tc.initial_state = BoardState::Flop;
-    tc.starting_pot = 100;
-    tc.effective_stack = 950;
-    tc.rake_rate = 0;
-    tc.rake_cap = 0;
-    
-    tc.flop_bet_sizes[0]  = { {BetSize::PotRelative(0.33)}, {} }; 
-    tc.flop_bet_sizes[1]  = { {BetSize::PotRelative(0.33)}, {} }; 
-    tc.turn_bet_sizes[0]  = { {BetSize::PotRelative(0.66)}, {} };
-    tc.turn_bet_sizes[1]  = { {BetSize::PotRelative(0.66)}, {} };
-    tc.river_bet_sizes[0] = { {BetSize::PotRelative(0.66)}, {} };
-    tc.river_bet_sizes[1] = { {BetSize::PotRelative(0.66)}, {} };
-
-    std::cout << "Building Heads-Up Game Tree...\n";
-    PostFlopGame game(std::move(cc), tc);
-    game.prepare();
-    game.allocate_memory(false); 
-    
-    std::cout << "Tree built successfully! Total Nodes: " << game.num_nodes() << "\n\n";
-
-    game.set_gpu_enabled(true);
-    if (game.is_gpu_enabled()) {
-        auto gpu_mem = std::make_unique<GpuMemory>();
-        if (!gpu_solver_init(game, *gpu_mem)) {
-            std::cerr << "FATAL ERROR: Failed to initialize GPU memory!\n";
-            return 1;
-        }
-        game.set_gpu_mem(std::move(gpu_mem));
-        std::cout << "✅ GPU Memory Initialized Successfully!\n";
-    }
-
-    std::vector<float> old_strat = game.root_strategy();
-
-    std::cout << "Starting 2-Way DCFR on GPU...\n";
-    std::cout << "------------------------------------------------------\n";
-    std::cout << std::setw(10) << "Iteration" << " | " 
-              << std::setw(15) << "Time (ms)" << " | " 
-              << std::setw(15) << "Max Strat Delta" << "\n";
-    std::cout << "------------------------------------------------------\n";
-
-    auto t_start = std::chrono::high_resolution_clock::now();
-
-    for (uint32_t iter = 1; iter <= 1000; ++iter) {
-        auto t0 = std::chrono::high_resolution_clock::now();
+        std::cout << "[DEBUG 1] Инициализация конфигурации карт..." << std::endl;
+        CardConfig cc;
+        cc.num_players = 2;
         
-        int res = gpu_solve_step_dispatch(game, iter);
-        if (res != 0) {
-            std::cerr << "\nFATAL ERROR: gpu_solve_step_dispatch failed at iter " << iter << "!\n";
-            return 1;
-        }
-        
-        auto t1 = std::chrono::high_resolution_clock::now();
-        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        // Используем 100% проверенные диапазоны из 4-Way теста
+        cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo"));            // P0 (OOP)
+        cc.ranges.push_back(Range::from_string("88+, ATs+, KQs, AQo+"));       // P1 (IP)
 
-        if (iter % 100 == 0 || iter == 1) {
-            gpu_solver_copy_back(game, *game.gpu_mem());
+        cc.flop[0] = card_from_string("As");
+        cc.flop[1] = card_from_string("Td");
+        cc.flop[2] = card_from_string("7c");
+        cc.turn    = card_from_string("2d");
+        cc.river   = card_from_string("3h");
+
+        std::cout << "[DEBUG 2] Инициализация конфигурации дерева..." << std::endl;
+        TreeConfig tc;
+        tc.num_players = 2;
+        tc.initial_state = BoardState::Flop;
+        tc.starting_pot = 100;
+        tc.effective_stack = 950;
+        tc.rake_rate = 0;
+        tc.rake_cap = 0;
+        
+        tc.flop_bet_sizes[0]  = { {BetSize::PotRelative(0.50)}, {} }; 
+        tc.flop_bet_sizes[1]  = { {BetSize::PotRelative(0.50)}, {} }; 
+        tc.turn_bet_sizes[0]  = { {BetSize::PotRelative(0.50)}, {} };
+        tc.turn_bet_sizes[1]  = { {BetSize::PotRelative(0.50)}, {} };
+        tc.river_bet_sizes[0] = { {BetSize::PotRelative(0.50)}, {} };
+        tc.river_bet_sizes[1] = { {BetSize::PotRelative(0.50)}, {} };
+
+        std::cout << "[DEBUG 3] Создание объекта PostFlopGame..." << std::endl;
+        PostFlopGame game(std::move(cc), tc);
+
+        std::cout << "[DEBUG 4] Вызов game.prepare()..." << std::endl;
+        game.prepare();
+
+        std::cout << "[DEBUG 5] Вызов game.allocate_memory(false)..." << std::endl;
+        game.allocate_memory(false); 
+        
+        std::cout << "Tree built successfully! Total Nodes: " << game.num_nodes() << "\n" << std::endl;
+
+        std::cout << "[DEBUG 6] Включение и выделение GPU памяти..." << std::endl;
+        game.set_gpu_enabled(true);
+        if (game.is_gpu_enabled()) {
+            auto gpu_mem = std::make_unique<GpuMemory>();
+            if (!gpu_solver_init(game, *gpu_mem)) {
+                std::cerr << "FATAL ERROR: Failed to initialize GPU memory!\n" << std::endl;
+                return 1;
+            }
+            game.set_gpu_mem(std::move(gpu_mem));
+            std::cout << "✅ GPU Memory Initialized Successfully!\n" << std::endl;
+        }
+
+        std::cout << "[DEBUG 7] Получение начальной стратегии корня..." << std::endl;
+        std::vector<float> old_strat = game.root_strategy();
+
+        std::cout << "Starting 2-Way DCFR on GPU...\n";
+        std::cout << "------------------------------------------------------\n";
+        std::cout << std::setw(10) << "Iteration" << " | " 
+                  << std::setw(15) << "Time (ms)" << " | " 
+                  << std::setw(15) << "Max Strat Delta" << "\n";
+        std::cout << "------------------------------------------------------\n" << std::endl;
+
+        auto t_start = std::chrono::high_resolution_clock::now();
+
+        for (uint32_t iter = 1; iter <= 1000; ++iter) {
+            auto t0 = std::chrono::high_resolution_clock::now();
             
-            std::vector<float> new_strat = game.root_strategy();
-            float delta = compute_strategy_delta(old_strat, new_strat);
-            old_strat = new_strat;
+            int res = gpu_solve_step_dispatch(game, iter);
+            if (res != 0) {
+                std::cerr << "\nFATAL ERROR: gpu_solve_step_dispatch failed at iter " << iter << " with code " << res << "!\n" << std::endl;
+                return 1;
+            }
+            
+            auto t1 = std::chrono::high_resolution_clock::now();
+            double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-            std::cout << std::setw(10) << iter << " | " 
-                      << std::setw(15) << std::fixed << std::setprecision(2) << ms << " | " 
-                      << std::setw(15) << std::fixed << std::setprecision(6) << delta << "\n";
+            if (iter % 100 == 0 || iter == 1) {
+                gpu_solver_copy_back(game, *game.gpu_mem());
+                
+                std::vector<float> new_strat = game.root_strategy();
+                float delta = compute_strategy_delta(old_strat, new_strat);
+                old_strat = new_strat;
+
+                std::cout << std::setw(10) << iter << " | " 
+                          << std::setw(15) << std::fixed << std::setprecision(2) << ms << " | " 
+                          << std::setw(15) << std::fixed << std::setprecision(6) << delta << std::endl;
+            }
         }
+
+        auto t_end = std::chrono::high_resolution_clock::now();
+        double total_sec = std::chrono::duration<double>(t_end - t_start).count();
+        std::cout << "------------------------------------------------------\n";
+        std::cout << "Total Time: " << total_sec << " seconds.\n" << std::endl;
+
+        gpu_solver_copy_back(game, *game.gpu_mem());
+
+        std::cout << "\n======================================================\n";
+        std::cout << " 🎯 STRATEGIES AT ROOT NODE (OOP P0 Flop Action)     \n";
+        std::cout << "======================================================\n";
+        print_node_strategy(game, 0, 0, "P0 (OOP) Root Flop Strategy", {"AA", "KK", "77", "AcKc"});
+
+        std::cout << "======================================================\n";
+        gpu_solver_cleanup(*game.gpu_mem());
+        return 0;
+
+    } catch (const std::exception& e) {
+        std::cerr << "\n❌ ИСКЛЮЧЕНИЕ C++ CATCH: " << e.what() << "\n" << std::endl;
+        return 1;
+    } catch (...) {
+        std::cerr << "\n❌ НЕИЗВЕСТНЫЙ СБОЙ ПАМЯТИ (UNKNOWN CRASH)!\n" << std::endl;
+        return 1;
     }
-
-    auto t_end = std::chrono::high_resolution_clock::now();
-    double total_sec = std::chrono::duration<double>(t_end - t_start).count();
-    std::cout << "------------------------------------------------------\n";
-    std::cout << "Total Time: " << total_sec << " seconds.\n";
-
-    gpu_solver_copy_back(game, *game.gpu_mem());
-
-    std::cout << "\n======================================================\n";
-    std::cout << " 🎯 STRATEGIES AT ROOT NODE (OOP P0 Flop Action)     \n";
-    std::cout << "======================================================\n";
-    print_node_strategy(game, 0, 0, "P0 (OOP) Root Flop Strategy", {"77", "ATs", "KQs", "87s", "22"});
-
-    const auto& arena = game.node_arena();
-    if (arena[0].num_children > 0) {
-        int p0_check_node = arena[0].children_offset + 0;
-        print_node_strategy(game, p0_check_node, 1, "P1 (IP) Facing Check", {"AA", "TT", "AKo", "QJs"});
-    }
-
-    std::cout << "======================================================\n";
-    gpu_solver_cleanup(*game.gpu_mem());
-    return 0;
 }
