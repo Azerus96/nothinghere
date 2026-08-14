@@ -29,6 +29,8 @@ HISTORY_FILE = Path("/kaggle/working/session_history.json")
 
 app = FastAPI(title="Kaggle Vibe Agent")
 
+EXHAUSTED_MODELS = set() # Запоминаем модели, исчерпавшие суточный лимит 429
+
 def log_console(msg: str):
     timestamp = time.strftime("%H:%M:%S")
     print(f"[{timestamp}] {msg}", flush=True)
@@ -65,16 +67,16 @@ def fetch_available_models() -> List[str]:
             if m not in sorted_models:
                 sorted_models.append(m)
         log_console(f"✅ Доступно моделей: {len(sorted_models)}. Приоритет: {sorted_models[:3]}")
-        return sorted_models if sorted_models else ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]
+        return sorted_models if sorted_models else ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
     except Exception as e:
         log_console(f"⚠️ Ошибка списка моделей: {e}")
-        return ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash"]
+        return ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
 
 AVAILABLE_MODELS = fetch_available_models()
 
-# --- 4. RATE LIMITER ---
+# --- 4. RATE LIMITER (С ПАУЗАМИ ДЛЯ СОБЛЮДЕНИЯ RPM) ---
 class RollingRateLimiter:
-    def __init__(self, max_per_minute: int = 12):
+    def __init__(self, max_per_minute: int = 10):
         self.max_per_minute = max_per_minute
         self.timestamps = deque()
 
@@ -83,25 +85,25 @@ class RollingRateLimiter:
         while self.timestamps and self.timestamps[0] <= now - 60:
             self.timestamps.popleft()
         if len(self.timestamps) >= self.max_per_minute:
-            wait_time = 60 - (now - self.timestamps[0]) + 1.0
+            wait_time = 60 - (now - self.timestamps[0]) + 1.5
             if wait_time > 0:
-                log_console(f"⏳ [Rate Limiter] Пауза {wait_time:.1f}с...")
+                log_console(f"⏳ [Rate Limiter] Ожидание {wait_time:.1f}с для квоты RPM...")
                 await asyncio.sleep(wait_time)
         self.timestamps.append(time.time())
 
-limiter = RollingRateLimiter(max_per_minute=12)
+limiter = RollingRateLimiter(max_per_minute=10)
 
-# --- 5. TOOLS ---
+# --- 5. ИНСТРУМЕНТЫ (TOOLS) ---
 def execute_bash(command: str) -> str:
     log_console(f"💻 [Bash]: {command[:100]}...")
     try:
-        res = subprocess.run(command, shell=True, text=True, capture_output=True, timeout=300, cwd=WORKDIR)
+        res = subprocess.run(command, shell=True, text=True, capture_output=True, timeout=180, cwd=WORKDIR)
         out = res.stdout + ("\n[STDERR]:\n" + res.stderr if res.stderr else "")
         log_console(f"💻 [Bash Результат]: код {res.returncode}, байт {len(out)}")
         return sanitize_logs(out.strip()) if out.strip() else "[Успешно без вывода]"
     except subprocess.TimeoutExpired:
-        log_console("❌ [Bash]: Превышен таймаут 300с")
-        return "[Ошибка: Превышен таймаут 300 секунд]"
+        log_console("❌ [Bash]: Превышен таймаут 180с")
+        return "[Ошибка: Превышен таймаут 180 секунд]"
     except Exception as e:
         log_console(f"❌ [Bash Исключение]: {e}")
         return f"[Исключение: {str(e)}]"
@@ -170,7 +172,7 @@ def save_history(history: List[Dict[str, Any]]):
     except Exception as e:
         print(f"Error saving history: {e}")
 
-# --- 7. НЕБЛОКИРУЮЩИЙ ИНФЕРЕНС С УМНЫМ КАСКАДОМ ---
+# --- 7. ВЫЗОВ GEMINI С АВТО-ИСКЛЮЧЕНИЕМ ИСЧЕРПАННЫХ МОДЕЛЕЙ ---
 def sync_gemini_call(model_name: str, contents: list, config: types.GenerateContentConfig):
     return client.models.generate_content(
         model=model_name,
@@ -210,11 +212,13 @@ async def call_gemini_async(contents: list, sys_inst: str, settings: dict):
         safety_settings=safety_settings_list
     )
 
-    # Каскад: если 3.7 исчерпала 20 RPD, пробуем 3.6 -> 3.5 -> остальные
+    # Формируем очередь, пропуская исчерпавшие лимит модели
     if selected_model == "auto":
-        models_queue = AVAILABLE_MODELS
+        models_queue = [m for m in AVAILABLE_MODELS if m not in EXHAUSTED_MODELS]
+        if not models_queue:
+            models_queue = AVAILABLE_MODELS # Сброс, если все помечены
     else:
-        models_queue = [selected_model] + [m for m in AVAILABLE_MODELS if m != selected_model]
+        models_queue = [selected_model]
 
     last_error = None
 
@@ -222,24 +226,24 @@ async def call_gemini_async(contents: list, sys_inst: str, settings: dict):
         for attempt in range(2):
             await limiter.acquire()
             try:
-                log_console(f"🤖 [Запрос к Gemini]: Модель {m_name} (Попытка {attempt+1})")
+                log_console(f"🤖 [Gemini]: Модель {m_name} (Попытка {attempt+1})")
                 response = await asyncio.to_thread(sync_gemini_call, m_name, contents, config)
-                log_console(f"✨ [Ответ получен]: Модель {m_name} успешно сгенерировала ответ.")
+                log_console(f"✨ [Gemini]: Ответ от {m_name} успешно получен.")
                 return response, m_name
             except Exception as e:
                 err_str = str(e)
                 last_error = err_str
                 log_console(f"⚠️ [Ошибка {m_name}]: {err_str[:120]}")
-                # Если 429 Resource Exhausted (лимит 20 RPD) — мгновенно переходим к 3.6 Flash
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    log_console(f"⚡ [Auto-Fallback] Лимит на {m_name} исчерпан, переключаем на следующую модель...")
+                    EXHAUSTED_MODELS.add(m_name)
+                    log_console(f"🚫 Модель {m_name} добавлена в Blacklist на эту сессию (квота исчерпана).")
                     break
                 elif "503" in err_str or "UNAVAILABLE" in err_str:
                     await asyncio.sleep(2.0 * (attempt + 1))
                 else:
                     break
 
-    raise Exception(f"Все доступные модели исчерпаны: {last_error}")
+    raise Exception(f"Все доступные модели исчерпали квоту: {last_error}")
 
 # --- 8. UI ---
 HTML_CODE = """
@@ -322,7 +326,7 @@ HTML_CODE = """
                             <i class="fa-solid fa-paperclip text-lg"></i>
                             <input type="file" id="fileInput" class="hidden" onchange="uploadFile(this)">
                         </label>
-                        <textarea id="promptInput" rows="1" placeholder="Поставьте задачу агенту (например: проверь файлы в repo, запусти сборку CUDA, проверь GPU)..." 
+                        <textarea id="promptInput" rows="1" placeholder="Поставьте задачу агенту (например: собери solver с CUDA_ARCH=75, запусти bench_solver)..." 
                             class="flex-1 bg-transparent border-0 focus:ring-0 text-slate-100 placeholder-slate-500 resize-none outline-none text-sm leading-relaxed"
                             onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); }"></textarea>
                         <button onclick="sendPrompt()" id="sendBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-xl transition flex items-center gap-2 text-sm font-semibold shadow-md">
@@ -346,7 +350,7 @@ HTML_CODE = """
                 <div>
                     <label class="block font-semibold text-slate-300 mb-1.5">Модель Gemini</label>
                     <select id="modelSelect" class="w-full bg-slate-900 border border-bordercol rounded-xl px-3 py-2 text-slate-200 outline-none focus:border-indigo-500">
-                        <option value="auto">⚡ Авто-каскад (3.7 ➔ 3.6 ➔ 3.5)</option>
+                        <option value="auto">⚡ Авто-каскад (3.6 ➔ 3.5 ➔ Lite)</option>
                     </select>
                 </div>
 
@@ -370,18 +374,18 @@ HTML_CODE = """
                     <label class="block font-semibold text-slate-300 mb-1.5">Max Output Tokens</label>
                     <select id="maxTokensSelect" class="w-full bg-slate-900 border border-bordercol rounded-xl px-3 py-2 text-slate-200 outline-none focus:border-indigo-500">
                         <option value="4096">4,096 токенов</option>
-                        <option value="8192" selected>8,192 токенов (Стандарт)</option>
+                        <option value="8192" selected>8,192 токенов</option>
                         <option value="16384">16,384 токенов</option>
-                        <option value="65536">65,536 токенов (Максимум)</option>
+                        <option value="65536">65,536 токенов</option>
                     </select>
                 </div>
 
                 <div>
                     <label class="block font-semibold text-slate-300 mb-1.5">Фильтры безопасности (Safety)</label>
                     <select id="safetySelect" class="w-full bg-slate-900 border border-bordercol rounded-xl px-3 py-2 text-slate-200 outline-none focus:border-indigo-500">
-                        <option value="BLOCK_NONE" selected>🔓 BLOCK_NONE (Полная свобода кода)</option>
+                        <option value="BLOCK_NONE" selected>🔓 BLOCK_NONE (Свобода кода)</option>
                         <option value="BLOCK_ONLY_HIGH">🛡️ BLOCK_ONLY_HIGH</option>
-                        <option value="DEFAULT">🔒 DEFAULT (Стандартные)</option>
+                        <option value="DEFAULT">🔒 DEFAULT</option>
                     </select>
                 </div>
             </div>
@@ -596,7 +600,7 @@ HTML_CODE = """
                         }
                         chat.scrollTop = chat.scrollHeight;
                     } catch (err) {
-                        console.error("JSON parse error:", err, cleanMsg);
+                        console.error("JSON parse error:", err);
                     }
                 }
             }
@@ -608,7 +612,7 @@ HTML_CODE = """
 </html>
 """
 
-# --- 9. FASTAPI ЭНДПОИНТЫ ---
+# --- 9. FASTAPI РОУТЫ ---
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
     return HTML_CODE
@@ -624,7 +628,7 @@ async def get_hist():
 @app.post("/api/clear")
 async def clear_hist():
     save_history([])
-    log_console("🗑️ История диалога очищена.")
+    log_console("🗑️ История очищена.")
     return {"status": "cleared"}
 
 @app.post("/api/upload")
@@ -632,7 +636,7 @@ async def handle_upload(file: UploadFile = File(...)):
     dest = WORKDIR / file.filename
     with open(dest, "wb") as f:
         f.write(await file.read())
-    log_console(f"📁 Загружен файл через UI: {file.filename}")
+    log_console(f"📁 Загружен файл: {file.filename}")
     return {"status": "ok", "filename": file.filename}
 
 @app.post("/api/agent_stream")
@@ -641,16 +645,18 @@ async def agent_stream(req: Request):
     user_prompt = data.get("prompt", "")
     settings = data.get("settings", {})
 
-    log_console(f"📨 [Новое сообщение]: {user_prompt[:80]}...")
+    log_console(f"📨 [Запрос]: {user_prompt[:80]}...")
 
     history = load_history()
     history.append({"role": "user", "content": user_prompt})
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        sys_instruction = """Ты — автономный Senior C++/CUDA/Python разработчик в окружении Kaggle с 2x Tesla T4 GPU.
-        Твоя задача — исследовать структуру репозитория, компилировать, запускать, профилировать solver под архитектуру Turing (CUDA_ARCH=75).
-        У тебя есть доступ к Bash, файловой системе и Git.
-        Всегда сначала размышляй в мыслях. Ошибки исследуй и исправляй самостоятельно."""
+        # СТРОГАЯ ЗАЩИТА ОТ САМОДЕЯТЕЛЬНОСТИ
+        sys_instruction = """Ты — автономный Senior C++/CUDA разработчик в Kaggle (2x Tesla T4, Turing sm_75).
+        ПРАВИЛА ПОВЕДЕНИЯ:
+        1. Если пользователь просто здоровается ("Привет", "Hi") или задает общий вопрос — НЕ ВЫЗЫВАЙ bash/tools! Просто кратко ответь текстом и спроси конкретную задачу.
+        2. Вызывай execute_bash, чтение или запись файлов ТОЛЬКО если пользователь дал прямую инструкцию (например: "собери solver", "прогони тесты", "покажи файлы", "исправь ошибку").
+        3. Не делай больше 2-3 вызовов инструментов подряд за один ход."""
 
         contents = []
         for item in history:
@@ -660,7 +666,8 @@ async def agent_stream(req: Request):
         agent_events = []
         active_model = "gemini-3.6-flash"
 
-        for step in range(15):
+        # Лимит шагов снижен до 4 для экономии лимитов
+        for step in range(4):
             try:
                 response, active_model = await call_gemini_async(contents, sys_instruction, settings)
                 yield f"data: {json.dumps({'type': 'model_info', 'model': active_model})}\n\n"
@@ -670,7 +677,7 @@ async def agent_stream(req: Request):
                 yield f"data: {json.dumps(err_ev)}\n\n"
                 break
 
-            # 1. Thoughts
+            # 1. Мысли
             for cand in response.candidates:
                 for part in cand.content.parts:
                     if getattr(part, 'thought', False):
@@ -678,7 +685,7 @@ async def agent_stream(req: Request):
                         agent_events.append(th_ev)
                         yield f"data: {json.dumps(th_ev)}\n\n"
 
-            # 2. Tools
+            # 2. Инструменты
             if response.function_calls:
                 for call in response.function_calls:
                     fn_name = call.name
@@ -707,6 +714,7 @@ async def agent_stream(req: Request):
                         role="tool",
                         parts=[types.Part.from_function_response(name=fn_name, response={"result": result})]
                     ))
+                await asyncio.sleep(1.5) # Пауза между шагами
             else:
                 final_text = response.text or "Готово."
                 fin_ev = {"type": "final_text", "content": final_text}
@@ -727,7 +735,7 @@ async def agent_stream(req: Request):
         }
     )
 
-# --- 10. ЗАПУСК UVICORN И УСТОЙЧИВЫЙ SSH С ГЕНЕРАЦИЕЙ КЛЮЧА ---
+# --- 10. УСТОЙЧИВЫЙ SSH ТУННЕЛЬ ---
 def start_api():
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
 
@@ -737,12 +745,11 @@ def setup_ssh_key():
     key_path = ssh_dir / "id_ed25519"
     if not key_path.exists():
         subprocess.run(f"ssh-keygen -t ed25519 -N '' -f {key_path} -q", shell=True)
-        log_console("🔑 Сгенерирован постоянный сессионный SSH-ключ для localhost.run")
 
 def run_ssh_keepalive_tunnel():
     setup_ssh_key()
-    log_console("🌐 [Туннель] Запуск устойчивого SSH-соединения с сессионным ключом...")
-    cmd = "ssh -tt -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=5 -R 80:localhost:8000 nokey@localhost.run"
+    log_console("🌐 [Туннель] Подключение SSH туннеля...")
+    cmd = "ssh -tt -o StrictHostKeyChecking=no -o ServerAliveInterval=20 -o ServerAliveCountMax=10 -R 80:localhost:8000 nokey@localhost.run"
     url_regex = re.compile(r'https?://[a-zA-Z0-9.-]+\.lhr\.life')
 
     while True:
@@ -764,7 +771,7 @@ def run_ssh_keepalive_tunnel():
                 print(f"🚀 ССЫЛКА НА ВАШ АГЕНТ: {url}", flush=True)
                 print(f"========================================================\n", flush=True)
         proc.wait()
-        time.sleep(3)
+        time.sleep(2)
 
 if __name__ == "__main__":
     threading.Thread(target=start_api, daemon=True).start()
