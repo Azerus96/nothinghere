@@ -102,14 +102,21 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    Card hero_c1 = card_from_string(hero.substr(0, 2));
+    Card hero_c2 = card_from_string(hero.substr(2, 2));
+    if (hero_c1 > hero_c2) std::swap(hero_c1, hero_c2);
+
     CardConfig cc;
     cc.num_players = 4;
-    cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo"));
-    cc.ranges.push_back(Range::from_string("88+, ATs+, KQs, AQo+"));
+    cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo, KQs, QJs, JTs, 98s, 87s, A2s+, K9s+"));
+    cc.ranges.push_back(Range::from_string("88+, ATs+, KQs, AQo+, QJs, JTs"));
     cc.ranges.push_back(Range::from_string("55+, A8s+, KJs+, QJs, AJo+"));
     cc.ranges.push_back(Range::from_string("22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, 87s, ATo+, KTo+"));
 
     uint64_t used_mask = 0;
+    used_mask |= card_to_bit(hero_c1);
+    used_mask |= card_to_bit(hero_c2);
+
     cc.flop[0] = card_from_string(board.substr(0, 2)); used_mask |= card_to_bit(cc.flop[0]);
     cc.flop[1] = card_from_string(board.substr(2, 2)); used_mask |= card_to_bit(cc.flop[1]);
     cc.flop[2] = card_from_string(board.substr(4, 2)); used_mask |= card_to_bit(cc.flop[2]);
@@ -156,7 +163,6 @@ int main(int argc, char** argv) {
     game.set_gpu_enabled(true);
     auto gpu_mem = std::make_unique<GpuMemory>();
 
-    // Передаём device_id в gpu_solver_init
     if (!gpu_solver_init(game, *gpu_mem, device_id)) {
         std::cout << "{\"error\": \"GPU init failed\", \"check\": 0.5, \"bet\": 0.5, \"allin\": 0.0}" << std::endl;
         return 1;
@@ -171,10 +177,43 @@ int main(int argc, char** argv) {
 
     gpu_solver_copy_back(game, *game.gpu_mem());
 
-    std::vector<float> strat = game.root_strategy();
-    float p_check = (strat.size() > 0) ? strat[0] : 0.5f;
-    float p_bet   = (strat.size() > 1) ? strat[1] : 0.5f;
-    float p_allin = (strat.size() > 2) ? strat[2] : 0.0f;
+    // ── ПОИСК ТОЧНОЙ СТРАТЕГИИ ДЛЯ РУКИ HERO ───────────────────────────
+    const auto& hero_hands = game.card_config().private_cards[0];
+    int hero_idx = -1;
+    for (size_t i = 0; i < hero_hands.size(); ++i) {
+        Card h1 = hero_hands[i].first;
+        Card h2 = hero_hands[i].second;
+        if (h1 > h2) std::swap(h1, h2);
+        if (h1 == hero_c1 && h2 == hero_c2) {
+            hero_idx = (int)i;
+            break;
+        }
+    }
+
+    int na = game.node_arena()[0].num_actions();
+    int nh = game.num_private_hands(0);
+    const float* s_data = game.storage1_data();
+
+    float p_check = 0.5f, p_bet = 0.5f, p_allin = 0.0f;
+
+    if (hero_idx != -1 && nh > 0) {
+        std::vector<float> combo_strats(na);
+        float sum_s = 0.0f;
+        for (int a = 0; a < na; ++a) {
+            float v = s_data[a * nh + hero_idx];
+            combo_strats[a] = v;
+            sum_s += v;
+        }
+        if (sum_s > 1e-6f) {
+            for (int a = 0; a < na; ++a) combo_strats[a] /= sum_s;
+        } else {
+            for (int a = 0; a < na; ++a) combo_strats[a] = 1.0f / na;
+        }
+
+        p_check = combo_strats[0];
+        p_bet   = (na > 1) ? combo_strats[1] : 0.0f;
+        p_allin = (na > 2) ? combo_strats[2] : 0.0f;
+    }
 
     std::cout << "{"
               << "\"status\": \"ok\","
