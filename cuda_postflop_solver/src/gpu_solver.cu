@@ -383,7 +383,8 @@ bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
         return false;
     }
 
-    CUDA_CHECK(cudaSetDevice(0));
+    int current_device = 0;
+CUDA_CHECK(cudaGetDevice(&current_device));
     CUDA_CHECK(cudaDeviceSynchronize());
 
     int res_table = init_hand_table_on_gpu();
