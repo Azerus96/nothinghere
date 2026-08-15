@@ -2,14 +2,15 @@ javascript:(function () {
     var oldHud = document.getElementById('gto-cuda-hud');
     if (oldHud) oldHud.remove();
 
-    const SERVER_URL = "https://af6e7945913078.lhr.life/"; // Замените на вашу актуальную ссылку
+    // Загружаем сохраненный URL сервера из памяти браузера
+    let serverUrl = localStorage.getItem('GTO_SERVER_URL') || "https://682eaa73dbce53.lhr.life";
 
-    console.log('🚀 GTO CUDA Engine v10.0 (Accurate XML + Live HUD) loaded!');
+    console.log('🚀 GTO CUDA Engine v11.0 (Dynamic URL + Accurate Pokerdom Parse) loaded!');
 
-    // ── 1. ИНТЕРФЕЙС (HUD) ──────────────────────────────────────────────
+    // ── 1. СОЗДАНИЕ ИНТЕРФЕЙСА (HUD) ────────────────────────────────────
     var hud = document.createElement('div');
     hud.id = 'gto-cuda-hud';
-    hud.style.cssText = 'position:fixed;top:40px;left:10px;z-index:999999999;background:rgba(10,15,25,0.96);color:#fff;font-family:-apple-system,sans-serif;font-size:12px;padding:10px;border-radius:10px;border:2px solid #6366f1;width:310px;box-shadow:0 10px 30px rgba(0,0,0,0.85);user-select:none;backdrop-filter:blur(6px);';
+    hud.style.cssText = 'position:fixed;top:30px;left:10px;z-index:999999999;background:rgba(10,15,25,0.96);color:#fff;font-family:-apple-system,sans-serif;font-size:12px;padding:10px;border-radius:10px;border:2px solid #6366f1;width:310px;box-shadow:0 10px 30px rgba(0,0,0,0.85);user-select:none;backdrop-filter:blur(6px);';
     
     hud.innerHTML = `
         <div id="gto-header" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;border-bottom:1px solid #333;padding-bottom:6px;margin-bottom:8px;">
@@ -17,8 +18,19 @@ javascript:(function () {
                 <span id="gto-dot">🟢</span>
                 <strong style="color:#818cf8;font-size:13px;">⚡ GTO CUDA BOT (2x T4)</strong>
             </div>
-            <span id="gto-arrow" style="font-size:14px;color:#818cf8;">🔼</span>
+            <div>
+                <span id="gto-settings-btn" style="font-size:13px;margin-right:6px;cursor:pointer;">⚙️</span>
+                <span id="gto-arrow" style="font-size:14px;color:#818cf8;">🔼</span>
+            </div>
         </div>
+
+        <!-- Настройка ссылки туннеля -->
+        <div id="gto-settings-box" style="display:none;background:#0f172a;padding:6px;border-radius:6px;margin-bottom:8px;border:1px solid #334155;">
+            <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">URL туннеля Kaggle:</div>
+            <input type="text" id="gto-url-input" value="${serverUrl}" style="width:100%;background:#1e293b;color:#fde047;border:1px solid #475569;border-radius:4px;padding:3px;font-size:10px;box-sizing:border-box;">
+            <button id="gto-save-url" style="margin-top:4px;width:100%;background:#6366f1;color:#fff;border:none;border-radius:4px;padding:3px;font-size:10px;cursor:pointer;font-weight:bold;">Сохранить URL</button>
+        </div>
+
         <div id="gto-body">
             <div style="display:flex;gap:6px;margin-bottom:8px;">
                 <label style="flex:1;display:flex;align-items:center;gap:6px;background:rgba(99,102,241,0.15);padding:5px 8px;border-radius:6px;border:1px solid rgba(99,102,241,0.3);cursor:pointer;">
@@ -34,7 +46,7 @@ javascript:(function () {
             <div id="gto-hand-info" style="background:#1e293b;padding:8px;border-radius:6px;margin-bottom:6px;border:1px solid #334155;">
                 <div style="color:#94a3b8;font-size:10px;display:flex;justify-content:space-between;margin-bottom:2px;">
                     <span>Позиция: <b id="gto-pos" style="color:#60a5fa">MP</b></span>
-                    <span>Стек: <b id="gto-stack" style="color:#fde047">0 BB</b></span>
+                    <span>Стек: <b id="gto-stack" style="color:#fde047">0.0 BB</b></span>
                 </div>
                 <div>Рука: <b id="gto-cards" style="color:#fde047;font-size:13px;">—</b> | Доска: <b id="gto-board" style="color:#60a5fa">—</b></div>
                 <div id="gto-advice" style="margin-top:6px;padding-top:4px;border-top:1px dashed #475569;font-size:13px;font-weight:bold;color:#10b981;">
@@ -50,14 +62,31 @@ javascript:(function () {
     `;
     document.body.appendChild(hud);
 
+    // Сворачивание HUD
     let isCollapsed = false;
-    document.getElementById('gto-header').onclick = function () {
+    document.getElementById('gto-arrow').onclick = function (e) {
+        e.stopPropagation();
         isCollapsed = !isCollapsed;
         document.getElementById('gto-body').style.display = isCollapsed ? 'none' : 'block';
         document.getElementById('gto-arrow').textContent = isCollapsed ? '🔽' : '🔼';
     };
 
-    // ── 2. STATE MACHINE ────────────────────────────────────────────────
+    // Открытие окна настройки URL
+    document.getElementById('gto-settings-btn').onclick = function (e) {
+        e.stopPropagation();
+        let box = document.getElementById('gto-settings-box');
+        box.style.display = box.style.display === 'none' ? 'block' : 'none';
+    };
+
+    document.getElementById('gto-save-url').onclick = function () {
+        let val = document.getElementById('gto-url-input').value.trim().replace(/\/$/, "");
+        localStorage.setItem('GTO_SERVER_URL', val);
+        serverUrl = val;
+        document.getElementById('gto-settings-box').style.display = 'none';
+        alert('✅ URL сохранён: ' + val);
+    };
+
+    // ── 2. STATE MACHINE (100% ТОЧНЫЙ ПАРСИНГ POKERDOM) ─────────────────
     let tableState = {
         mySeat: -1,
         dealerSeat: 0,
@@ -65,8 +94,8 @@ javascript:(function () {
         myStack: 0,
         holeCards: [],
         board: [],
-        activeSeatsCount: 6,
-        players: {}, // seatId -> { name, uuid, chips, vpip, pfr }
+        activeSeatsCount: 8,
+        players: {},
         handInProgress: false
     };
 
@@ -84,14 +113,18 @@ javascript:(function () {
     function parseXml(xml, ws) {
         if (!xml || typeof xml !== 'string') return;
 
-        // 1. Блайнды и дилер
+        // 1. Блайнды из HandInfo / GameParams
         let bbM = xml.match(/highStake="(\d+)"/) || xml.match(/bb="(\d+)"/);
         if (bbM) tableState.bbSize = parseInt(bbM[1]);
 
-        let dM = xml.match(/dealer="(\d+)"/) || xml.match(/<Button seat="(\d+)"/);
+        // 2. Место Героя (me="7") и Дилер
+        let meM = xml.match(/<Seats[^>]*me="(\d+)"/);
+        if (meM) tableState.mySeat = parseInt(meM[1]);
+
+        let dM = xml.match(/<Seats[^>]*dealer="(\d+)"/) || xml.match(/<Button seat="(\d+)"/);
         if (dM) tableState.dealerSeat = parseInt(dM[1]);
 
-        // 2. Игроки и постоянные UUID (ИСПРАВЛЕННЫЙ ТОЧНЫЙ ПАРСИНГ)
+        // 3. Игроки и постоянные UUID
         let seatBlocks = xml.matchAll(/<Seat id="(\d+)">.*?<PlayerInfo[^>]*nickname="([^"]+)"[^>]*uuid="([^"]+)"/gs);
         for (let sm of seatBlocks) {
             let sId = parseInt(sm[1]);
@@ -100,15 +133,8 @@ javascript:(function () {
             tableState.players[sId].uuid = sm[3];
         }
 
-        // Подсадка игрока
-        let pInfoChanged = xml.match(/<PlayerInfoChanged seat="(\d+)"><PlayerInfo[^>]*nickname="([^"]+)"[^>]*uuid="([^"]+)"/);
-        if (pInfoChanged) {
-            let sId = parseInt(pInfoChanged[1]);
-            tableState.players[sId] = { name: pInfoChanged[2], uuid: pInfoChanged[3] };
-        }
-
         // Стеки
-        let chipMatches = xml.matchAll(/<Seat id="(\d+)">.*?<Chips[^>]*stack-size="(\d+)"/gs);
+        let chipMatches = xml.matchAll(/<Seat[^>]*id="(\d+)".*?<Chips[^>]*stack-size="(\d+)"/gs);
         for (let cm of chipMatches) {
             let sId = parseInt(cm[1]);
             let st = parseInt(cm[2]);
@@ -116,18 +142,16 @@ javascript:(function () {
             if (sId === tableState.mySeat) tableState.myStack = st;
         }
 
-        // 3. Новая раздача
+        // 4. Новая раздача
         if (xml.includes('<NewHand')) {
             tableState.handInProgress = true;
             tableState.board = [];
             tableState.holeCards = [];
-            for (let s in tableState.players) {
-                tableState.players[s].vpip = false;
-                tableState.players[s].pfr = false;
-            }
+            let docEl = document.getElementById('gto-advice');
+            if (docEl) docEl.innerText = "Раздача началась...";
         }
 
-        // 4. Карты Героя (БЕЗ 'xx')
+        // 5. Карты Героя
         if (xml.includes('<DealingCards')) {
             let seatCards = xml.matchAll(/<Seat id="(\d+)"><Cards>(.*?)<\/Cards><\/Seat>/gs);
             for (let sc of seatCards) {
@@ -135,7 +159,7 @@ javascript:(function () {
                 let cMatches = sc[2].match(/<Card id="\d+">([A-Za-z0-9]+)<\/Card>/g);
                 if (cMatches) {
                     let cards = cMatches.map(c => c.replace(/<[^>]+>/g, '').trim()).filter(c => c.toLowerCase() !== 'xx');
-                    if (cards.length === 2) {
+                    if (cards.length === 2 && (sId === tableState.mySeat || tableState.mySeat === -1)) {
                         tableState.mySeat = sId;
                         tableState.holeCards = cards;
                         updateUI();
@@ -144,7 +168,7 @@ javascript:(function () {
             }
         }
 
-        // 5. Флоп / Тёрн / Ривер
+        // 6. Флоп / Тёрн / Ривер
         if (xml.includes('<DealingFlop>')) {
             let flopCards = xml.match(/<DealingFlop><Cards>(.*?)<\/Cards><\/DealingFlop>/s);
             if (flopCards) {
@@ -160,39 +184,7 @@ javascript:(function () {
             }
         }
 
-        // 6. Отслеживание действий для HUD базы
-        let pAction = xml.match(/<PlayerAction seat="(\d+)">(.*?)<\/PlayerAction>/s);
-        if (pAction) {
-            let sId = parseInt(pAction[1]);
-            let actTag = pAction[2];
-            if (tableState.players[sId]) {
-                if (actTag.includes('<Call') || actTag.includes('<Raise') || actTag.includes('<Bet')) {
-                    tableState.players[sId].vpip = true;
-                }
-                if (actTag.includes('<Raise') || actTag.includes('<Bet')) {
-                    tableState.players[sId].pfr = true;
-                }
-            }
-        }
-
-        // 7. Конец раздачи — отправляем статистику на сервер в SQLite
-        if (xml.includes('<EndHand/>') && tableState.handInProgress) {
-            tableState.handInProgress = false;
-            let playersPayload = [];
-            for (let s in tableState.players) {
-                let p = tableState.players[s];
-                if (p.uuid) {
-                    playersPayload.push({ uuid: p.uuid, name: p.name, vpip: p.vpip, pfr: p.pfr });
-                }
-            }
-            fetch(`${SERVER_URL}/api/track_hand`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ players: playersPayload })
-            }).catch(() => {});
-        }
-
-        // 8. Наш ход (<ActiveChange>)
+        // 7. НАСТУПИЛ НАШ ХОД (<ActiveChange seat="Hero">)
         if (tableState.mySeat !== -1 && xml.includes('<ActiveChange') && xml.includes(`seat="${tableState.mySeat}"`)) {
             requestGtoAdvice(ws);
         }
@@ -204,7 +196,7 @@ javascript:(function () {
         if (adviceEl) adviceEl.innerHTML = `<span style="color:#fbbf24;">● Расчёт 2x Tesla T4...</span>`;
 
         let pos = calculatePosition(tableState.dealerSeat, tableState.mySeat, tableState.activeSeatsCount);
-        let myStackBB = tableState.bbSize > 0 ? (tableState.myStack / tableState.bbSize) : 50;
+        let myStackBB = tableState.bbSize > 0 ? parseFloat((tableState.myStack / tableState.bbSize).toFixed(1)) : 25.0;
 
         let oppUuids = [];
         for (let s in tableState.players) {
@@ -216,12 +208,13 @@ javascript:(function () {
         let payload = {
             cards: { hero: tableState.holeCards, board: tableState.board },
             finances: { big_blind: tableState.bbSize, pot_bb: 10.0, hero_effective_stack_bb: myStackBB },
-            structure: { hero_position: pos, active_players_count: Object.keys(tableState.players).length, opponents_uuids: oppUuids },
+            structure: { hero_position: pos, active_players_count: Object.keys(tableState.players).length || 6, opponents_uuids: oppUuids },
             exploit_mode: document.getElementById('gto-exploit-toggle').checked
         };
 
         try {
-            let res = await fetch(`${SERVER_URL}/api/advice`, {
+            let currentUrl = localStorage.getItem('GTO_SERVER_URL') || serverUrl;
+            let res = await fetch(`${currentUrl}/api/advice`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
@@ -230,7 +223,7 @@ javascript:(function () {
 
             if (data.status === "ok") {
                 let lockBadge = data.node_locked ? `<span style="color:#ef4444;font-size:10px;">[🎯 Lock: ${data.lock_target}]</span><br>` : '';
-                let actColor = data.action_type === "BET" || data.action_type === "RAISE" ? "#f87171" : (data.action_type === "FOLD" ? "#94a3b8" : "#4ade80");
+                let actColor = data.action_type === "BET" || data.action_type === "RAISE" || data.action_type === "ALLIN" ? "#f87171" : (data.action_type === "FOLD" ? "#94a3b8" : "#4ade80");
                 
                 adviceEl.innerHTML = `${lockBadge}<span style="color:${actColor};font-size:14px;">👉 ${data.recommended_action}</span> <span style="font-size:10px;color:#64748b;">(${data.calc_time_ms}ms)</span>`;
                 
@@ -265,7 +258,7 @@ javascript:(function () {
         let xml = `<PlayerAction seat="${tableState.mySeat}">`;
         if (type === 'FOLD') xml += `<Fold/>`;
         else if (type === 'CHECK' || type === 'CALL') xml += `<Call/>`;
-        else if (type === 'BET' || type === 'RAISE') {
+        else if (type === 'BET' || type === 'RAISE' || type === 'ALLIN') {
             let chips = Math.round(sizingBB * tableState.bbSize);
             xml += `<Raise amount="${chips}"/>`;
         }
@@ -282,7 +275,7 @@ javascript:(function () {
         if (posEl) posEl.innerText = calculatePosition(tableState.dealerSeat, tableState.mySeat, tableState.activeSeatsCount);
         if (cardsEl) cardsEl.innerText = tableState.holeCards.length ? tableState.holeCards.join(' ') : '—';
         if (boardEl) boardEl.innerText = tableState.board.length ? tableState.board.join(' ') : '—';
-        if (stackEl) stackEl.innerText = (tableState.bbSize > 0 ? Math.round(tableState.myStack / tableState.bbSize) : 0) + ' BB';
+        if (stackEl) stackEl.innerText = (tableState.bbSize > 0 ? (tableState.myStack / tableState.bbSize).toFixed(1) : "0.0") + ' BB';
     }
 
     // ── 4. HOOK WEBSOCKET ────────────────────────────────────────────────
