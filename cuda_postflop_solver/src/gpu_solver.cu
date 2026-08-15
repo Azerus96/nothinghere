@@ -514,6 +514,11 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
             CUDA_CHECK(cudaGetLastError());
         }
 
+        // РЕАЛЬНЫЙ NODE LOCKING: если игрок p залочен — пропускаем up_pass (стратегия зафиксирована)
+        if ((gpu.locked_players_mask & (1 << p)) != 0) {
+            continue; 
+        }
+
         for (int d = gpu.max_depth; d >= 0; --d) {
             if (gpu.level_sizes[d] == 0) continue;
             kernel_up_pass<NUM_PLAYERS><<<gpu.level_sizes[d], 256>>>(
