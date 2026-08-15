@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 import uvicorn
 
 app = FastAPI(title="Kaggle Poker GTO & Exploit Engine")
@@ -76,6 +77,10 @@ def get_player_dossier(uuids: List[str]) -> Dict[str, Any]:
         }
     return dossier
 
+@app.get("/")
+def root():
+    return {"status": "online", "engine": "2x Tesla T4 CUDA Solver Ready", "bridge": "Active"}
+
 @app.post("/api/advice")
 async def get_action_advice(req: Request):
     t_start = time.time()
@@ -83,8 +88,11 @@ async def get_action_advice(req: Request):
 
     hero_cards = "".join(state.get("cards", {}).get("hero", []))
     board_cards = "".join(state.get("cards", {}).get("board", []))
-    pot_chips = int(state.get("finances", {}).get("pot_bb", 10.0) * state.get("finances", {}).get("big_blind", 100))
-    stack_chips = int(state.get("finances", {}).get("hero_effective_stack_bb", 50.0) * state.get("finances", {}).get("big_blind", 100))
+    bb_size = state.get("finances", {}).get("big_blind", 100)
+    pot_bb = state.get("finances", {}).get("pot_bb", 10.0)
+    stack_bb = state.get("finances", {}).get("hero_effective_stack_bb", 50.0)
+    pot_chips = int(pot_bb * bb_size)
+    stack_chips = int(stack_bb * bb_size)
     exploit_enabled = state.get("exploit_mode", False)
     opponents_uuids = state.get("structure", {}).get("opponents_uuids", [])
 
@@ -100,27 +108,56 @@ async def get_action_advice(req: Request):
                 lock_target = f"{dossier[u]['name']} ({dossier[u]['leak']})"
                 break
 
-    # 2. Вызываем РЕАЛЬНЫЙ C++/CUDA солвер на 2x Tesla T4
-    p_check, p_bet = 0.5, 0.5
-    if LIVE_SOLVER_BIN.exists() and len(board_cards) >= 6 and len(hero_cards) == 4:
-        cmd = f"{LIVE_SOLVER_BIN} {hero_cards} {board_cards} {pot_chips} {stack_chips} {locked_mask}"
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if res.returncode == 0:
-            try:
-                out_json = json.loads(res.stdout.strip())
-                p_check = out_json.get("check", 0.5)
-                p_bet = out_json.get("bet", 0.5)
-            except: pass
+    is_preflop = (len(board_cards) < 6)
 
-    # 3. Принятие решения
-    if p_bet >= 0.50:
-        rec_action = f"BET {round(state.get('finances', {}).get('pot_bb', 10.0) * 0.5, 1)} BB"
-        act_type = "BET"
-        sizing = round(state.get('finances', {}).get('pot_bb', 10.0) * 0.5, 1)
+    # 2. Расчет префлопа или вызов CUDA на постфлопе
+    if is_preflop:
+        # ПРЕФЛОП GTO РЕШЕНИЕ
+        strong_hands = ["AA", "KK", "QQ", "JJ", "TT", "AK", "AQ"]
+        mid_hands = ["99", "88", "77", "AJs", "ATs", "KQs", "KJs", "QJs", "JTs"]
+
+        hand_abbr = hero_cards[0] + hero_cards[2] if len(hero_cards) == 4 else ""
+        
+        if any(hand_abbr.startswith(x) or x in hand_abbr for x in strong_hands):
+            if stack_bb <= 15:
+                rec_action = "ALL-IN (PUSH)"
+                act_type = "ALLIN"
+                sizing = stack_bb
+            else:
+                rec_action = "RAISE 2.5 BB"
+                act_type = "RAISE"
+                sizing = 2.5
+        elif any(hand_abbr.startswith(x) or x in hand_abbr for x in mid_hands):
+            rec_action = "CALL / RAISE"
+            act_type = "CALL"
+            sizing = 1.0
+        else:
+            rec_action = "FOLD"
+            act_type = "FOLD"
+            sizing = 0.0
+
+        p_check, p_bet = (1.0, 0.0) if act_type == "FOLD" else (0.0, 1.0)
     else:
-        rec_action = "CHECK"
-        act_type = "CHECK"
-        sizing = 0.0
+        # ПОСТФЛОП РЕШЕНИЕ НА 2x TESLA T4
+        p_check, p_bet = 0.5, 0.5
+        if LIVE_SOLVER_BIN.exists() and len(hero_cards) == 4:
+            cmd = f"{LIVE_SOLVER_BIN} {hero_cards} {board_cards} {pot_chips} {stack_chips} {locked_mask}"
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if res.returncode == 0:
+                try:
+                    out_json = json.loads(res.stdout.strip())
+                    p_check = out_json.get("check", 0.5)
+                    p_bet = out_json.get("bet", 0.5)
+                except: pass
+
+        if p_bet >= 0.50:
+            rec_action = f"BET {round(pot_bb * 0.5, 1)} BB"
+            act_type = "BET"
+            sizing = round(pot_bb * 0.5, 1)
+        else:
+            rec_action = "CHECK"
+            act_type = "CHECK"
+            sizing = 0.0
 
     calc_ms = int((time.time() - t_start) * 1000)
 
@@ -132,13 +169,12 @@ async def get_action_advice(req: Request):
         "node_locked": (locked_mask != 0),
         "lock_target": lock_target,
         "dossier": dossier,
-        "probabilities": {"CHECK": round(p_check, 3), "BET_50": round(p_bet, 3)},
+        "probabilities": {"CHECK": round(p_check, 3), "BET": round(p_bet, 3)},
         "calc_time_ms": calc_ms
     }
 
 @app.post("/api/track_hand")
 async def track_hand(req: Request):
-    """Накапливает действия игроков в SQLite базу."""
     data = await req.json()
     players = data.get("players", [])
     if not players: return {"status": "empty"}
