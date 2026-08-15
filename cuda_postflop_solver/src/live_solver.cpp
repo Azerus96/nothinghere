@@ -5,10 +5,6 @@
 #include <memory>
 #include <iomanip>
 
-#ifdef CUDA_BUILD
-#include <cuda_runtime.h>
-#endif
-
 #include "game.h"
 #include "solver.h"
 #include "gpu_solver.h"
@@ -25,7 +21,6 @@ enum class OpponentProfile : uint8_t {
     MANIAC = 3
 };
 
-// 100% математически точная инжекция эксплуатационных профилей в память CUDA
 void apply_node_locking_profile(PostFlopGame& game, int player_idx, OpponentProfile profile) {
     if (profile == OpponentProfile::GTO) return;
 
@@ -45,21 +40,18 @@ void apply_node_locking_profile(PostFlopGame& game, int player_idx, OpponentProf
             float strat_val = 1.0f / na;
 
             if (profile == OpponentProfile::OVERFOLDER) {
-                // 85% Fold/Check (action 0), 15% распределяется на Call/Bet/Raise
                 strat_val = (a == 0) ? 0.85f : (0.15f / (na - 1));
             } 
             else if (profile == OpponentProfile::CALLING_STATION) {
-                // Пассивный автоответчик: 90% Call/Check, 10% Fold, 0% Raise
                 if (na == 2) {
                     strat_val = (a == 0) ? 0.15f : 0.85f;
                 } else {
-                    if (a == 0) strat_val = 0.10f;       // Fold/Check: 10%
-                    else if (a == 1) strat_val = 0.85f;  // Call/Check: 85%
-                    else strat_val = 0.05f / (na - 2);   // Raise/Allin: 5%
+                    if (a == 0) strat_val = 0.10f;
+                    else if (a == 1) strat_val = 0.85f;
+                    else strat_val = 0.05f / (na - 2);
                 }
             } 
             else if (profile == OpponentProfile::MANIAC) {
-                // Гиперагрессор: 75% Bet/Raise (последнее действие), 25% на пассивные линии
                 if (na == 2) {
                     strat_val = (a == 0) ? 0.25f : 0.75f;
                 } else {
@@ -67,19 +59,17 @@ void apply_node_locking_profile(PostFlopGame& game, int player_idx, OpponentProf
                 }
             }
 
-            // КРИТИЧЕСКИ ВАЖНО: регреты строго пропорциональны вероятностям
             float regret_val = strat_val * 100.0f;
 
             for (int h = 0; h < nh; ++h) {
                 int idx = node.storage1_offset + a * nh + h;
-                storage1[idx] = strat_val * 100.0f; // Вес стратегии
-                storage2[idx] = regret_val;         // Регрет для Regret Matching
+                storage1[idx] = strat_val * 100.0f;
+                storage2[idx] = regret_val;
             }
         }
     }
 }
 
-// Подбор безопасной фантомной карты, которой ещё нет на доске
 Card find_unused_card(uint64_t used_mask, int prefer_rank) {
     for (int r = prefer_rank; r >= 0; --r) {
         for (int s = 0; s < 4; ++s) {
@@ -124,19 +114,18 @@ int main(int argc, char** argv) {
     cc.flop[1] = card_from_string(board.substr(2, 2)); used_mask |= card_to_bit(cc.flop[1]);
     cc.flop[2] = card_from_string(board.substr(4, 2)); used_mask |= card_to_bit(cc.flop[2]);
 
-    // Безопасное заполнение доски (защита от краша CUDA по коду 255)
     if (board.length() >= 8) {
         cc.turn = card_from_string(board.substr(6, 2));
         used_mask |= card_to_bit(cc.turn);
     } else {
-        cc.turn = find_unused_card(used_mask, 0); // 2-ка свободной масти
+        cc.turn = find_unused_card(used_mask, 0);
         used_mask |= card_to_bit(cc.turn);
     }
 
     if (board.length() >= 10) {
         cc.river = card_from_string(board.substr(8, 2));
     } else {
-        cc.river = find_unused_card(used_mask, 1); // 3-ка свободной масти
+        cc.river = find_unused_card(used_mask, 1);
     }
 
     TreeConfig tc;
@@ -156,7 +145,6 @@ int main(int argc, char** argv) {
     game.prepare();
     game.allocate_memory(false);
 
-    // 1. Применяем Node Locking в оперативную память хоста
     if (locked_mask != 0 && profile_id > 0) {
         for (int p = 1; p < 4; ++p) {
             if (locked_mask & (1 << p)) {
@@ -167,28 +155,20 @@ int main(int argc, char** argv) {
 
     game.set_gpu_enabled(true);
     auto gpu_mem = std::make_unique<GpuMemory>();
-    
-    // 2. Активируем выбранный GPU перед выделением памяти
-    #ifdef CUDA_BUILD
-    cudaSetDevice(device_id);
-    #endif
 
-    // 3. Выделяем память на GPU и копируем туда залоченные массивы storage1 и storage2
-    if (!gpu_solver_init(game, *gpu_mem)) {
+    // Передаём device_id в gpu_solver_init
+    if (!gpu_solver_init(game, *gpu_mem, device_id)) {
         std::cout << "{\"error\": \"GPU init failed\", \"check\": 0.5, \"bet\": 0.5, \"allin\": 0.0}" << std::endl;
         return 1;
     }
 
-    // 4. Передаём маску залоченных игроков в GPU структуру
     gpu_mem->locked_players_mask = locked_mask;
     game.set_gpu_mem(std::move(gpu_mem));
 
-    // 5. 250 итераций DCFR (обучаются только незалоченные игроки)
     for (uint32_t iter = 1; iter <= 250; ++iter) {
         gpu_solve_step_dispatch(game, iter);
     }
 
-    // 6. Копируем результат обратно
     gpu_solver_copy_back(game, *game.gpu_mem());
 
     std::vector<float> strat = game.root_strategy();
