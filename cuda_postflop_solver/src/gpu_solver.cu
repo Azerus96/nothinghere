@@ -20,7 +20,7 @@ namespace postflop {
         }                                                                         \
     } while (0)
 
-// ── ЯДРО 1: Проход ВНИЗ ─────────────────────────────────────────────────
+// ── ЯДРО 1: Проход ВНИЗ (Down Pass) ─────────────────────────────────────
 template <int NUM_PLAYERS>
 __global__
 void kernel_down_pass(
@@ -252,7 +252,7 @@ void kernel_terminal_showdown(
     }
 }
 
-// ── ЯДРО 4: Проход ВВЕРХ ────────────────────────────────────────────────
+// ── ЯДРО 4: Проход ВВЕРХ (Up Pass) ──────────────────────────────────────
 template <int NUM_PLAYERS>
 __global__
 void kernel_up_pass(
@@ -372,8 +372,8 @@ void kernel_up_pass(
     }
 }
 
-// ── Оркестрация с хоста (с поддержкой 1 и 2 GPU) ─────────────────────────
-bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
+// ── Оркестрация с хоста (с поддержкой выбора GPU 0 / 1) ─────────────────
+bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu, int device_id) {
     if (gpu.initialized) return true;
 
     int device_count = 0;
@@ -383,8 +383,9 @@ bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu) {
         return false;
     }
 
-    int current_device = 0;
-CUDA_CHECK(cudaGetDevice(&current_device));
+    if (device_id >= 0 && device_id < device_count) {
+        CUDA_CHECK(cudaSetDevice(device_id));
+    }
     CUDA_CHECK(cudaDeviceSynchronize());
 
     int res_table = init_hand_table_on_gpu();
