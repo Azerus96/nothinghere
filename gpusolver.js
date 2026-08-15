@@ -2,7 +2,7 @@ javascript:(function () {
     var oldHud = document.getElementById('gto-cuda-hud');
     if (oldHud) oldHud.remove();
 
-    const SERVER_URL = "https://toofunoff-agent.serveo.net"; // Ваш туннель Serveo
+    const SERVER_URL = "https://682eaa73dbce53.lhr.life"; // Ваш туннель Serveo
 
     console.log('🚀 GTO CUDA Engine v9.0 (Full HUD + Node Locking) loaded!');
 
