@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════════════════
-// gpu_solver.h — GPU memory manager + Level-by-Level BFS solver
+// gpu_solver.h — GPU memory manager + Multiway BFS solver
 // ════════════════════════════════════════════════════════════════════════
 #ifndef GPU_SOLVER_H
 #define GPU_SOLVER_H
@@ -18,30 +18,23 @@ struct GpuMemory {
     uint8_t*      d_storage_ip;
     uint8_t*      d_storage_chance;
     
-    // Поддержка до 6 игроков
     Card*         d_private_cards[6];   
-    uint16_t*     d_same_hand_idx[6];   // не используется в текущей версии
-                                         // мультивей card-removal (см.
-                                         // gpu_solver.cu), оставлено для
-                                         // будущей полноценной реализации
+    uint16_t*     d_same_hand_idx[6];   
     float*        d_initial_weights[6];
     int           num_hands[6];
 
-    // BFS Level data
     float*        d_node_cfreach; 
     float*        d_node_cfv;     
-    float*        d_all_reaches;  // Для мультивея
+    float*        d_all_reaches;  
     int**         d_levels;       
     int*          level_sizes;    
     int           max_depth;
     
-    // Terminal nodes
     int*          d_fold_nodes;
     int*          d_showdown_nodes;
     int           num_fold_nodes;
     int           num_showdown_nodes;
 
-    // Новые указатели для идеальной математики мультивея на GPU
     int*          d_num_hands;
     Card**        d_private_cards_ptrs;
 
@@ -59,6 +52,8 @@ struct GpuMemory {
     int   num_players;
     bool  initialized;
     bool  is_compressed;
+    
+    uint8_t locked_players_mask; // <--- РЕАЛЬНЫЙ NODE LOCKING: битовая маска залоченных оппонентов
 
     GpuMemory() : d_nodes(nullptr), d_storage1(nullptr), d_storage2(nullptr),
                   d_storage_ip(nullptr), d_storage_chance(nullptr),
@@ -68,7 +63,8 @@ struct GpuMemory {
                   d_num_hands(nullptr), d_private_cards_ptrs(nullptr),
                   num_nodes(0), num_storage(0), num_storage_ip(0),
                   num_storage_chance(0), starting_pot(0), rake_rate(0.0f), rake_cap(0.0f),
-                  num_players(2), initialized(false), is_compressed(false) {
+                  num_players(2), initialized(false), is_compressed(false),
+                  locked_players_mask(0) {
         for (int i = 0; i < 6; ++i) {
             d_private_cards[i] = nullptr;
             d_same_hand_idx[i] = nullptr;
