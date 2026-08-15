@@ -118,3 +118,6 @@ target_link_libraries(experiment_4way PRIVATE postflop_core)
 
 add_executable(experiment_2way tests/experiment_2way.cpp)
 target_link_libraries(experiment_2way PRIVATE postflop_core)
+
+add_executable(live_solver src/live_solver.cpp)
+target_link_libraries(live_solver PRIVATE postflop_core)
