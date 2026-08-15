@@ -21,15 +21,16 @@ app.add_middleware(
 )
 
 DB_PATH = Path("/kaggle/working/poker_hud.db")
+LIVE_SOLVER_BIN = Path("/kaggle/working/nothinghere/cuda_postflop_solver/build/live_solver")
 
-# ── 1. ИНИЦИАЛИЗАЦИЯ БАЗЫ HUD (SQLITE) ──────────────────────────────────
 def init_hud_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("""
     CREATE TABLE IF NOT EXISTS player_hud (
-        player_name TEXT PRIMARY KEY,
+        uuid TEXT PRIMARY KEY,
+        nickname TEXT,
         hands_count INTEGER DEFAULT 0,
         vpip_count INTEGER DEFAULT 0,
         pfr_count INTEGER DEFAULT 0,
@@ -43,65 +44,38 @@ def init_hud_db():
 
 init_hud_db()
 
-def update_player_stat(name: str, is_vpip: bool, is_pfr: bool, folded_cbet: bool = None):
-    if not name or name == "Unknown": return
+def get_player_dossier(uuids: List[str]) -> Dict[str, Any]:
+    if not uuids: return {}
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("INSERT OR IGNORE INTO player_hud (player_name) VALUES (?)", (name,))
-    
-    cur.execute("""
-        UPDATE player_hud 
-        SET hands_count = hands_count + 1,
-            vpip_count = vpip_count + ?,
-            pfr_count = pfr_count + ?,
-            last_seen = CURRENT_TIMESTAMP
-        WHERE player_name = ?
-    """, (1 if is_vpip else 0, 1 if is_pfr else 0, name))
-    
-    if folded_cbet is not None:
-        cur.execute("""
-            UPDATE player_hud
-            SET opp_cbet_count = opp_cbet_count + 1,
-                fold_cbet_count = fold_cbet_count + ?
-            WHERE player_name = ?
-        """, (1 if folded_cbet else 0, name))
-    conn.commit()
-    conn.close()
-
-def get_player_dossier(names: List[str]) -> Dict[str, Any]:
-    if not names: return {}
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    placeholders = ",".join(["?"] * len(names))
+    placeholders = ",".join(["?"] * len(uuids))
     cur.execute(f"""
-        SELECT player_name, hands_count, vpip_count, pfr_count, fold_cbet_count, opp_cbet_count 
-        FROM player_hud WHERE player_name IN ({placeholders})
-    """, names)
+        SELECT uuid, nickname, hands_count, vpip_count, pfr_count, fold_cbet_count, opp_cbet_count 
+        FROM player_hud WHERE uuid IN ({placeholders})
+    """, uuids)
     rows = cur.fetchall()
     conn.close()
     
     dossier = {}
     for r in rows:
-        h_cnt = r[1]
-        vpip = round((r[2] / h_cnt) * 100, 1) if h_cnt > 0 else 0
-        pfr = round((r[3] / h_cnt) * 100, 1) if h_cnt > 0 else 0
-        f_cbet = round((r[4] / r[5]) * 100, 1) if r[5] > 0 else 0
+        h_cnt = r[2]
+        vpip = round((r[3] / h_cnt) * 100, 1) if h_cnt > 0 else 0
+        pfr = round((r[4] / h_cnt) * 100, 1) if h_cnt > 0 else 0
+        f_cbet = round((r[5] / r[6]) * 100, 1) if r[6] > 0 else 0
         
-        # Статус надёжности
-        status = "reliable" if h_cnt >= 20 else ("partial" if h_cnt >= 10 else "unknown")
+        status = "reliable" if h_cnt >= 15 else ("partial" if h_cnt >= 5 else "unknown")
         leak = "None"
-        if h_cnt >= 10:
-            if vpip > 45 and pfr < 12: leak = "Fish (Calling Station)"
-            elif f_cbet > 70: leak = "Fit-or-Fold (Overfolds)"
-            elif pfr > 30: leak = "Aggressive Maniac"
+        if h_cnt >= 5:
+            if vpip > 45 and pfr < 12: leak = "Calling Station"
+            elif f_cbet > 70: leak = "Overfolder"
+            elif pfr > 30: leak = "Maniac"
             
         dossier[r[0]] = {
-            "hands": h_cnt, "vpip": vpip, "pfr": pfr, 
+            "name": r[1], "hands": h_cnt, "vpip": vpip, "pfr": pfr, 
             "fold_cbet": f_cbet, "status": status, "leak": leak
         }
     return dossier
 
-# ── 2. ЭНДПОИНТ ПРИНЯТИЯ РЕШЕНИЙ ───────────────────────────────────────
 @app.post("/api/advice")
 async def get_action_advice(req: Request):
     t_start = time.time()
@@ -109,75 +83,85 @@ async def get_action_advice(req: Request):
 
     hero_cards = "".join(state.get("cards", {}).get("hero", []))
     board_cards = "".join(state.get("cards", {}).get("board", []))
-    pot_bb = state.get("finances", {}).get("pot_bb", 10.0)
-    stack_bb = state.get("finances", {}).get("hero_effective_stack_bb", 50.0)
-    hero_pos = state.get("structure", {}).get("hero_position", "BTN")
+    pot_chips = int(state.get("finances", {}).get("pot_bb", 10.0) * state.get("finances", {}).get("big_blind", 100))
+    stack_chips = int(state.get("finances", {}).get("hero_effective_stack_bb", 50.0) * state.get("finances", {}).get("big_blind", 100))
     exploit_enabled = state.get("exploit_mode", False)
-    opponents = state.get("structure", {}).get("opponents_names", [])
+    opponents_uuids = state.get("structure", {}).get("opponents_uuids", [])
 
-    # Получаем досье из базы SQLite
-    dossier = get_player_dossier(opponents)
+    dossier = get_player_dossier(opponents_uuids)
 
-    # Детекция режима (GTO vs Node Locking Exploit)
-    node_locked = False
+    # 1. Формируем маску Node Locking для CUDA
+    locked_mask = 0
     lock_target = None
     if exploit_enabled:
-        for opp_name, info in dossier.items():
-            if info["status"] == "reliable" and info["leak"] != "None":
-                node_locked = True
-                lock_target = f"{opp_name} ({info['leak']})"
+        for idx, u in enumerate(opponents_uuids):
+            if u in dossier and dossier[u]["status"] in ["reliable", "partial"] and dossier[u]["leak"] != "None":
+                locked_mask |= (1 << (idx + 1))
+                lock_target = f"{dossier[u]['name']} ({dossier[u]['leak']})"
                 break
 
-    # Логика совета
-    is_preflop = len(board_cards) == 0
-    recommended = "CHECK"
-    act_type = "CHECK"
-    sizing = 0.0
+    # 2. Вызываем РЕАЛЬНЫЙ C++/CUDA солвер на 2x Tesla T4
+    p_check, p_bet = 0.5, 0.5
+    if LIVE_SOLVER_BIN.exists() and len(board_cards) >= 6 and len(hero_cards) == 4:
+        cmd = f"{LIVE_SOLVER_BIN} {hero_cards} {board_cards} {pot_chips} {stack_chips} {locked_mask}"
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if res.returncode == 0:
+            try:
+                out_json = json.loads(res.stdout.strip())
+                p_check = out_json.get("check", 0.5)
+                p_bet = out_json.get("bet", 0.5)
+            except: pass
 
-    if is_preflop:
-        if any(x in hero_cards for x in ["AA", "KK", "QQ", "AK"]):
-            recommended = "RAISE 3.0 BB"
-            act_type = "RAISE"
-            sizing = 3.0
-        else:
-            recommended = "FOLD"
-            act_type = "FOLD"
+    # 3. Принятие решения
+    if p_bet >= 0.50:
+        rec_action = f"BET {round(state.get('finances', {}).get('pot_bb', 10.0) * 0.5, 1)} BB"
+        act_type = "BET"
+        sizing = round(state.get('finances', {}).get('pot_bb', 10.0) * 0.5, 1)
     else:
-        # Постфлоп: если оппонент залочен как телефон — добираем крупно
-        if node_locked and "Calling Station" in lock_target:
-            recommended = f"VALUE BET {round(pot_bb * 0.75, 1)} BB (75% Lock Exploit)"
-            act_type = "BET"
-            sizing = round(pot_bb * 0.75, 1)
-        elif "A" in hero_cards or "Q" in hero_cards:
-            recommended = f"BET {round(pot_bb * 0.5, 1)} BB (50%)"
-            act_type = "BET"
-            sizing = round(pot_bb * 0.5, 1)
-        else:
-            recommended = "CHECK"
-            act_type = "CHECK"
+        rec_action = "CHECK"
+        act_type = "CHECK"
+        sizing = 0.0
 
-    calc_ms = int((time.time() - t_start) * 1000) + 120
+    calc_ms = int((time.time() - t_start) * 1000)
 
     return {
         "status": "ok",
-        "hero_cards": hero_cards,
-        "board": board_cards,
-        "recommended_action": recommended,
+        "recommended_action": rec_action,
         "action_type": act_type,
         "sizing_bb": sizing,
-        "node_locked": node_locked,
+        "node_locked": (locked_mask != 0),
         "lock_target": lock_target,
         "dossier": dossier,
+        "probabilities": {"CHECK": round(p_check, 3), "BET_50": round(p_bet, 3)},
         "calc_time_ms": calc_ms
     }
 
 @app.post("/api/track_hand")
 async def track_hand(req: Request):
-    """Обновляет статистику игроков после завершения раздачи."""
+    """Накапливает действия игроков в SQLite базу."""
     data = await req.json()
     players = data.get("players", [])
+    if not players: return {"status": "empty"}
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
     for p in players:
-        update_player_stat(p["name"], p.get("vpip", False), p.get("pfr", False), p.get("fold_cbet", None))
+        uuid = p.get("uuid")
+        name = p.get("name", "Unknown")
+        if not uuid: continue
+
+        cur.execute("INSERT OR IGNORE INTO player_hud (uuid, nickname) VALUES (?, ?)", (uuid, name))
+        cur.execute("""
+            UPDATE player_hud 
+            SET hands_count = hands_count + 1,
+                vpip_count = vpip_count + ?,
+                pfr_count = pfr_count + ?,
+                nickname = ?,
+                last_seen = CURRENT_TIMESTAMP
+            WHERE uuid = ?
+        """, (1 if p.get("vpip") else 0, 1 if p.get("pfr") else 0, name, uuid))
+    conn.commit()
+    conn.close()
     return {"status": "tracked"}
 
 if __name__ == "__main__":
