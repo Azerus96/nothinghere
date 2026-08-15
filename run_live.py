@@ -25,33 +25,35 @@ def start_api_server():
     time.sleep(3)
 
 def start_tunnel():
-    print("🌐 [3/3] Подключение стабильного SSH-туннеля...", flush=True)
+    print("🌐 [3/3] Запуск туннеля через localhost.run...", flush=True)
     
+    # Генерация постоянного ключа для снятия лимитов сессии
     ssh_dir = Path(os.path.expanduser("~/.ssh"))
     ssh_dir.mkdir(parents=True, exist_ok=True)
     key_path = ssh_dir / "id_ed25519"
     if not key_path.exists():
         subprocess.run(f"ssh-keygen -t ed25519 -N '' -f {key_path} -q", shell=True)
 
-    rand_subdomain = f"poker-gto-{int(time.time()) % 10000}"
-    cmd = f"ssh -tt -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=5 -R {rand_subdomain}:80:localhost:8000 serveo.net"
-    
-    url_regex = re.compile(r'https://[a-zA-Z0-9.-]+(?:\.serveousercontent\.com|\.serveo\.net|\.lhr\.life)')
+    cmd = "ssh -tt -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=10 -R 80:localhost:8000 nokey@localhost.run"
+    url_regex = re.compile(r'https://[a-zA-Z0-9.-]+\.lhr\.life')
 
-    proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-    for line in iter(proc.stdout.readline, ''):
-        clean = line.strip()
-        if not clean:
-            continue
-        print(f"[SSH] {clean}", flush=True)
-        match = url_regex.search(clean)
-        if match:
-            url = match.group(0)
-            print(f"\n========================================================", flush=True)
-            print(f"🚀 ВАША РАБОЧАЯ ССЫЛКА ДЛЯ БУКМАРКЛЕТА (SERVER_URL):", flush=True)
-            print(f"👉 {url}", flush=True)
-            print(f"========================================================\n", flush=True)
-    proc.wait()
+    while True:
+        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in iter(proc.stdout.readline, ''):
+            clean = line.strip()
+            if not clean:
+                continue
+            match = url_regex.search(clean)
+            if match:
+                url = match.group(0)
+                print(f"\n========================================================", flush=True)
+                print(f"🚀 ВАША РАБОЧАЯ ССЫЛКА ДЛЯ БУКМАРКЛЕТА (SERVER_URL):", flush=True)
+                print(f"👉 {url}", flush=True)
+                print(f"========================================================\n", flush=True)
+            elif "tunneled with" not in clean and "Welcome" not in clean:
+                print(f"[SSH] {clean}", flush=True)
+        proc.wait()
+        time.sleep(3)
 
 if __name__ == "__main__":
     build_solver()
