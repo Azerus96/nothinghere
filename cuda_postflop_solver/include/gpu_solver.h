@@ -53,7 +53,7 @@ struct GpuMemory {
     bool  initialized;
     bool  is_compressed;
     
-    uint8_t locked_players_mask; // <--- РЕАЛЬНЫЙ NODE LOCKING: битовая маска залоченных оппонентов
+    uint8_t locked_players_mask; // Битовая маска залоченных оппонентов
 
     GpuMemory() : d_nodes(nullptr), d_storage1(nullptr), d_storage2(nullptr),
                   d_storage_ip(nullptr), d_storage_chance(nullptr),
@@ -74,7 +74,7 @@ struct GpuMemory {
     }
 };
 
-bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu);
+bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu, int device_id = 0);
 int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter);
 int gpu_solve_step_dispatch(PostFlopGame& game, uint32_t current_iter);
 bool gpu_solver_copy_back(PostFlopGame& game, GpuMemory& gpu);
