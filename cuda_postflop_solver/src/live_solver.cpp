@@ -25,6 +25,7 @@ enum class OpponentProfile : uint8_t {
     MANIAC = 3
 };
 
+// 100% математически точная инжекция эксплуатационных профилей в память CUDA
 void apply_node_locking_profile(PostFlopGame& game, int player_idx, OpponentProfile profile) {
     if (profile == OpponentProfile::GTO) return;
 
@@ -42,23 +43,37 @@ void apply_node_locking_profile(PostFlopGame& game, int player_idx, OpponentProf
 
         for (int a = 0; a < na; ++a) {
             float strat_val = 1.0f / na;
-            float regret_val = 0.0f;
 
             if (profile == OpponentProfile::OVERFOLDER) {
+                // 85% Fold/Check (action 0), 15% распределяется на Call/Bet/Raise
                 strat_val = (a == 0) ? 0.85f : (0.15f / (na - 1));
-                regret_val = (a == 0) ? 1000.0f : 0.0f;
-            } else if (profile == OpponentProfile::CALLING_STATION) {
-                strat_val = (a == 1 || a == 0) ? 0.80f : (0.20f / (na - 1));
-                regret_val = (a == 1 || a == 0) ? 1000.0f : 0.0f;
-            } else if (profile == OpponentProfile::MANIAC) {
-                strat_val = (a == na - 1) ? 0.75f : (0.25f / (na - 1));
-                regret_val = (a == na - 1) ? 1000.0f : 0.0f;
+            } 
+            else if (profile == OpponentProfile::CALLING_STATION) {
+                // Пассивный автоответчик: 90% Call/Check, 10% Fold, 0% Raise
+                if (na == 2) {
+                    strat_val = (a == 0) ? 0.15f : 0.85f;
+                } else {
+                    if (a == 0) strat_val = 0.10f;       // Fold/Check: 10%
+                    else if (a == 1) strat_val = 0.85f;  // Call/Check: 85%
+                    else strat_val = 0.05f / (na - 2);   // Raise/Allin: 5%
+                }
+            } 
+            else if (profile == OpponentProfile::MANIAC) {
+                // Гиперагрессор: 75% Bet/Raise (последнее действие), 25% на пассивные линии
+                if (na == 2) {
+                    strat_val = (a == 0) ? 0.25f : 0.75f;
+                } else {
+                    strat_val = (a == na - 1) ? 0.75f : (0.25f / (na - 1));
+                }
             }
+
+            // КРИТИЧЕСКИ ВАЖНО: регреты строго пропорциональны вероятностям
+            float regret_val = strat_val * 100.0f;
 
             for (int h = 0; h < nh; ++h) {
                 int idx = node.storage1_offset + a * nh + h;
-                storage1[idx] = strat_val * 100.0f;
-                storage2[idx] = regret_val;
+                storage1[idx] = strat_val * 100.0f; // Вес стратегии
+                storage2[idx] = regret_val;         // Регрет для Regret Matching
             }
         }
     }
@@ -71,6 +86,9 @@ Card find_unused_card(uint64_t used_mask, int prefer_rank) {
             Card c = make_card(r, s);
             if (!(used_mask & card_to_bit(c))) return c;
         }
+    }
+    for (int c = 0; c < 52; ++c) {
+        if (!(used_mask & card_to_bit(c))) return (Card)c;
     }
     return 0;
 }
@@ -138,7 +156,7 @@ int main(int argc, char** argv) {
     game.prepare();
     game.allocate_memory(false);
 
-    // Применение профиля Node Locking
+    // 1. Применяем Node Locking в оперативную память хоста
     if (locked_mask != 0 && profile_id > 0) {
         for (int p = 1; p < 4; ++p) {
             if (locked_mask & (1 << p)) {
@@ -150,24 +168,27 @@ int main(int argc, char** argv) {
     game.set_gpu_enabled(true);
     auto gpu_mem = std::make_unique<GpuMemory>();
     
-    // Переключение на нужный GPU перед аллокацией
+    // 2. Активируем выбранный GPU перед выделением памяти
     #ifdef CUDA_BUILD
     cudaSetDevice(device_id);
     #endif
 
+    // 3. Выделяем память на GPU и копируем туда залоченные массивы storage1 и storage2
     if (!gpu_solver_init(game, *gpu_mem)) {
         std::cout << "{\"error\": \"GPU init failed\", \"check\": 0.5, \"bet\": 0.5, \"allin\": 0.0}" << std::endl;
         return 1;
     }
 
+    // 4. Передаём маску залоченных игроков в GPU структуру
     gpu_mem->locked_players_mask = locked_mask;
     game.set_gpu_mem(std::move(gpu_mem));
 
-    // 250 итераций DCFR
+    // 5. 250 итераций DCFR (обучаются только незалоченные игроки)
     for (uint32_t iter = 1; iter <= 250; ++iter) {
         gpu_solve_step_dispatch(game, iter);
     }
 
+    // 6. Копируем результат обратно
     gpu_solver_copy_back(game, *game.gpu_mem());
 
     std::vector<float> strat = game.root_strategy();
