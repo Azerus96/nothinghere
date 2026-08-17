@@ -18,10 +18,9 @@ javascript:(function(){
     ].map(name => name.toLowerCase()));
 
     let stalkerState = {
-        activeTournaments: new Map(), // tournId -> {name, buyIn, currentBB}
-        stalkedPlayers: new Map(),     // targetKey -> {name, displayName, chips, stack_bb, tournName, place, isBusted}
+        activeTournaments: new Map(), // id -> {name, buyIn, currentBB}
+        stalkedPlayers: new Map(),     // targetKey -> {name, displayName, stack, stack_bb, tournName, place, rank, isBusted, prize}
         isAutoScanning: true,
-        isRecordingHands: true,
         ws: null
     };
 
@@ -40,7 +39,7 @@ javascript:(function(){
     // ── 1. АДАПТИВНЫЙ ИНТЕРФЕЙС (100% ПО ЦЕНТРУ ЭКРАНА) ────────────────
     let ui = document.createElement('div');
     ui.id = 'stalker-hud';
-    ui.style.cssText = 'position:fixed;top:10px;left:10px;right:10px;margin:0 auto;width:calc(100vw - 20px);max-width:350px;z-index:999999999;background:rgba(10,15,25,0.97);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:12px;border-radius:10px;border:2px solid #eab308;box-shadow:0 10px 30px rgba(0,0,0,0.9);backdrop-filter:blur(8px);box-sizing:border-box;';
+    ui.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);width:92vw;max-width:360px;z-index:999999999;background:rgba(10,15,25,0.97);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:12px;border-radius:10px;border:2px solid #eab308;box-shadow:0 10px 30px rgba(0,0,0,0.9);backdrop-filter:blur(8px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #334155;padding-bottom:6px;margin-bottom:8px;">
@@ -54,7 +53,7 @@ javascript:(function(){
         <div style="background:#030712;padding:6px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;">
                 <span>Сервер: <b style="color:#38bdf8;">HF 24/7</b></span>
-                <span id="st-scan-status" style="color:#4ade80;">Поиск по всем турнирам...</span>
+                <span id="st-scan-status" style="color:#4ade80;">Поиск по всей сети...</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;margin-top:4px;">
                 <span>Турниров в сети: <b id="st-tourns-count" style="color:#38bdf8;">0</b></span>
@@ -62,20 +61,11 @@ javascript:(function(){
             </div>
         </div>
 
-        <div id="st-targets-list" style="max-height:160px;overflow-y:auto;background:#030712;padding:6px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;color:#cbd5e1;">
-            Поиск игроков по всей сетке Покердома...
+        <div id="st-targets-list" style="max-height:170px;overflow-y:auto;background:#030712;padding:6px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;color:#cbd5e1;">
+            Поиск игроков по всей турнирной сетке...
         </div>
 
-        <div style="display:flex;gap:6px;margin-bottom:6px;">
-            <button id="btn-toggle-scan" style="flex:1;padding:6px;background:#0284c7;color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:10px;cursor:pointer;">
-                🔄 Авто-поиск: ВКЛ
-            </button>
-            <button id="btn-toggle-rec" style="flex:1;padding:6px;background:#059669;color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:10px;cursor:pointer;">
-                🔴 Запись стола: ВКЛ
-            </button>
-        </div>
-
-        <button id="btn-export-db" style="width:100%;padding:6px;background:#6366f1;color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:11px;cursor:pointer;">
+        <button id="btn-export-db" style="width:100%;padding:7px;background:#6366f1;color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:11px;cursor:pointer;">
             📥 Скачать отчёт базы данных (JSON)
         </button>
     `;
@@ -96,17 +86,19 @@ javascript:(function(){
         if (stalkerState.stalkedPlayers.size > 0) {
             let html = '';
             stalkerState.stalkedPlayers.forEach((p) => {
-                let chipsStr = formatChips(p.chips);
+                let chipsStr = formatChips(p.stack);
                 let bbStr = p.stack_bb > 0 ? ` (${p.stack_bb.toFixed(1)} BB)` : '';
+                let rankStr = p.rank > 0 ? `[${p.rank} место]` : '';
                 
                 if (p.isBusted) {
-                    html += `<div style="display:flex;justify-content:space-between;border-bottom:1px solid #111827;padding:3px 0;opacity:0.6;">
+                    let prizeStr = p.prize > 0 ? ` +${formatChips(p.prize)}₽` : '';
+                    html += `<div style="display:flex;justify-content:space-between;border-bottom:1px solid #111827;padding:3px 0;opacity:0.55;font-size:10px;">
                         <span style="color:#ef4444;">❌ <s>${p.displayName}</s></span>
-                        <span style="color:#ef4444;font-size:10px;">ВЫБЫЛ (${p.place} место)</span>
+                        <span style="color:#ef4444;">${p.place} место${prizeStr} [ВЫБЫЛ]</span>
                     </div>`;
                 } else {
                     html += `<div style="display:flex;justify-content:space-between;border-bottom:1px solid #111827;padding:3px 0;align-items:center;">
-                        <span style="color:#fde047;">🎯 <b>${p.displayName}</b></span>
+                        <span style="color:#fde047;">🎯 <b>${p.displayName}</b> <small style="color:#64748b;">${rankStr}</small></span>
                         <span style="color:#38bdf8;font-weight:bold;">${chipsStr}${bbStr}</span>
                         <span style="color:#94a3b8;font-size:10px;">${p.tournName ? p.tournName.substring(0, 10) : 'MTT'}</span>
                     </div>`;
@@ -126,13 +118,13 @@ javascript:(function(){
         } catch (e) {}
     }
 
-    // ── 2. ГЛОБАЛЬНЫЙ ПАРСЕР ТУРНИРОВ И ИГРОКОВ ─────────────────────────
+    // ── 2. ТОЧНЫЙ ПАРСЕР ПОТОКА POKERDOM ────────────────────────────────
     function parseXmlStream(xml, ws) {
         if (!xml || typeof xml !== 'string' || !xml.startsWith('<')) return;
         stalkerState.ws = ws;
 
-        // 1. Поиск ВСЕХ турниров в лобби (включая теги <Game> и <Contest>)
-        let tournMatches = xml.matchAll(/<(?:Game|Table|Tournament|Contest)\s+[^>]*\bid="([^"]+)"[^>]*\bname="([^"]+)"/g);
+        // 1. Поиск турниров лобби (тег <Table> внутри <Tournaments>)
+        let tournMatches = xml.matchAll(/<Table\s+[^>]*\bid="([^"]+)"[^>]*\bname="([^"]+)"/g);
         for (let tm of tournMatches) {
             let tId = tm[1];
             let tName = tm[2];
@@ -140,56 +132,66 @@ javascript:(function(){
                 stalkerState.activeTournaments.set(tId, {
                     id: tId,
                     name: tName,
-                    currentBB: 100
+                    currentBB: 100000 // Дефолт для хайроллеров до прихода расписания
                 });
             }
         }
 
-        // Блайнды турнира
-        let curLevel = xml.match(/<CurrentLevel[^>]*highStake="(\d+)"/);
-        let curTournId = xml.match(/tournamentId="([^"]+)"/)?.[1] || xml.match(/<TournamentDetails[^>]*id="([^"]+)"/)?.[1];
-        if (curLevel && curTournId && stalkerState.activeTournaments.has(curTournId)) {
-            stalkerState.activeTournaments.get(curTournId).currentBB = parseInt(curLevel[1]);
+        // Блайнды турнира из Schedule / CurrentLevel
+        let scheduleMatch = xml.match(/<Schedule[^>]*currentLevel="(\d+)"/);
+        let curLevelNum = scheduleMatch ? scheduleMatch[1] : null;
+        let curTournId = xml.match(/<TournamentDetails[^>]*id="([^"]+)"/)?.[1];
+
+        if (curLevelNum && curTournId) {
+            let levelItem = xml.match(new RegExp(`<Item[^>]*number="${curLevelNum}"[^>]*highStake="(\\d+)"`));
+            if (levelItem && stalkerState.activeTournaments.has(curTournId)) {
+                stalkerState.activeTournaments.get(curTournId).currentBB = parseInt(levelItem[1]);
+            }
         }
 
-        // 2. Сканирование списков игроков турниров (с поддержкой #2, #3 и любого порядка полей)
+        // 2. Сбор игроков: считываем СТЕКИ (stack="...") и ВЫБЫВАНИЕ (placeFrom="...")
         let playerBlocks = xml.matchAll(/<Player\s+([^>]+)>/g);
         for (let pb of playerBlocks) {
             let attrs = pb[1];
             let nickM = attrs.match(/\bnickname="([^"]+)"/);
-            let chipsM = attrs.match(/\bchips="([^"]+)"/);
-            let placeM = attrs.match(/\bplace="([^"]+)"/);
+            let stackM = attrs.match(/\bstack="([^"]+)"/);
+            let rankM = attrs.match(/\brank="([^"]+)"/);
+            let placeFromM = attrs.match(/\bplaceFrom="([^"]+)"/);
+            let prizeM = attrs.match(/\bprizeAmount="([^"]+)"/);
 
             if (nickM) {
                 let rawNick = nickM[1];
                 let cleanNick = getCleanNick(rawNick);
 
                 if (TARGET_WATCHLIST.has(cleanNick)) {
-                    let chips = chipsM ? parseInt(chipsM[1]) : 0;
-                    let place = placeM ? parseInt(placeM[1]) : 0;
-                    let tourn = stalkerState.activeTournaments.get(curTournId) || { name: "Турнир", currentBB: 100 };
-                    let stackBB = tourn.currentBB > 0 ? (chips / tourn.currentBB) : 0;
+                    let stack = stackM ? parseInt(stackM[1]) : 0;
+                    let rank = rankM ? parseInt(rankM[1]) : 0;
+                    let placeFrom = placeFromM ? parseInt(placeFromM[1]) : 0;
+                    let prize = prizeM ? parseFloat(prizeM[1]) : 0;
 
-                    let targetKey = `${cleanNick}_${curTournId || 'tourn'}`;
-                    let existing = stalkerState.stalkedPlayers.get(targetKey) || {};
+                    let tourn = stalkerState.activeTournaments.get(curTournId) || { name: "Вечерний Хайроллер", currentBB: 200000 };
+                    let stackBB = tourn.currentBB > 0 ? (stack / tourn.currentBB) : 0;
 
-                    // Объединение данных без затирания фишек
-                    stalkerState.stalkedPlayers.set(targetKey, Object.assign(existing, {
+                    let targetKey = `${cleanNick}_${rawNick}`;
+                    let isBusted = (placeFrom > 0 || stack === 0);
+
+                    stalkerState.stalkedPlayers.set(targetKey, {
                         name: cleanNick,
                         displayName: rawNick,
-                        chips: chips > 0 ? chips : (existing.chips || chips),
-                        stack_bb: stackBB > 0 ? stackBB : (existing.stack_bb || stackBB),
-                        place: place,
-                        tournId: curTournId,
+                        stack: stack,
+                        stack_bb: stackBB,
+                        rank: rank,
+                        place: placeFrom,
+                        prize: prize,
                         tournName: tourn.name,
-                        isBusted: (chips === 0 && place > 0)
-                    }));
+                        isBusted: isBusted
+                    });
 
                     sendScoutEvent("TARGET_PLAYER_DISCOVERED", {
                         uuid: `target_${cleanNick}`,
                         name: rawNick,
                         tournament_id: curTournId,
-                        chips: chips,
+                        chips: stack,
                         stack_bb: stackBB
                     });
 
@@ -197,91 +199,33 @@ javascript:(function(){
                 }
             }
         }
-
-        // 3. Отслеживание выбывания игроков
-        let rankedMatches = xml.matchAll(/<TournamentPlayerRanked[^>]*nickname="([^"]+)"[^>]*placeFrom="(\d+)"/g);
-        for (let rm of rankedMatches) {
-            let rawNick = rm[1];
-            let cleanNick = getCleanNick(rawNick);
-            let place = parseInt(rm[2]);
-
-            stalkerState.stalkedPlayers.forEach((p, key) => {
-                if (p.name === cleanNick) {
-                    p.isBusted = true;
-                    p.place = place;
-                    p.chips = 0;
-                    p.stack_bb = 0;
-                }
-            });
-            updateHUD();
-        }
-
-        // 4. Запись шоудаунов и вскрытий
-        if (stalkerState.isRecordingHands && (xml.includes('<Show') || xml.includes('<Winners'))) {
-            let showMatches = xml.matchAll(/<PlayerAction seat="(\d+)"><Show combination="([^"]+)"><Cards>(.*?)<\/Cards>/gs);
-            let activeTableId = xml.match(/<TableDetails\s+[^>]*\bid="([^"]+)"/)?.[1] || "table";
-
-            for (let sm of showMatches) {
-                let seat = sm[1];
-                let comb = sm[2];
-                let cards = sm[3].match(/<Card id="\d+">([A-Za-z0-9]+)<\/Card>/g)?.map(c => c.replace(/<[^>]+>/g, '')).join(' ');
-                let board = xml.match(/<Cards>(.*?)<\/Cards>/)?.[1] || "";
-
-                stalkerState.stalkedPlayers.forEach((p) => {
-                    if (p.seat == seat) {
-                        sendScoutEvent("HAND_SHOWDOWN_COMPLETED", {
-                            hand_number: xml.match(/number="(\d+)"/)?.[1] || `${Date.now()}`,
-                            tournament_id: p.tournId || "tourn",
-                            uuid: p.uuid || `target_${p.name}`,
-                            cards: cards,
-                            board: board,
-                            actions: [comb],
-                            showdown: true
-                        });
-                    }
-                });
-            }
-        }
     }
 
-    // ── 3. ЦИКЛ АВТО-ОПРОСА ВСЕХ ТУРНИРОВ ПОКЕРДОМА ─────────────────────
+    // ── 3. ЦИКЛ АВТО-ОПРОСА ВСЕХ ТУРНИРОВ СЕТИ (24/7) ───────────────────
     let tournIdx = 0;
     setInterval(() => {
         if (!stalkerState.ws || !stalkerState.isAutoScanning) return;
 
-        // Если список турниров пуст — запрашиваем каталог лобби
+        // 1. Если турниры не загружены — запрашиваем список
         if (stalkerState.activeTournaments.size === 0) {
             try {
-                stalkerState.ws.send('<GetQuickSeatGamesList id="952-43"/>');
-                stalkerState.ws.send('<EnterLobby name="POKER"/>');
+                stalkerState.ws.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="1001"/>');
             } catch(e) {}
             return;
         }
 
+        // 2. Опрашиваем игроков каждого идущего турнира по очереди
         let tournIds = Array.from(stalkerState.activeTournaments.keys());
         let targetTournId = tournIds[tournIdx % tournIds.length];
         tournIdx++;
 
         try {
-            // Опрашиваем участников очередного турнира из сети
             stalkerState.ws.send(`<EnterTournamentLobby id="${targetTournId}"/>`);
-            stalkerState.ws.send(`<GetTournamentPlayers tournamentId="${targetTournId}"/>`);
+            stalkerState.ws.send(`<GetPlayers offset="0" count="50"/>`);
         } catch (e) {}
     }, 2000);
 
-    // Управление кнопками
-    document.getElementById('btn-toggle-scan').onclick = function() {
-        stalkerState.isAutoScanning = !stalkerState.isAutoScanning;
-        this.innerText = stalkerState.isAutoScanning ? "🔄 Авто-поиск: ВКЛ" : "⏸ Авто-поиск: ВЫКЛ";
-        this.style.background = stalkerState.isAutoScanning ? "#0284c7" : "#475569";
-    };
-
-    document.getElementById('btn-toggle-rec').onclick = function() {
-        stalkerState.isRecordingHands = !stalkerState.isRecordingHands;
-        this.innerText = stalkerState.isRecordingHands ? "🔴 Запись стола: ВКЛ" : "⚪ Запись стола: ВЫКЛ";
-        this.style.background = stalkerState.isRecordingHands ? "#059669" : "#475569";
-    };
-
+    // Экспорт базы
     document.getElementById('btn-export-db').onclick = async function() {
         try {
             let res = await fetch(`${scoutServerUrl}/api/get_export_json`);
@@ -298,7 +242,7 @@ javascript:(function(){
         }
     };
 
-    // ── 4. ХУК ВСЕХ WEBSOCKET СОЕДИНЕНИЙ ────────────────────────────────
+    // ── 4. ПЕРЕХВАТ WEBSOCKET ───────────────────────────────────────────
     function hookSocket(ws) {
         if (!ws || ws.__stalkerHooked) return;
         ws.__stalkerHooked = true;
@@ -346,5 +290,5 @@ javascript:(function(){
     hookAllFrames();
     setInterval(hookAllFrames, 3000);
 
-    console.log("🎯 [Pokerdom Global Scout v3.0] Активен. Полный охват рума включен.");
+    console.log("🎯 [Global VIP Scout v4.0 Final] Запущен.");
 })();
