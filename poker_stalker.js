@@ -1,9 +1,9 @@
 javascript:(function(){
-    if (window.__pokerStalkerTrueFix) {
-        alert('🎯 VIP Stalker True-Fix уже работает!');
+    if (window.__pokerStalkerTitan) {
+        alert('🎯 VIP Stalker TITAN уже работает!');
         return;
     }
-    window.__pokerStalkerTrueFix = true;
+    window.__pokerStalkerTitan = true;
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
 
@@ -20,12 +20,10 @@ javascript:(function(){
 
     let stalkerState = {
         isCollapsed: false,
-        sockets: { lobby: null, activeTourn: null },
-        liveTournaments: new Map(), // tId -> { id, name, currentLevel, currentBB, levels: Map(lvl -> bb), status }
-        activeTables: new Map(),
-        stalkedPlayers: new Map(),  // cleanNick -> { cleanNick, entries: Map(uniqueKey -> entryData), handsCount, vpipCount, pfrCount, aggressiveActions, totalActions }
-        currentLobbyTournId: null,
-        lastScannedTournId: null
+        sockets: { lobby: null },
+        liveTournaments: new Map(), // tId -> { id, name, currentLevel, currentBB, levels: Map(lvl -> bb) }
+        stalkedPlayers: new Map(),  // cleanNick -> { cleanNick, entries: Map(uniqueKey -> entryData) }
+        lastScannedTournId: null    // Изолированная переменная для сканера
     };
 
     function decodeHtml(html) {
@@ -54,11 +52,11 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="st-dot" style="color:#22c55e;font-size:12px;">●</span>
-                <strong style="color:#fde047;font-size:12px;" id="st-hud-title">VIP SCOUT (31 ЦЕЛЬ • PRO)</strong>
+                <strong style="color:#fde047;font-size:12px;" id="st-hud-title">VIP SCOUT (31 ЦЕЛЬ • TITAN)</strong>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#fde047;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud').remove();window.__pokerStalkerTrueFix=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud').remove();window.__pokerStalkerTitan=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
@@ -102,7 +100,7 @@ javascript:(function(){
         } else {
             body.style.display = 'block';
             btn.innerText = '▾';
-            title.innerText = 'VIP SCOUT (31 ЦЕЛЬ • PRO)';
+            title.innerText = 'VIP SCOUT (31 ЦЕЛЬ • TITAN)';
         }
     };
 
@@ -129,11 +127,9 @@ javascript:(function(){
         if (stalkerState.stalkedPlayers.size > 0) {
             let html = '';
             stalkerState.stalkedPlayers.forEach((p) => {
-                let vpipStr = p.handsCount > 0 ? `<small style="color:#c084fc;">[VPIP: ${Math.round((p.vpipCount/p.handsCount)*100)}% | PFR: ${Math.round((p.pfrCount/p.handsCount)*100)}%]</small>` : '';
-
                 html += `<div style="border-bottom:1px solid #1e293b;padding:5px 0;">
                     <div style="display:flex;justify-content:space-between;align-items:center;">
-                        <span style="color:#fde047;font-size:12px;">🎯 <b>${p.cleanNick}</b> ${vpipStr}</span>
+                        <span style="color:#fde047;font-size:12px;">🎯 <b>${p.cleanNick}</b></span>
                     </div>`;
 
                 p.entries.forEach(e => {
@@ -171,47 +167,16 @@ javascript:(function(){
         } catch (e) {}
     }
 
-    async function sendHudBatch() {
-        let profiles = [];
-        stalkerState.stalkedPlayers.forEach(p => {
-            if (p.handsCount > 0) {
-                let vpip = (p.vpipCount / p.handsCount) * 100;
-                let pfr = (p.pfrCount / p.handsCount) * 100;
-                let afq = p.totalActions > 0 ? (p.aggressiveActions / p.totalActions) * 100 : 0;
-                profiles.push({
-                    uuid: `target_${p.cleanNick}`,
-                    name: p.cleanNick,
-                    hands: p.handsCount,
-                    vpip: parseFloat(vpip.toFixed(1)),
-                    pfr: parseFloat(pfr.toFixed(1)),
-                    afq: parseFloat(afq.toFixed(1))
-                });
-            }
-        });
-
-        if (profiles.length > 0) {
-            try {
-                await fetch(`${scoutServerUrl}/api/save_hud_batch`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ profiles: profiles })
-                });
-            } catch(e) {}
-        }
-    }
-
-    // ── НАДЕЖНЫЙ ПАРСИНГ XML ПОТОКА ───────────────────────────────────
+    // ── ПАРСИНГ XML ПОТОКА ────────────────────────────────────────────
     function parseXmlStream(xml, ws) {
         if (!xml || typeof xml !== 'string' || !xml.startsWith('<')) return;
 
-        // Фиксация сокетов
+        // Фиксация сокета лобби
         if (xml.includes('<Tournaments') || xml.includes('<ServerInfo') || xml.includes('<MyTables')) {
             stalkerState.sockets.lobby = ws;
-        } else if (xml.includes('<TournamentDetails') || xml.includes('<Players') || xml.includes('<Schedule') || xml.includes('<Tables')) {
-            stalkerState.sockets.activeTourn = ws;
         }
 
-        // 1. Список активных турниров (RUNNING / LATE_REG)
+        // 1. Список активных турниров
         if (xml.includes('<Tournaments')) {
             let matches = xml.matchAll(/<Table\s+([^>]+)>/g);
             for (let m of matches) {
@@ -227,8 +192,7 @@ javascript:(function(){
                             name: decodeHtml(tName) || 'MTT',
                             currentLevel: 1,
                             currentBB: 500,
-                            levels: new Map(),
-                            status: tStatus
+                            levels: new Map()
                         });
                     }
                 } else if (tId && (tStatus === 'COMPLETED' || tStatus === 'CANCELED')) {
@@ -238,48 +202,27 @@ javascript:(function(){
             updateHUD();
         }
 
-        // 2. Идентификатор и имя турнира
+        // 2. Идентификатор турнира (для привязки блайндов)
         let tdMatch = xml.match(/<TournamentDetails\s+[^>]*\bid="([^"]+)"/);
-        let tdNameMatch = xml.match(/<TournamentDetails\s+[^>]*\bname="([^"]*)"/);
-        if (tdMatch) {
-            stalkerState.currentLobbyTournId = tdMatch[1];
-            if (tdNameMatch && stalkerState.liveTournaments.has(tdMatch[1])) {
-                stalkerState.liveTournaments.get(tdMatch[1]).name = decodeHtml(tdNameMatch[1]);
-            }
-        }
+        let currentContextTournId = tdMatch ? tdMatch[1] : stalkerState.lastScannedTournId;
 
-        let openLobbyMatch = xml.match(/<OpenTournamentLobby\s+[^>]*\bid="([^"]+)"[^>]*\bname="([^"]*)"/);
-        if (openLobbyMatch) {
-            stalkerState.currentLobbyTournId = openLobbyMatch[1];
-            if (stalkerState.liveTournaments.has(openLobbyMatch[1])) {
-                stalkerState.liveTournaments.get(openLobbyMatch[1]).name = decodeHtml(openLobbyMatch[2]);
-            }
-        }
-
-        // 3. БЛАЙНДЫ: НЕЗАВИСИМЫЙ ПАРСИНГ ВСЕХ УРОВНЕЙ И ТЕКУЩЕГО LEVEL (TRUE-FIX)
-        let curTournId = stalkerState.currentLobbyTournId || stalkerState.lastScannedTournId;
-
-        // А. Парсим все теги <Item> независимо от порядка атрибутов
-        if (xml.includes('<Item') && curTournId && stalkerState.liveTournaments.has(curTournId)) {
-            let t = stalkerState.liveTournaments.get(curTournId);
+        // 3. БЛАЙНДЫ: Идеальный парсинг уровней
+        if (xml.includes('<Item') && currentContextTournId && stalkerState.liveTournaments.has(currentContextTournId)) {
+            let t = stalkerState.liveTournaments.get(currentContextTournId);
             let itemMatches = xml.matchAll(/<Item\s+([^>]+)>/g);
             for (let im of itemMatches) {
                 let attrs = im[1];
                 let numM = attrs.match(/\bnumber="(\d+)"/);
                 let hsM = attrs.match(/\bhighStake="(\d+)"/);
                 if (numM && hsM) {
-                    let lvl = parseInt(numM[1]);
-                    let hs = parseInt(hsM[1]);
-                    if (!t.levels) t.levels = new Map();
-                    t.levels.set(lvl, hs);
+                    t.levels.set(parseInt(numM[1]), parseInt(hsM[1]));
                 }
             }
         }
 
-        // Б. Извлекаем currentLevel из <Schedule> или раздачи
         let curLevelMatch = xml.match(/\bcurrentLevel="(\d+)"/);
-        if (curLevelMatch && curTournId && stalkerState.liveTournaments.has(curTournId)) {
-            let t = stalkerState.liveTournaments.get(curTournId);
+        if (curLevelMatch && currentContextTournId && stalkerState.liveTournaments.has(currentContextTournId)) {
+            let t = stalkerState.liveTournaments.get(currentContextTournId);
             let curLvl = parseInt(curLevelMatch[1]);
             t.currentLevel = curLvl;
             if (t.levels && t.levels.has(curLvl)) {
@@ -287,17 +230,16 @@ javascript:(function(){
             }
         }
 
-        // В. Прямой перехват блайндов со стола/лобби
         let directBBMatch = xml.match(/<(?:CurrentLevel|HandInfo|Parameters)[^>]*\bhighStake="(\d+)"/);
-        if (directBBMatch && curTournId && stalkerState.liveTournaments.has(curTournId)) {
+        if (directBBMatch && currentContextTournId && stalkerState.liveTournaments.has(currentContextTournId)) {
             let bb = parseInt(directBBMatch[1]);
-            if (bb > 0) stalkerState.liveTournaments.get(curTournId).currentBB = bb;
+            if (bb > 0) stalkerState.liveTournaments.get(currentContextTournId).currentBB = bb;
         }
 
-        // 4. Парсинг игроков турнира
+        // 4. Парсинг игроков (Ответ на фоновый сканер)
         if (xml.includes('<Players')) {
             let playerBlocks = xml.matchAll(/<Player\s+([^>]+)>/g);
-            let tournId = curTournId || 'mtt_active';
+            let tournId = currentContextTournId || 'mtt_active';
             let tourn = stalkerState.liveTournaments.get(tournId) || { name: 'MTT', currentBB: 500 };
 
             for (let pb of playerBlocks) {
@@ -323,12 +265,7 @@ javascript:(function(){
 
                         let p = stalkerState.stalkedPlayers.get(cleanNick) || {
                             cleanNick: cleanNick,
-                            entries: new Map(),
-                            handsCount: 0,
-                            vpipCount: 0,
-                            pfrCount: 0,
-                            aggressiveActions: 0,
-                            totalActions: 0
+                            entries: new Map()
                         };
 
                         let entryKey = `${tournId}_${rawNick}`;
@@ -361,29 +298,34 @@ javascript:(function(){
             }
         }
 
-        // 5. Live-обновление стека со стола
+        // 5. LIVE-ОБНОВЛЕНИЕ СТЕКА (ИЗОЛИРОВАНО ОТ СКАНЕРА!)
         if (xml.includes('<TableDetails') || xml.includes('<GameState') || xml.includes('<Seats>')) {
             let seatBlocks = xml.matchAll(/<Seat\s+[^>]*\bid="(\d+)"[^>]*>(.*?)<\/Seat>/g);
-            let tableTournId = xml.match(/\btournamentId="([^"]+)"/)?.[1] || curTournId;
-
+            
             for (let sb of seatBlocks) {
                 let seatContent = sb[2];
                 let nickM = seatContent.match(/nickname="([^"]+)"/);
                 let stackM = seatContent.match(/stack-size="([^"]+)"/);
 
-                if (nickM && stackM && tableTournId) {
+                if (nickM && stackM) {
                     let rawNick = nickM[1];
                     let cleanNick = getCleanNick(rawNick);
 
                     if (TARGET_WATCHLIST.has(cleanNick)) {
                         let currentChips = parseInt(stackM[1]);
                         let p = stalkerState.stalkedPlayers.get(cleanNick);
-                        let entryKey = `${tableTournId}_${rawNick}`;
-                        if (p && p.entries.has(entryKey)) {
-                            let entry = p.entries.get(entryKey);
-                            entry.stack = currentChips;
-                            let tourn = stalkerState.liveTournaments.get(tableTournId) || { currentBB: 500 };
-                            entry.stackBB = tourn.currentBB > 0 ? (currentChips / tourn.currentBB) : 0;
+                        
+                        if (p) {
+                            // Ищем активный вход этого игрока и обновляем его напрямую!
+                            p.entries.forEach(entry => {
+                                if (!entry.isBusted && entry.rawNick === rawNick) {
+                                    entry.stack = currentChips;
+                                    let tourn = stalkerState.liveTournaments.get(entry.tournId);
+                                    if (tourn && tourn.currentBB > 0) {
+                                        entry.stackBB = currentChips / tourn.currentBB;
+                                    }
+                                }
+                            });
                             updateHUD();
                         }
                     }
@@ -393,19 +335,18 @@ javascript:(function(){
 
         // 6. Вылет игрока
         let rankMatch = xml.match(/<TournamentPlayerRanked[^>]*nickname="([^"]+)"[^>]*placeFrom="(\d+)"[^>]*cashPayout="([^"]+)"/);
-        let rankTournId = xml.match(/\btournamentId="([^"]+)"/)?.[1] || curTournId;
-
-        if (rankMatch && rankTournId) {
+        if (rankMatch) {
             let rawNick = rankMatch[1];
             let cleanNick = getCleanNick(rawNick);
             if (stalkerState.stalkedPlayers.has(cleanNick)) {
                 let p = stalkerState.stalkedPlayers.get(cleanNick);
-                let entryKey = `${rankTournId}_${rawNick}`;
-                let entry = p.entries.get(entryKey) || {};
-                entry.isBusted = true;
-                entry.place = parseInt(rankMatch[2]);
-                entry.prize = parseFloat(rankMatch[3]);
-                p.entries.set(entryKey, entry);
+                p.entries.forEach(entry => {
+                    if (entry.rawNick === rawNick && !entry.isBusted) {
+                        entry.isBusted = true;
+                        entry.place = parseInt(rankMatch[2]);
+                        entry.prize = parseFloat(rankMatch[3]);
+                    }
+                });
                 updateHUD();
             }
         }
@@ -422,16 +363,13 @@ javascript:(function(){
                     let uuidM = seatBlock[1].match(/\buuid="([^"]+)"/);
                     if (nickM) {
                         let cleanNick = getCleanNick(nickM[1]);
-                        let currentBoard = Array.from(stalkerState.activeTables.values())[0]?.board?.join(' ') || '';
-                        let currentHand = Array.from(stalkerState.activeTables.values())[0]?.currentHand || `h_${Date.now()}`;
-
                         sendServerEvent("HAND_SHOWDOWN_COMPLETED", {
-                            hand_number: currentHand,
-                            tournament_id: curTournId || "MTT",
+                            hand_number: `h_${Date.now()}`,
+                            tournament_id: "MTT",
                             uuid: uuidM ? uuidM[1] : `target_${cleanNick}`,
                             name: cleanNick,
                             cards: cards,
-                            board: currentBoard,
+                            board: "",
                             actions: ["SHOWDOWN_REVEAL"]
                         });
                     }
@@ -440,46 +378,31 @@ javascript:(function(){
         }
     }
 
-    // ── ЦИКЛ АВТОПОИСКА С ПОЛНЫМИ ЗАГОЛОВКАМИ СЕРВЕРА ─────────────────
+    // ── АГРЕССИВНЫЙ АВТОПОИСК (КАК В v14) ─────────────────────────────
     let scanIdx = 0;
     setInterval(() => {
         let lobbyWs = stalkerState.sockets.lobby;
-        let tournWs = stalkerState.sockets.activeTourn;
+        if (!lobbyWs || lobbyWs.readyState !== WebSocket.OPEN) return;
 
-        // Если турниры не загружены — запрашиваем список
-        if (stalkerState.liveTournaments.size === 0 && lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
+        if (stalkerState.liveTournaments.size === 0) {
             try {
-                lobbyWs.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_6PLUS|OMAHA6PLUS|BADUGI|TEXAS_HOLDEM|OMAHA|OMAHA_HIGH_LOW|OMAHA5CARD|OMAHA5CARD_HIGH_LOW|OMAHA6CARD|OMAHA6CARD_HIGH_LOW|OMAHA7CARD|OMAHA7CARD_HIGH_LOW|OFC_PINEAPPLE_OH|JOKER_PINEAPPLE_OH" id="1001"/>');
+                lobbyWs.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="1001"/>');
             } catch(e) {}
             return;
         }
 
-        if (stalkerState.liveTournaments.size === 0) return;
-
         let liveIds = Array.from(stalkerState.liveTournaments.keys());
         let targetTournId = liveIds[scanIdx % liveIds.length];
-        stalkerState.lastScannedTournId = targetTournId;
+        stalkerState.lastScannedTournId = targetTournId; // Запоминаем, кого спросили
         scanIdx++;
 
-        // 1. Опрос через главное лобби
-        if (lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
-            try {
-                lobbyWs.send(`<GetTournamentDetails id="${targetTournId}"/>`);
-                lobbyWs.send(`<OpenTable id="${targetTournId}" type="SCHEDULED_TOURNAMENT"/>`);
-            } catch (e) {}
-        }
-
-        // 2. Опрос игроков через сокет турниров (С ПОЛНЫМ ЗАГОЛОВКОМ)
-        if (tournWs && tournWs.readyState === WebSocket.OPEN) {
-            try {
-                tournWs.send(`<EnterTournamentLobby id="${targetTournId}" client="html5mobile" clientFace="pokerdom" clientVersion="71.0.138"/>`);
-                tournWs.send('<GetSchedule/>');
-                tournWs.send('<GetPlayers offset="0" count="60"/>');
-            } catch (e) {}
-        }
+        try {
+            // Отправляем запросы в лобби-сокет (это безопасно и не выбивает)
+            lobbyWs.send(`<GetTournamentDetails id="${targetTournId}"/>`);
+            lobbyWs.send(`<OpenTable id="${targetTournId}" type="SCHEDULED_TOURNAMENT"/>`);
+            lobbyWs.send(`<GetPlayers offset="0" count="50"/>`);
+        } catch (e) {}
     }, 2000);
-
-    setInterval(sendHudBatch, 5000);
 
     // Экспорт базы
     document.getElementById('btn-export-db').onclick = async function() {
@@ -548,5 +471,5 @@ javascript:(function(){
     hookAllFrames();
     setInterval(hookAllFrames, 3000);
 
-    console.log("🎯 [VIP Scout True-Fix v19.0] Полный фикс ББ и автоскана.");
+    console.log("🎯 [VIP Scout TITAN v20.0] Запущен.");
 })();
