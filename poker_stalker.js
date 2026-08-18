@@ -1,9 +1,9 @@
 javascript:(function(){
-    if (window.__pokerStalkerV14Fixed) {
-        alert('🎯 VIP Stalker v14-Fixed уже активен!');
+    if (window.__pokerStalkerUltimate) {
+        alert('🎯 VIP Stalker Ultimate уже активен!');
         return;
     }
-    window.__pokerStalkerV14Fixed = true;
+    window.__pokerStalkerUltimate = true;
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
 
@@ -20,11 +20,12 @@ javascript:(function(){
 
     let stalkerState = {
         isCollapsed: false,
-        sockets: { lobby: null },
+        sockets: { lobby: null, activeTourn: null },
         liveTournaments: new Map(), // tId -> { id, name, currentLevel, currentBB, status }
         activeTables: new Map(),
         stalkedPlayers: new Map(),  // cleanNick -> { cleanNick, entries: Map(uniqueKey -> entryData), handsCount, vpipCount, pfrCount, aggressiveActions, totalActions }
-        currentLobbyTournId: null
+        currentLobbyTournId: null,
+        lastQueriedTournId: null
     };
 
     function decodeHtml(html) {
@@ -53,18 +54,18 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="st-dot" style="color:#22c55e;font-size:12px;">●</span>
-                <strong style="color:#fde047;font-size:12px;" id="st-hud-title">VIP SCOUT (31 ЦЕЛЬ • AUTO)</strong>
+                <strong style="color:#fde047;font-size:12px;" id="st-hud-title">VIP SCOUT (31 ЦЕЛЬ • AUTO-SCAN)</strong>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#fde047;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud').remove();window.__pokerStalkerV14Fixed=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud').remove();window.__pokerStalkerUltimate=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
         <div id="st-hud-body" style="margin-top:8px;">
             <div style="background:#030712;padding:6px 8px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;">
                 <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;">
-                    <span>Режим: <b style="color:#38bdf8;">Автосканер сети</b></span>
+                    <span>Режим: <b style="color:#38bdf8;">Автосканер 24/7</b></span>
                     <span id="st-scan-status" style="color:#4ade80;">Поиск активен</span>
                 </div>
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;margin-top:4px;">
@@ -101,7 +102,7 @@ javascript:(function(){
         } else {
             body.style.display = 'block';
             btn.innerText = '▾';
-            title.innerText = 'VIP SCOUT (31 ЦЕЛЬ • AUTO)';
+            title.innerText = 'VIP SCOUT (31 ЦЕЛЬ)';
         }
     };
 
@@ -199,12 +200,15 @@ javascript:(function(){
         }
     }
 
-    // ── ПАРСИНГ XML-ПОТОКА ────────────────────────────────────────────
+    // ── ПАРСИНГ XML ПОТОКА ────────────────────────────────────────────
     function parseXmlStream(xml, ws) {
         if (!xml || typeof xml !== 'string' || !xml.startsWith('<')) return;
 
+        // Фиксация сокетов лобби и турниров (ИЗ РАБОЧЕЙ v14)
         if (xml.includes('<Tournaments') || xml.includes('<ServerInfo')) {
             stalkerState.sockets.lobby = ws;
+        } else if (xml.includes('<TournamentDetails') || xml.includes('<Players') || xml.includes('<OpenTournamentLobby')) {
+            stalkerState.sockets.activeTourn = ws;
         }
 
         // 1. Парсинг живых турниров с именами
@@ -251,7 +255,7 @@ javascript:(function(){
             }
         }
 
-        // 3. Расчёт блайндов
+        // 3. Расчёт блайндов турнира
         let curLevelMatch = xml.match(/<Schedule[^>]*currentLevel="(\d+)"/);
         if (curLevelMatch && stalkerState.currentLobbyTournId) {
             let curLvl = curLevelMatch[1];
@@ -269,8 +273,8 @@ javascript:(function(){
         // 4. Парсинг игроков турнира (Изоляция по Tournament ID + RawNick)
         if (xml.includes('<Players')) {
             let playerBlocks = xml.matchAll(/<Player\s+([^>]+)>/g);
-            let tournId = stalkerState.currentLobbyTournId || 'mtt_active';
-            let tourn = stalkerState.liveTournaments.get(tournId) || { name: '', currentBB: 500 };
+            let tournId = stalkerState.currentLobbyTournId || stalkerState.lastQueriedTournId || 'mtt_active';
+            let tourn = stalkerState.liveTournaments.get(tournId) || { name: 'MTT', currentBB: 500 };
 
             for (let pb of playerBlocks) {
                 let attrs = pb[1];
@@ -303,7 +307,6 @@ javascript:(function(){
                             totalActions: 0
                         };
 
-                        // Ключ входа: ID турнира + имя входа (чтобы разные турниры не перезаписывали друг друга)
                         let entryKey = `${tournId}_${rawNick}`;
 
                         p.entries.set(entryKey, {
@@ -334,7 +337,7 @@ javascript:(function(){
             }
         }
 
-        // 5. Live-обновление стека
+        // 5. Live-обновление стека со стола
         if (xml.includes('<TableDetails') || xml.includes('<GameState') || xml.includes('<Seats>')) {
             let seatBlocks = xml.matchAll(/<Seat\s+[^>]*\bid="(\d+)"[^>]*>(.*?)<\/Seat>/g);
             let tableTournId = xml.match(/\btournamentId="([^"]+)"/)?.[1] || stalkerState.currentLobbyTournId;
@@ -413,27 +416,42 @@ javascript:(function(){
         }
     }
 
-    // ── ТОТ САМЫЙ РАБОЧИЙ ЦИКЛ ОПРОСА ИЗ v14 ─────────────────────────
+    // ── ТОТ САМЫЙ АВТОПОИСК ИЗ v14 (МУЛЬТИПЛЕКСИРОВАНИЕ ЗАПРОСОВ) ────
     let scanIdx = 0;
     setInterval(() => {
         let lobbyWs = stalkerState.sockets.lobby;
-        if (!lobbyWs || lobbyWs.readyState !== WebSocket.OPEN) return;
+        let tournWs = stalkerState.sockets.activeTourn;
 
-        if (stalkerState.liveTournaments.size === 0) {
+        // Если турниры не загружены — запрашиваем список
+        if (stalkerState.liveTournaments.size === 0 && lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
             try {
                 lobbyWs.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="1001"/>');
             } catch(e) {}
             return;
         }
 
+        if (stalkerState.liveTournaments.size === 0) return;
+
         let liveIds = Array.from(stalkerState.liveTournaments.keys());
         let targetTournId = liveIds[scanIdx % liveIds.length];
+        stalkerState.lastQueriedTournId = targetTournId;
         scanIdx++;
 
-        try {
-            lobbyWs.send(`<GetTournamentDetails id="${targetTournId}"/>`);
-            lobbyWs.send(`<OpenTable id="${targetTournId}" type="SCHEDULED_TOURNAMENT"/>`);
-        } catch (e) {}
+        // 1. Опрос через лобби-сокет
+        if (lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
+            try {
+                lobbyWs.send(`<GetTournamentDetails id="${targetTournId}"/>`);
+                lobbyWs.send(`<OpenTable id="${targetTournId}" type="SCHEDULED_TOURNAMENT"/>`);
+            } catch (e) {}
+        }
+
+        // 2. Опрос игроков через активный турнирный сокет
+        if (tournWs && tournWs.readyState === WebSocket.OPEN) {
+            try {
+                tournWs.send(`<EnterTournamentLobby id="${targetTournId}"/>`);
+                tournWs.send('<GetPlayers offset="0" count="50"/>');
+            } catch (e) {}
+        }
     }, 2000);
 
     setInterval(sendHudBatch, 5000);
@@ -505,5 +523,5 @@ javascript:(function(){
     hookAllFrames();
     setInterval(hookAllFrames, 3000);
 
-    console.log("🎯 [VIP Scout v14-Fixed] Активен.");
+    console.log("🎯 [VIP Scout Ultimate] Запущен.");
 })();
