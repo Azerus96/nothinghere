@@ -1,6 +1,6 @@
 javascript:(function(){
     if (window.__pokerStalkerV17Active) {
-        alert('🎯 VIP Stalker v17.3 уже запущен!');
+        alert('🎯 VIP Stalker v17.4 ACTIVE SCOUT уже запущен!');
         return;
     }
     window.__pokerStalkerV17Active = true;
@@ -15,7 +15,7 @@ javascript:(function(){
         "foldmi", "fedorav", "grenadinec", "nedenegradi", "legilemens", 
         "thestudent", "anarhisttt", "belarusftw", "sgeeeee", "master3anosov", 
         "kirov999", "donskikh", "bumblebee", "karanebesnaya", "anacreosha",
-        "saiyn_belek"
+        "saiyn_belek", "malyavka89"
     ].map(n => n.toLowerCase()));
 
     const stalkerState = {
@@ -25,7 +25,7 @@ javascript:(function(){
             lobby: null,
             tables: new Map()
         },
-        liveTournaments: new Map(), // tId -> { id, name, status, currentBB }
+        liveTournaments: new Map(),
         activeTables: new Map(),
         stalkedPlayers: new Map(),
         scannerQueue: [],
@@ -80,7 +80,7 @@ javascript:(function(){
         if (!stalkerState.stalkedPlayers.has(cleanNick)) {
             stalkerState.stalkedPlayers.set(cleanNick, {
                 cleanNick: cleanNick,
-                entries: new Map(),
+                entries: new Map(), // key: tournId_rawNick -> entry
                 handsCount: 0,
                 vpipCount: 0,
                 pfrCount: 0,
@@ -139,7 +139,7 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="st-dot" style="color:#38bdf8;font-size:12px;">🌀</span>
-                <strong style="color:#38bdf8;font-size:12px;" id="st-hud-title">ACTIVE SCOUT v17.3</strong>
+                <strong style="color:#38bdf8;font-size:12px;" id="st-hud-title">ACTIVE SCOUT v17.4</strong>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#0284c7;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 6px;border-radius:4px;">🔄 Скан</button>
@@ -245,7 +245,6 @@ javascript:(function(){
         }
     }
 
-    // ── ФОНОВЫЙ КРАУЛЕР С ЗАЩИТОЙ ОТ ДИСКОННЕКТА ──────────────────────
     function triggerLobbyTournamentRefresh() {
         let lobbyWs = stalkerState.sockets.lobby;
         if (lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
@@ -267,7 +266,6 @@ javascript:(function(){
         let st = document.getElementById('st-scanner-state');
         if (st) st.innerText = `Скан: ${stalkerState.scannerQueue.length} активных`;
 
-        // Сканируем по 2 турнира с микропаузой 150мс (полная безопасность от кика)
         while (stalkerState.scannerQueue.length > 0) {
             let chunk = stalkerState.scannerQueue.splice(0, 2);
             await Promise.all(chunk.map(tId => scanSingleTournamentBackground(tId)));
@@ -290,7 +288,7 @@ javascript:(function(){
             let bgWs = new OrigWS(wsUrl);
             let finished = false;
             let currentLevel = 1;
-            let levelMap = new Map(); // levelNum -> highStake (BB)
+            let levelMap = new Map();
             let currentBB = tourn.currentBB || 500;
 
             function cleanup() {
@@ -313,13 +311,11 @@ javascript:(function(){
                 let text = await decodeSocketPayload(e.data);
                 if (!text) return;
 
-                // 1. Извлекаем реальный currentLevel из TournamentDetails
                 if (text.includes('<TournamentDetails')) {
                     let lvl = getAttr(text, 'currentLevel');
                     if (lvl) currentLevel = parseInt(lvl);
                 }
 
-                // 2. Парсим сетку блайндов
                 if (text.includes('<Schedule')) {
                     let items = text.matchAll(/<Item\s+([^>]+)>/g);
                     for (let im of items) {
@@ -331,13 +327,11 @@ javascript:(function(){
                     }
                 }
 
-                // Сопоставляем текущий уровень с блайндом
                 if (levelMap.has(currentLevel)) {
                     currentBB = levelMap.get(currentLevel);
                     tourn.currentBB = currentBB;
                 }
 
-                // 3. Парсинг игроков
                 if (text.includes('<Players')) {
                     let offset = parseInt(getAttr(text, 'offset') || '0');
                     let total = parseInt(getAttr(text, 'total') || '0');
@@ -353,20 +347,22 @@ javascript:(function(){
                         if (TARGET_WATCHLIST.has(cleanNick)) {
                             let stack = parseInt(getAttr(attrs, 'stack') || '0');
                             let rank = parseInt(getAttr(attrs, 'rank') || '0');
-                            let place = parseInt(getAttr(attrs, 'placeFrom') || '0');
+                            let place = parseInt(getAttr(attrs, 'placeFrom') || getAttr(attrs, 'place') || '0');
                             let prize = parseFloat(getAttr(attrs, 'prizeAmount') || '0');
                             let uuid = getAttr(attrs, 'uuid') || `target_${cleanNick}`;
                             
-                            // Игрок выбыл только если есть зафиксированное финальное место
                             let isBusted = (place > 0);
                             let stackBB = currentBB > 0 ? (stack / currentBB) : 0;
 
                             let p = getOrCreatePlayerProfile(cleanNick);
-                            let existingEntry = p.entries.get(rawNick);
+                            
+                            // УНИКАЛЬНЫЙ СОСТАВНОЙ КЛЮЧ: УСТРАНЯЕТ МИГАНИЕ В ТАБЛИЦЕ
+                            let entryKey = `${tournId}_${rawNick}`;
+                            let existingEntry = p.entries.get(entryKey);
                             let isNewEntry = !existingEntry;
                             let statusChanged = existingEntry && (existingEntry.isBusted !== isBusted);
 
-                            p.entries.set(rawNick, {
+                            p.entries.set(entryKey, {
                                 rawNick: rawNick,
                                 cleanNick: cleanNick,
                                 uuid: uuid,
@@ -452,7 +448,7 @@ javascript:(function(){
             }
         }
 
-        // 2. Сетка турниров — ФИЛЬТРУЕМ СТРОГО ИДУЩИЕ ТУРНИРЫ (БЕЗ REGISTERING)
+        // 2. Сетка турниров
         if (xml.includes('<Tournaments')) {
             let matches = xml.matchAll(/<Table\s+([^>]+)>/g);
 
@@ -462,7 +458,6 @@ javascript:(function(){
                 let tName = getAttr(attrs, 'name');
                 let tStatus = getAttr(attrs, 'status');
 
-                // ТОЛЬКО ТЕ, ГДЕ СЕЙЧАС ИДЕТ ИГРА
                 if (tId && (tStatus === 'RUNNING' || tStatus === 'LATE_REG' || tStatus === 'LATE_REGISTRATION' || tStatus === 'SEATING')) {
                     stalkerState.liveTournaments.set(tId, {
                         id: tId,
@@ -525,7 +520,8 @@ javascript:(function(){
 
                     if (TARGET_WATCHLIST.has(cleanNick)) {
                         let p = getOrCreatePlayerProfile(cleanNick);
-                        let entry = p.entries.get(rawNick) || {
+                        let entryKey = `${tableCtx.tournId || tableCtx.tableId}_${rawNick}`;
+                        let entry = p.entries.get(entryKey) || {
                             rawNick: rawNick,
                             cleanNick: cleanNick,
                             tableName: tableCtx.tournId ? stalkerState.liveTournaments.get(tableCtx.tournId)?.name : 'Table'
@@ -534,7 +530,7 @@ javascript:(function(){
                         entry.stackBB = stack / (tableCtx.currentBB || 500);
                         entry.tournId = tableCtx.tournId;
                         entry.isBusted = false;
-                        p.entries.set(rawNick, entry);
+                        p.entries.set(entryKey, entry);
                         updateHUD();
                     }
                 }
@@ -732,5 +728,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🎯 [VIP Scout v17.3 FIXED BB & ANTI-KICK] Готов к работе.");
+    console.log("🎯 [VIP Scout v17.4 FLICKER-FREE] Полностью готов к работе.");
 })();
