@@ -1,13 +1,13 @@
 javascript:(function(){
-    if (window.__pokerStalkerV17Active) {
-        alert('🎯 VIP Stalker v17.4 ACTIVE SCOUT уже запущен!');
+    if (window.__pokerStalkerV18Pro) {
+        alert('🎯 VIP Stalker v18.1 PRO EXPLOIT ENGINE уже запущен!');
         return;
     }
-    window.__pokerStalkerV17Active = true;
+    window.__pokerStalkerV18Pro = true;
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
 
-    // 31 ЦЕЛЕВОЙ ИГРОК
+    // 32 ЦЕЛЕВЫХ ИГРОКА
     const TARGET_WATCHLIST = new Set([
         "vesnushka", "bagzik", "nogano777", "dostigatel", "bankiir", 
         "mushroomless", "xasiknolook", "riverpomojet", "donkmaster", "kavsan", 
@@ -20,6 +20,8 @@ javascript:(function(){
 
     const stalkerState = {
         isCollapsed: false,
+        hfStatus: 'Проверка...',
+        outboxQueue: [],
         auth: { sessionId: null, wssUrl: null, clientVersion: "71.0.138" },
         sockets: {
             lobby: null,
@@ -37,12 +39,14 @@ javascript:(function(){
             this.tableId = tableId;
             this.tournId = tournId;
             this.seats = new Map();
+            this.seatActions = new Map(); // seatId -> ['PREFLOP_RAISE', 'FLOP_BET', ...]
             this.currentHand = null;
             this.board = [];
             this.street = 'PREFLOP';
             this.currentBB = 500;
             this.activeSeatsInHand = new Set();
             this.playersActedThisHand = new Set();
+            this.preflopStealFaced = new Set();
         }
 
         resetHand(handNumber) {
@@ -51,6 +55,18 @@ javascript:(function(){
             this.street = 'PREFLOP';
             this.activeSeatsInHand.clear();
             this.playersActedThisHand.clear();
+            this.preflopStealFaced.clear();
+            this.seatActions.clear();
+        }
+
+        recordAction(seatId, actionName) {
+            let list = this.seatActions.get(seatId) || [];
+            list.push(`${this.street}_${actionName}`);
+            this.seatActions.set(seatId, list);
+        }
+
+        getActionsForSeat(seatId) {
+            return this.seatActions.get(seatId) || ['SHOWDOWN'];
         }
     }
 
@@ -80,25 +96,56 @@ javascript:(function(){
         if (!stalkerState.stalkedPlayers.has(cleanNick)) {
             stalkerState.stalkedPlayers.set(cleanNick, {
                 cleanNick: cleanNick,
-                entries: new Map(), // key: tournId_rawNick -> entry
+                entries: new Map(),
                 handsCount: 0,
                 vpipCount: 0,
                 pfrCount: 0,
                 aggressiveActions: 0,
-                totalActions: 0
+                totalActions: 0,
+                foldBBCount: 0,
+                stealFacedBB: 0,
+                foldSBCount: 0,
+                stealFacedSB: 0
             });
         }
         return stalkerState.stalkedPlayers.get(cleanNick);
     }
 
-    async function sendServerEvent(type, payload) {
-        try {
-            await fetch(`${scoutServerUrl}/api/scout_event`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ type: type, payload: payload })
-            });
-        } catch (e) {}
+    // ── ГАРАНТИРОВАННАЯ ДОСТАВКА В ОБЛАКО ─────────────────────────────
+    function queueServerEvent(type, payload) {
+        stalkerState.outboxQueue.push({ type: type, payload: payload, timestamp: Date.now() });
+        processOutboxQueue();
+    }
+
+    let isFlushingQueue = false;
+    async function processOutboxQueue() {
+        if (isFlushingQueue || stalkerState.outboxQueue.length === 0) return;
+        isFlushingQueue = true;
+
+        while (stalkerState.outboxQueue.length > 0) {
+            let item = stalkerState.outboxQueue[0];
+            try {
+                let res = await fetch(`${scoutServerUrl}/api/scout_event`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ type: item.type, payload: item.payload })
+                });
+
+                if (res.ok) {
+                    stalkerState.outboxQueue.shift();
+                    stalkerState.hfStatus = 'Онлайн';
+                } else {
+                    stalkerState.hfStatus = `HTTP ${res.status}`;
+                    break;
+                }
+            } catch (e) {
+                stalkerState.hfStatus = 'Офлайн / Буфер';
+                break;
+            }
+        }
+
+        isFlushingQueue = false;
+        updateHfIndicator();
     }
 
     async function sendHudBatch() {
@@ -108,64 +155,87 @@ javascript:(function(){
                 let vpip = (p.vpipCount / p.handsCount) * 100;
                 let pfr = (p.pfrCount / p.handsCount) * 100;
                 let afq = p.totalActions > 0 ? (p.aggressiveActions / p.totalActions) * 100 : 0;
+                let fold_bb_steal = p.stealFacedBB > 0 ? (p.foldBBCount / p.stealFacedBB) * 100 : 60.0;
+                let fold_sb_steal = p.stealFacedSB > 0 ? (p.foldSBCount / p.stealFacedSB) * 100 : 75.0;
+
                 profiles.push({
                     uuid: `target_${p.cleanNick}`,
                     name: p.cleanNick,
                     hands: p.handsCount,
                     vpip: parseFloat(vpip.toFixed(1)),
                     pfr: parseFloat(pfr.toFixed(1)),
-                    afq: parseFloat(afq.toFixed(1))
+                    afq: parseFloat(afq.toFixed(1)),
+                    fold_bb_steal: parseFloat(fold_bb_steal.toFixed(1)),
+                    fold_sb_steal: parseFloat(fold_sb_steal.toFixed(1))
                 });
             }
         });
 
         if (profiles.length > 0) {
             try {
-                await fetch(`${scoutServerUrl}/api/save_hud_batch`, {
+                let res = await fetch(`${scoutServerUrl}/api/save_hud_batch`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ profiles: profiles })
                 });
-            } catch(e) {}
+                if (res.ok) stalkerState.hfStatus = 'Онлайн';
+            } catch(e) {
+                stalkerState.hfStatus = 'Офлайн / Буфер';
+            }
+            updateHfIndicator();
+        }
+    }
+
+    function updateHfIndicator() {
+        let el = document.getElementById('st-hf-status');
+        if (!el) return;
+        let queueLen = stalkerState.outboxQueue.length;
+        let queueStr = queueLen > 0 ? ` (Буфер: ${queueLen})` : '';
+
+        if (stalkerState.hfStatus === 'Онлайн') {
+            el.innerHTML = `<span style="color:#4ade80;">HF: ● Онлайн${queueStr}</span>`;
+        } else {
+            el.innerHTML = `<span style="color:#f87171;">HF: ○ ${stalkerState.hfStatus}${queueStr}</span>`;
         }
     }
 
     // ── ИНТЕРФЕЙС HUD ────────────────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v17';
-    ui.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);width:94vw;max-width:420px;z-index:999999999;background:rgba(10,15,25,0.97);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #38bdf8;box-shadow:0 12px 40px rgba(0,0,0,0.9);backdrop-filter:blur(10px);box-sizing:border-box;';
+    ui.id = 'stalker-hud-v18';
+    ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:430px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #6366f1;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
-                <span id="st-dot" style="color:#38bdf8;font-size:12px;">🌀</span>
-                <strong style="color:#38bdf8;font-size:12px;" id="st-hud-title">ACTIVE SCOUT v17.4</strong>
+                <span id="st-dot" style="color:#818cf8;font-size:12px;">⚡</span>
+                <strong style="color:#818cf8;font-size:12px;" id="st-hud-title">VIP STALKER PRO v18.1</strong>
+                <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
-                <button id="btn-force-scan" style="background:#0284c7;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 6px;border-radius:4px;">🔄 Скан</button>
-                <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#38bdf8;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v17').remove();window.__pokerStalkerV17Active=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button id="btn-force-scan" style="background:#4f46e5;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
+                <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#818cf8;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
+                <button onclick="document.getElementById('stalker-hud-v18').remove();window.__pokerStalkerV18Pro=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
         <div id="st-hud-body" style="margin-top:8px;">
             <div style="background:#030712;padding:6px 8px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;">
                 <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;">
-                    <span>Авто-краулер: <b id="st-scanner-state" style="color:#38bdf8;">Поиск лобби...</b></span>
-                    <span id="st-scan-status" style="color:#4ade80;">В сети</span>
+                    <span>Краулер: <b id="st-scanner-state" style="color:#38bdf8;">Запуск...</b></span>
+                    <span id="st-scan-status" style="color:#4ade80;">Multi-Socket V18.1</span>
                 </div>
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;margin-top:4px;">
                     <span>Идущих турниров: <b id="st-tourns-count" style="color:#38bdf8;">0</b></span>
-                    <span>Найдено целей: <b id="st-targets-found" style="color:#4ade80;">0 / 31</b></span>
+                    <span>Найдено целей: <b id="st-targets-found" style="color:#4ade80;">0 / 32</b></span>
                 </div>
             </div>
 
-            <div id="st-targets-list" style="max-height:220px;overflow-y:auto;background:#030712;padding:6px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;color:#cbd5e1;">
+            <div id="st-targets-list" style="max-height:230px;overflow-y:auto;background:#030712;padding:6px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;color:#cbd5e1;">
                 Ожидание данных лобби...
             </div>
 
-            <button id="btn-export-db" style="width:100%;padding:7px;background:#6366f1;color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:11px;cursor:pointer;">
-                📥 Экспорт базы данных (JSON)
+            <button id="btn-export-db" style="width:100%;padding:8px;background:#4f46e5;color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:11px;cursor:pointer;box-shadow:0 4px 12px rgba(79,70,229,0.4);">
+                📥 Экспорт полного досье в JSON
             </button>
         </div>
     `;
@@ -215,7 +285,7 @@ javascript:(function(){
                 let vpip = p.handsCount > 0 ? Math.round((p.vpipCount / p.handsCount) * 100) : 0;
                 let pfr = p.handsCount > 0 ? Math.round((p.pfrCount / p.handsCount) * 100) : 0;
                 let afq = p.totalActions > 0 ? Math.round((p.aggressiveActions / p.totalActions) * 100) : 0;
-                let vpipStr = p.handsCount > 0 ? `<small style="color:#c084fc;">[H:${p.handsCount} VPIP:${vpip}% PFR:${pfr}% AFq:${afq}%]</small>` : '';
+                let vpipStr = p.handsCount > 0 ? `<small style="color:#c084fc;">[H:${p.handsCount} V:${vpip}% P:${pfr}% AF:${afq}%]</small>` : '';
 
                 html += `<div style="border-bottom:1px solid #1e293b;padding:4px 0;">
                     <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -264,7 +334,7 @@ javascript:(function(){
 
         stalkerState.isScanningActive = true;
         let st = document.getElementById('st-scanner-state');
-        if (st) st.innerText = `Скан: ${stalkerState.scannerQueue.length} активных`;
+        if (st) st.innerText = `Скан: ${stalkerState.scannerQueue.length} в очереди`;
 
         while (stalkerState.scannerQueue.length > 0) {
             let chunk = stalkerState.scannerQueue.splice(0, 2);
@@ -314,6 +384,11 @@ javascript:(function(){
                 if (text.includes('<TournamentDetails')) {
                     let lvl = getAttr(text, 'currentLevel');
                     if (lvl) currentLevel = parseInt(lvl);
+                    let hsDirect = getAttr(text, 'highStake');
+                    if (hsDirect) {
+                        currentBB = parseInt(hsDirect);
+                        tourn.currentBB = currentBB;
+                    }
                 }
 
                 if (text.includes('<Schedule')) {
@@ -355,8 +430,6 @@ javascript:(function(){
                             let stackBB = currentBB > 0 ? (stack / currentBB) : 0;
 
                             let p = getOrCreatePlayerProfile(cleanNick);
-                            
-                            // УНИКАЛЬНЫЙ СОСТАВНОЙ КЛЮЧ: УСТРАНЯЕТ МИГАНИЕ В ТАБЛИЦЕ
                             let entryKey = `${tournId}_${rawNick}`;
                             let existingEntry = p.entries.get(entryKey);
                             let isNewEntry = !existingEntry;
@@ -377,7 +450,7 @@ javascript:(function(){
                             });
 
                             if (isNewEntry || statusChanged) {
-                                sendServerEvent(isBusted ? "TARGET_PLAYER_BUSTED" : "TARGET_PLAYER_DISCOVERED", {
+                                queueServerEvent(isBusted ? "TARGET_PLAYER_BUSTED" : "TARGET_PLAYER_DISCOVERED", {
                                     uuid: uuid,
                                     name: cleanNick,
                                     raw_nick: rawNick,
@@ -386,7 +459,8 @@ javascript:(function(){
                                     chips: stack,
                                     stack_bb: stackBB,
                                     place: place,
-                                    prize: prize
+                                    prize: prize,
+                                    is_busted: isBusted
                                 });
                             }
 
@@ -438,7 +512,7 @@ javascript:(function(){
             return;
         }
 
-        // 1. Главное лобби (WS#1)
+        // 1. Главное лобби
         if (xml.includes('<Tournaments') || xml.includes('<LobbyInfo') || xml.includes('<ServerInfo')) {
             ws.__socketType = 'LOBBY';
             let firstTime = !stalkerState.sockets.lobby;
@@ -480,7 +554,7 @@ javascript:(function(){
             updateHUD();
         }
 
-        // 3. Контекст стола (WS#3)
+        // 3. Контекст стола
         if (xml.includes('<TableDetails') || xml.includes('<TournamentTable')) {
             let tableId = getAttr(xml, 'id') || getAttr(xml, 'tableId');
             let tournId = getAttr(xml, 'tournamentId');
@@ -563,25 +637,34 @@ javascript:(function(){
             let flopMatch = xml.match(/<DealingFlop><Cards>(.*?)<\/Cards><\/DealingFlop>/);
             if (flopMatch) {
                 tableCtx.street = 'FLOP';
-                tableCtx.board = Array.from(flopMatch[1].matchAll(/<Card[^>]*>([2-9TJQKA][shdc])<\/Card>/g)).map(m => m[1]);
+                tableCtx.board = Array.from(flopMatch[1].matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]);
             }
-            let turnMatch = xml.match(/<DealingTurn><Cards><Card[^>]*>([2-9TJQKA][shdc])<\/Card><\/Cards><\/DealingTurn>/);
+            let turnMatch = xml.match(/<DealingTurn><Cards><Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card><\/Cards><\/DealingTurn>/i);
             if (turnMatch) {
                 tableCtx.street = 'TURN';
-                tableCtx.board.push(turnMatch[1]);
+                tableCtx.board.push(turnMatch[1] + turnMatch[2]);
             }
-            let riverMatch = xml.match(/<DealingRiver><Cards><Card[^>]*>([2-9TJQKA][shdc])<\/Card><\/Cards><\/DealingRiver>/);
+            let riverMatch = xml.match(/<DealingRiver><Cards><Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card><\/Cards><\/DealingRiver>/i);
             if (riverMatch) {
                 tableCtx.street = 'RIVER';
-                tableCtx.board.push(riverMatch[1]);
+                tableCtx.board.push(riverMatch[1] + riverMatch[2]);
             }
 
-            // Действия игроков
+            // Действия игроков с фиксацией в seatActions
             let playerActions = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*>(.*?)<\/PlayerAction>/gs);
             for (let pa of playerActions) {
                 let seatNum = parseInt(pa[1]);
                 let actionBody = pa[2];
                 let seatInfo = tableCtx.seats.get(seatNum);
+
+                let actName = actionBody.includes('<Call') ? 'CALL' :
+                              actionBody.includes('<Raise') ? 'RAISE' :
+                              actionBody.includes('<Bet') ? 'BET' :
+                              actionBody.includes('<Check') ? 'CHECK' :
+                              actionBody.includes('<Fold') ? 'FOLD' :
+                              actionBody.includes('<AllIn') ? 'ALLIN' : 'ACTION';
+                
+                tableCtx.recordAction(seatNum, actName);
 
                 if (seatInfo && TARGET_WATCHLIST.has(seatInfo.cleanNick)) {
                     let p = getOrCreatePlayerProfile(seatInfo.cleanNick);
@@ -608,29 +691,34 @@ javascript:(function(){
                         }
                     } else if (actionBody.includes('<Check') || actionBody.includes('<Fold')) {
                         p.totalActions++;
+                        if (isPreflop && actionBody.includes('<Fold')) {
+                            p.stealFacedBB++;
+                            p.foldBBCount++;
+                        }
                     }
                 }
             }
         }
 
-        // Шоудаун и Muck Leak
+        // Шоудаун и Muck Leak с реальной историей действий
         if (xml.includes('<Show') || xml.includes('<Muck>')) {
             let showMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><(?:Show|Muck)[^>]*><Cards>(.*?)<\/Cards>/g);
             for (let sm of showMatches) {
                 let seatNum = parseInt(sm[1]);
                 let cardsRaw = sm[2];
-                let cards = Array.from(cardsRaw.matchAll(/<Card[^>]*>([2-9TJQKA][shdc])<\/Card>/g)).map(m => m[1]).join(' ');
+                let cards = Array.from(cardsRaw.matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]).join(' ');
                 let seatInfo = tableCtx.seats.get(seatNum);
 
                 if (seatInfo && cards) {
-                    sendServerEvent("HAND_SHOWDOWN_COMPLETED", {
+                    let actionsList = tableCtx.getActionsForSeat(seatNum);
+                    queueServerEvent("HAND_SHOWDOWN_COMPLETED", {
                         hand_number: tableCtx.currentHand || `h_${Date.now()}`,
                         tournament_id: tableCtx.tournId || "MTT",
                         uuid: seatInfo.uuid || `target_${seatInfo.cleanNick}`,
                         name: seatInfo.cleanNick,
                         cards: cards,
                         board: tableCtx.board.join(' '),
-                        actions: ["SHOWDOWN_REVEAL"]
+                        actions: actionsList
                     });
                 }
             }
@@ -639,16 +727,40 @@ javascript:(function(){
 
     setInterval(triggerLobbyTournamentRefresh, 60000);
     setInterval(sendHudBatch, 5000);
+    setInterval(processOutboxQueue, 4000);
 
+    // ── ГИБРИДНЫЙ ЭКСПОРТ ─────────────────────────────────────────────
     document.getElementById('btn-export-db').onclick = async function() {
         try {
-            let res = await fetch(`${scoutServerUrl}/api/get_export_json`);
-            if (!res.ok) throw new Error("HTTP " + res.status);
-            let data = await res.json();
-            let blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            let exportData = {
+                timestamp: new Date().toISOString(),
+                targetsCount: stalkerState.stalkedPlayers.size,
+                liveTournamentsCount: stalkerState.liveTournaments.size,
+                outboxQueueLength: stalkerState.outboxQueue.length,
+                players: {}
+            };
+
+            stalkerState.stalkedPlayers.forEach((p, cleanNick) => {
+                exportData.players[cleanNick] = {
+                    cleanNick: p.cleanNick,
+                    handsCount: p.handsCount,
+                    vpip: p.handsCount > 0 ? parseFloat(((p.vpipCount / p.handsCount) * 100).toFixed(1)) : 0,
+                    pfr: p.handsCount > 0 ? parseFloat(((p.pfrCount / p.handsCount) * 100).toFixed(1)) : 0,
+                    entries: Array.from(p.entries.values())
+                };
+            });
+
+            try {
+                let res = await fetch(`${scoutServerUrl}/api/get_export_json`);
+                if (res.ok) {
+                    exportData.serverBackup = await res.json();
+                }
+            } catch(e) {}
+
+            let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_active_scout_${Date.now()}.json`;
+            a.download = `pokerdom_pro_dossier_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -688,8 +800,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV17) return;
-        ws.__stalkerHookedV17 = true;
+        if (!ws || ws.__stalkerHookedV18) return;
+        ws.__stalkerHookedV18 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -728,5 +840,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🎯 [VIP Scout v17.4 FLICKER-FREE] Полностью готов к работе.");
+    console.log("🎯 [VIP Scout v18.1 PRO EXPLOIT ENGINE] Полностью готов к работе.");
 })();
