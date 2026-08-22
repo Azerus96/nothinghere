@@ -40,7 +40,7 @@ javascript:(function(){
             this.tournId = tournId;
             this.seats = new Map();
             this.seatActions = new Map();
-            this.sittingOutSeats = new Set(); // АФК-игроки
+            this.sittingOutSeats = new Set();
             this.currentHand = null;
             this.board = [];
             this.street = 'PREFLOP';
@@ -124,11 +124,16 @@ javascript:(function(){
         while (stalkerState.outboxQueue.length > 0) {
             let item = stalkerState.outboxQueue[0];
             try {
+                let controller = new AbortController();
+                let timeoutId = setTimeout(() => controller.abort(), 3000); // 3 сек таймаут
+
                 let res = await fetch(`${scoutServerUrl}/api/scout_event`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ type: item.type, payload: item.payload })
+                    body: JSON.stringify({ type: item.type, payload: item.payload }),
+                    signal: controller.signal
                 });
+                clearTimeout(timeoutId);
 
                 if (res.ok) {
                     stalkerState.outboxQueue.shift();
@@ -172,11 +177,17 @@ javascript:(function(){
 
         if (profiles.length > 0) {
             try {
+                let controller = new AbortController();
+                let timeoutId = setTimeout(() => controller.abort(), 3000);
+
                 let res = await fetch(`${scoutServerUrl}/api/save_hud_batch`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ profiles: profiles })
+                    body: JSON.stringify({ profiles: profiles }),
+                    signal: controller.signal
                 });
+                clearTimeout(timeoutId);
+
                 if (res.ok) stalkerState.hfStatus = 'Онлайн';
             } catch(e) {
                 stalkerState.hfStatus = 'Офлайн / Буфер';
@@ -314,12 +325,10 @@ javascript:(function(){
         }
     }
 
-    // ── ФОНОВЫЙ КРАУЛЕР С ФИЛЬТРОМ ТОЛЬКО ХОЛДЕМА ─────────────────────
     function triggerLobbyTournamentRefresh() {
         let lobbyWs = stalkerState.sockets.lobby;
         if (lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
             try {
-                // Запрашиваем только Холдем, исключая Омаху и Ананас
                 lobbyWs.send('<GetTournaments type="REGULAR|GUARANTEED|FREEROLL" tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM|TEXAS_6PLUS" id="99999"/>');
                 let st = document.getElementById('st-scanner-state');
                 if (st) st.innerText = 'Обновление Холдем-сетки...';
@@ -484,7 +493,7 @@ javascript:(function(){
         });
     }
 
-    // ── ОСНОВНОЙ ПАРСЕР ПОТОКА КЛИЕНТА (С ФИЛЬТРОМ ОМАХИ И АФК) ───────
+    // ── ОСНОВНОЙ ПАРСЕР ПОТОКА КЛИЕНТА ───────────────────────────────
     function parseXmlStream(xml, ws, dir = 'IN') {
         if (!xml || typeof xml !== 'string') return;
         xml = xml.trim();
@@ -534,7 +543,6 @@ javascript:(function(){
                 let tStatus = getAttr(attrs, 'status');
                 let tGame = getAttr(attrs, 'game') || '';
 
-                // Жесткий отсев Омахи и Ананаса
                 let isHoldem = tGame.includes('TEXAS_HOLDEM') || tGame.includes('HOLDEM') || (!tGame.includes('OMAHA') && !tGame.includes('PINEAPPLE') && !tName.toLowerCase().includes('омаха') && !tName.toLowerCase().includes('ананас'));
 
                 if (isHoldem && tId && (tStatus === 'RUNNING' || tStatus === 'LATE_REG' || tStatus === 'LATE_REGISTRATION' || tStatus === 'SEATING')) {
@@ -589,7 +597,6 @@ javascript:(function(){
                 let stackM = seatContent.match(/stack-size="([^"]+)"/);
                 let stack = stackM ? parseInt(stackM[1]) : 0;
                 
-                // Проверка АФК / Ситаута
                 let isSittingOut = seatAttrs.includes('sittingOut="true"') || seatContent.includes('sittingOut="true"');
                 if (isSittingOut) {
                     tableCtx.sittingOutSeats.add(seatNum);
@@ -625,7 +632,7 @@ javascript:(function(){
             }
         }
 
-        // Жизненный цикл раздачи (Холдем)
+        // Жизненный цикл раздачи
         if (xml.includes('<Message>') || xml.includes('<GameState')) {
             let hs = getAttr(xml, 'highStake');
             if (hs) tableCtx.currentBB = parseInt(hs);
@@ -641,7 +648,6 @@ javascript:(function(){
                         tableCtx.activeSeatsInHand.add(sId);
                         let seatInfo = tableCtx.seats.get(sId);
                         
-                        // Засчитываем руку ТОЛЬКО если игрок НЕ в АФК/Ситауте!
                         if (seatInfo && TARGET_WATCHLIST.has(seatInfo.cleanNick) && !tableCtx.sittingOutSeats.has(sId)) {
                             getOrCreatePlayerProfile(seatInfo.cleanNick).handsCount++;
                         }
@@ -666,7 +672,7 @@ javascript:(function(){
                 tableCtx.board.push(riverMatch[1] + riverMatch[2]);
             }
 
-            // Действия игроков с разделением ОЛЛ-ИНОВ на Свой Пуш и Колл на стек
+            // Действия игроков с разделением ОЛЛ-ИНОВ
             let playerActions = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*>(.*?)<\/PlayerAction>/gs);
             for (let pa of playerActions) {
                 let seatNum = parseInt(pa[1]);
@@ -678,7 +684,6 @@ javascript:(function(){
                 let actName = 'ACTION';
 
                 if (actionBody.includes('<Call')) {
-                    // Колл под риск вылета (ставка оппонента покрывает стек цели)
                     if (actionAmount >= currentStack && currentStack > 0) {
                         actName = 'CALL_ALLIN'; // Колл на стек!
                     } else {
@@ -688,7 +693,7 @@ javascript:(function(){
                     actName = 'SHOVE_ALLIN'; // Свой пуш!
                 } else if (actionBody.includes('<Raise') || actionBody.includes('<Bet')) {
                     if (actionAmount >= currentStack && currentStack > 0) {
-                        actName = 'SHOVE_ALLIN'; // Пуш через крупный бет/рейз!
+                        actName = 'SHOVE_ALLIN';
                     } else {
                         actName = actionBody.includes('<Raise') ? 'RAISE' : 'BET';
                     }
@@ -700,7 +705,6 @@ javascript:(function(){
 
                 tableCtx.recordAction(seatNum, actName);
 
-                // Статистика игрока (только если не в АФК)
                 if (seatInfo && TARGET_WATCHLIST.has(seatInfo.cleanNick) && !tableCtx.sittingOutSeats.has(seatNum)) {
                     let p = getOrCreatePlayerProfile(seatInfo.cleanNick);
                     let isPreflop = (tableCtx.street === 'PREFLOP');
@@ -735,7 +739,7 @@ javascript:(function(){
             }
         }
 
-        // Шоудаун и Muck Leak (СТРОГО 2 КАРТЫ ХОЛДЕМА)
+        // Шоудаун и Muck Leak
         if (xml.includes('<Show') || xml.includes('<Muck>')) {
             let showMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><(?:Show|Muck)[^>]*><Cards>(.*?)<\/Cards>/g);
             for (let sm of showMatches) {
@@ -743,7 +747,6 @@ javascript:(function(){
                 let cardsRaw = sm[2];
                 let cardsParsed = Array.from(cardsRaw.matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]);
                 
-                // Фильтр: если карт больше 2 (Омаха 4-6 карт), отсекаем раздачу
                 if (cardsParsed.length === 2) {
                     let cards = cardsParsed.join(' ');
                     let seatInfo = tableCtx.seats.get(seatNum);
@@ -769,7 +772,7 @@ javascript:(function(){
     setInterval(sendHudBatch, 5000);
     setInterval(processOutboxQueue, 4000);
 
-    // ── ГИБРИДНЫЙ ЭКСПОРТ ─────────────────────────────────────────────
+    // ── МГНОВЕННЫЙ ЭКСПОРТ (0.1 СЕКУНДЫ) ─────────────────────────────
     document.getElementById('btn-export-db').onclick = async function() {
         try {
             let exportData = {
@@ -791,8 +794,13 @@ javascript:(function(){
                 };
             });
 
+            // Мгновенный таймаут на 1.5 секунды, чтобы не висеть 7 минут
             try {
-                let res = await fetch(`${scoutServerUrl}/api/get_export_json`);
+                let controller = new AbortController();
+                let timeoutId = setTimeout(() => controller.abort(), 1500);
+
+                let res = await fetch(`${scoutServerUrl}/api/get_export_json`, { signal: controller.signal });
+                clearTimeout(timeoutId);
                 if (res.ok) {
                     exportData.serverBackup = await res.json();
                 }
