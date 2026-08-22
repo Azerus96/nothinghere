@@ -1,9 +1,9 @@
 javascript:(function(){
-    if (window.__pokerStalkerV18Pro) {
-        alert('🎯 VIP Stalker v18.5 PRO (HOLD\'EM ONLY) уже запущен!');
+    if (window.__pokerStalkerV19Ultra) {
+        alert('🎯 VIP Stalker v19.0 ULTRA RAW TELEMETRY уже запущен!');
         return;
     }
-    window.__pokerStalkerV18Pro = true;
+    window.__pokerStalkerV19Ultra = true;
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
 
@@ -34,34 +34,124 @@ javascript:(function(){
         isScanningActive: false
     };
 
+    function autoDetectSessionId() {
+        if (stalkerState.auth.sessionId) return stalkerState.auth.sessionId;
+        try {
+            for (let storage of [sessionStorage, localStorage]) {
+                for (let i = 0; i < storage.length; i++) {
+                    let k = storage.key(i);
+                    let v = storage.getItem(k);
+                    if (v && typeof v === 'string' && /^[a-f0-9]{16}-[a-f0-9]{16}$/i.test(v.trim())) {
+                        stalkerState.auth.sessionId = v.trim();
+                        return stalkerState.auth.sessionId;
+                    }
+                }
+            }
+        } catch(e) {}
+        return null;
+    }
+    autoDetectSessionId();
+
+    // Расчет точных покерных позиций (BTN, SB, BB, UTG, CO...)
+    function calculatePositions(activeSeatsList, dealerSeatNum) {
+        let seats = [...activeSeatsList].sort((a, b) => a - b);
+        let n = seats.length;
+        if (n === 0) return {};
+        let dIdx = seats.indexOf(dealerSeatNum);
+        if (dIdx === -1) dIdx = 0;
+
+        let ordered = [];
+        for (let i = 0; i < n; i++) {
+            ordered.push(seats[(dIdx + i) % n]);
+        }
+
+        let posMap = {};
+        if (n === 2) {
+            posMap[ordered[0]] = 'BTN/SB';
+            posMap[ordered[1]] = 'BB';
+        } else if (n === 3) {
+            posMap[ordered[0]] = 'BTN';
+            posMap[ordered[1]] = 'SB';
+            posMap[ordered[2]] = 'BB';
+        } else {
+            posMap[ordered[0]] = 'BTN';
+            posMap[ordered[1]] = 'SB';
+            posMap[ordered[2]] = 'BB';
+            let remaining = n - 3;
+            let standardPos = ['UTG', 'UTG+1', 'MP', 'LJ', 'HJ', 'CO'];
+            for (let i = 0; i < remaining; i++) {
+                let seat = ordered[3 + i];
+                if (i === remaining - 1) {
+                    posMap[seat] = 'CO';
+                } else if (i < standardPos.length) {
+                    posMap[seat] = standardPos[i];
+                } else {
+                    posMap[seat] = `MP+${i}`;
+                }
+            }
+        }
+        return posMap;
+    }
+
     class TableContext {
         constructor(tableId, tournId = null) {
             this.tableId = tableId;
             this.tournId = tournId;
-            this.seats = new Map();
-            this.seatActions = new Map();
+            this.seats = new Map(); // seatNum -> { rawNick, cleanNick, uuid, stack, stackStart }
+            this.seatActions = new Map(); // seatNum -> Array of action records
             this.sittingOutSeats = new Set();
             this.currentHand = null;
             this.board = [];
             this.street = 'PREFLOP';
+            this.dealerSeat = 0;
+            this.currentSB = 250;
             this.currentBB = 500;
+            this.currentAnte = 0;
+            this.potTotal = 0;
+            this.potOnFlop = 0;
+            this.potOnTurn = 0;
+            this.potOnRiver = 0;
+            this.playersOnFlop = 0;
+            this.playersOnRiver = 0;
             this.activeSeatsInHand = new Set();
+            this.positionsMap = {};
             this.playersActedThisHand = new Set();
         }
 
-        resetHand(handNumber) {
+        resetHand(handNumber, dealerSeat) {
             this.currentHand = handNumber;
+            this.dealerSeat = dealerSeat || 0;
             this.board = [];
             this.street = 'PREFLOP';
+            this.potTotal = 0;
+            this.potOnFlop = 0;
+            this.potOnTurn = 0;
+            this.potOnRiver = 0;
+            this.playersOnFlop = 0;
+            this.playersOnRiver = 0;
             this.activeSeatsInHand.clear();
             this.playersActedThisHand.clear();
             this.seatActions.clear();
+
+            // Сохраняем начальные стеки игроков на начало руки
+            this.seats.forEach(s => {
+                s.stackStart = s.stack || 0;
+            });
         }
 
-        recordAction(seatId, actionName) {
+        recordAction(seatId, actionType, amount = 0) {
+            let potBefore = this.potTotal;
+            let potPct = potBefore > 0 && amount > 0 ? Math.round((amount / potBefore) * 100) : 0;
+            let pctStr = potPct > 0 ? `(${potPct}%pot)` : '';
+            let amtStr = amount > 0 ? `:${amount}${pctStr}` : '';
+
             let list = this.seatActions.get(seatId) || [];
-            list.push(`${this.street}_${actionName}`);
+            list.push(`${this.street}_${actionType}${amtStr}`);
             this.seatActions.set(seatId, list);
+
+            if (amount > 0) {
+                this.potTotal += amount;
+            }
         }
 
         getActionsForSeat(seatId) {
@@ -110,7 +200,7 @@ javascript:(function(){
         return stalkerState.stalkedPlayers.get(cleanNick);
     }
 
-    // ── ГАРАНТИРОВАННАЯ ДОСТАВКА В ОБЛАКО ─────────────────────────────
+    // ── ГАРАНТИРОВАННАЯ ДОСТАВКА В ОБЛАКО (/SCOUT_API/) ───────────────
     function queueServerEvent(type, payload) {
         stalkerState.outboxQueue.push({ type: type, payload: payload, timestamp: Date.now() });
         processOutboxQueue();
@@ -125,9 +215,9 @@ javascript:(function(){
             let item = stalkerState.outboxQueue[0];
             try {
                 let controller = new AbortController();
-                let timeoutId = setTimeout(() => controller.abort(), 3000); // 3 сек таймаут
+                let timeoutId = setTimeout(() => controller.abort(), 3000);
 
-                let res = await fetch(`${scoutServerUrl}/api/scout_event`, {
+                let res = await fetch(`${scoutServerUrl}/scout_api/event`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ type: item.type, payload: item.payload }),
@@ -180,7 +270,7 @@ javascript:(function(){
                 let controller = new AbortController();
                 let timeoutId = setTimeout(() => controller.abort(), 3000);
 
-                let res = await fetch(`${scoutServerUrl}/api/save_hud_batch`, {
+                let res = await fetch(`${scoutServerUrl}/scout_api/hud_batch`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ profiles: profiles }),
@@ -211,20 +301,20 @@ javascript:(function(){
 
     // ── ИНТЕРФЕЙС HUD ────────────────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v18';
+    ui.id = 'stalker-hud-v19';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:430px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #6366f1;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="st-dot" style="color:#818cf8;font-size:12px;">⚡</span>
-                <strong style="color:#818cf8;font-size:12px;" id="st-hud-title">VIP STALKER v18.5 [HOLDEM]</strong>
+                <strong style="color:#818cf8;font-size:12px;" id="st-hud-title">VIP STALKER v19.0 ULTRA</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#4f46e5;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#818cf8;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v18').remove();window.__pokerStalkerV18Pro=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v19').remove();window.__pokerStalkerV19Ultra=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
@@ -232,7 +322,7 @@ javascript:(function(){
             <div style="background:#030712;padding:6px 8px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;">
                 <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;">
                     <span>Краулер: <b id="st-scanner-state" style="color:#38bdf8;">Запуск...</b></span>
-                    <span id="st-scan-status" style="color:#4ade80;">Холдем-Фильтр V18.5</span>
+                    <span id="st-scan-status" style="color:#4ade80;">Ultra-Telemetry V19</span>
                 </div>
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;margin-top:4px;">
                     <span>Холдем-турниров: <b id="st-tourns-count" style="color:#38bdf8;">0</b></span>
@@ -265,6 +355,7 @@ javascript:(function(){
     };
 
     document.getElementById('btn-force-scan').onclick = function() {
+        autoDetectSessionId();
         stalkerState.liveTournaments.forEach((t, tId) => {
             if (!stalkerState.scannerQueue.includes(tId)) {
                 stalkerState.scannerQueue.push(tId);
@@ -325,6 +416,7 @@ javascript:(function(){
         }
     }
 
+    // ── ФОНОВЫЙ КРАУЛЕР ──────────────────────────────────────────────
     function triggerLobbyTournamentRefresh() {
         let lobbyWs = stalkerState.sockets.lobby;
         if (lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
@@ -340,6 +432,7 @@ javascript:(function(){
 
     async function processScannerQueue() {
         if (stalkerState.isScanningActive || stalkerState.scannerQueue.length === 0) return;
+        autoDetectSessionId();
         if (!stalkerState.auth.sessionId || !stalkerState.auth.wssUrl) return;
 
         stalkerState.isScanningActive = true;
@@ -347,10 +440,10 @@ javascript:(function(){
         if (st) st.innerText = `Скан: ${stalkerState.scannerQueue.length} в очереди`;
 
         while (stalkerState.scannerQueue.length > 0) {
-            let chunk = stalkerState.scannerQueue.splice(0, 2);
-            await Promise.all(chunk.map(tId => scanSingleTournamentBackground(tId)));
+            let tId = stalkerState.scannerQueue.shift();
+            await scanSingleTournamentBackground(tId);
             if (st) st.innerText = `Осталось: ${stalkerState.scannerQueue.length}`;
-            await sleep(150);
+            await sleep(350);
         }
 
         stalkerState.isScanningActive = false;
@@ -362,7 +455,7 @@ javascript:(function(){
         return new Promise((resolve) => {
             let tourn = stalkerState.liveTournaments.get(tournId);
             let wsUrl = stalkerState.auth.wssUrl;
-            let sid = stalkerState.auth.sessionId;
+            let sid = stalkerState.auth.sessionId || autoDetectSessionId();
             if (!tourn || !wsUrl || !sid) return resolve();
 
             let bgWs = new OrigWS(wsUrl);
@@ -379,7 +472,7 @@ javascript:(function(){
                 }
             }
 
-            setTimeout(cleanup, 7000);
+            setTimeout(cleanup, 6000);
 
             bgWs.onopen = function() {
                 bgWs.send(`<EnterTournamentLobby id="${tournId}" sessionId="${sid}" client="html5mobile" clientFace="pokerdom" clientVersion="${stalkerState.auth.clientVersion}"/>`);
@@ -414,6 +507,9 @@ javascript:(function(){
 
                 if (levelMap.has(currentLevel)) {
                     currentBB = levelMap.get(currentLevel);
+                    tourn.currentBB = currentBB;
+                } else if (levelMap.has(1) && currentBB === 500) {
+                    currentBB = levelMap.get(1);
                     tourn.currentBB = currentBB;
                 }
 
@@ -493,7 +589,7 @@ javascript:(function(){
         });
     }
 
-    // ── ОСНОВНОЙ ПАРСЕР ПОТОКА КЛИЕНТА ───────────────────────────────
+    // ── ОСНОВНОЙ ПАРСЕР ПОТОКА КЛИЕНТА (С ПОЛНОЙ ТЕЛЕМЕТРИЕЙ) ─────────
     function parseXmlStream(xml, ws, dir = 'IN') {
         if (!xml || typeof xml !== 'string') return;
         xml = xml.trim();
@@ -507,6 +603,9 @@ javascript:(function(){
                 triggerLobbyTournamentRefresh();
             }
         }
+
+        let versMatch = xml.match(/\bclientVersion="([^"]+)"/);
+        if (versMatch) stalkerState.auth.clientVersion = versMatch[1];
 
         if (dir === 'OUT') {
             if (xml.includes('<EnterTable')) {
@@ -527,6 +626,7 @@ javascript:(function(){
             ws.__socketType = 'LOBBY';
             let firstTime = !stalkerState.sockets.lobby;
             stalkerState.sockets.lobby = ws;
+            autoDetectSessionId();
             if (firstTime && stalkerState.auth.sessionId) {
                 triggerLobbyTournamentRefresh();
             }
@@ -610,7 +710,8 @@ javascript:(function(){
                         rawNick: rawNick,
                         cleanNick: cleanNick,
                         uuid: uuid || `u_${cleanNick}`,
-                        stack: stack
+                        stack: stack,
+                        stackStart: stack
                     });
 
                     if (TARGET_WATCHLIST.has(cleanNick)) {
@@ -632,14 +733,19 @@ javascript:(function(){
             }
         }
 
-        // Жизненный цикл раздачи
+        // Жизненный цикл раздачи (Полная поуличная телеметрия)
         if (xml.includes('<Message>') || xml.includes('<GameState')) {
             let hs = getAttr(xml, 'highStake');
             if (hs) tableCtx.currentBB = parseInt(hs);
+            let ls = getAttr(xml, 'lowStake');
+            if (ls) tableCtx.currentSB = parseInt(ls);
 
+            // Старт новой раздачи
             let newHandMatch = xml.match(/<NewHand\s+[^>]*\bnumber="(\d+)"/);
             if (newHandMatch) {
-                tableCtx.resetHand(newHandMatch[1]);
+                let dealerSeat = parseInt(getAttr(newHandMatch[0], 'dealer') || '0');
+                tableCtx.resetHand(newHandMatch[1], dealerSeat);
+
                 let activeSeatsMatch = xml.match(/<ActiveSeats>(.*?)<\/ActiveSeats>/);
                 if (activeSeatsMatch) {
                     let seatsM = activeSeatsMatch[1].matchAll(/<Seat\s+id="(\d+)"/g);
@@ -652,27 +758,64 @@ javascript:(function(){
                             getOrCreatePlayerProfile(seatInfo.cleanNick).handsCount++;
                         }
                     }
+
+                    // Вычисляем точные покерные позиции каждого игрока за столом
+                    tableCtx.positionsMap = calculatePositions(Array.from(tableCtx.activeSeatsInHand), dealerSeat);
                 }
             }
 
-            // Борд
+            // Постинг анте и блайндов (Точный расчет ББ)
+            let anteMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><PostAnte\s+amount="(\d+)"/g);
+            for (let am of anteMatches) {
+                let amt = parseInt(am[2]);
+                tableCtx.currentAnte = amt;
+                tableCtx.potTotal += amt;
+            }
+
+            let sbMatch = xml.match(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><PostSmallBlind\s+amount="(\d+)"/);
+            if (sbMatch) {
+                let amt = parseInt(sbMatch[2]);
+                tableCtx.currentSB = amt;
+                tableCtx.potTotal += amt;
+            }
+
+            let bbMatch = xml.match(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><PostBigBlind\s+amount="(\d+)"/);
+            if (bbMatch) {
+                let amt = parseInt(bbMatch[2]);
+                tableCtx.currentBB = amt; // 100% точный ББ стола!
+                tableCtx.potTotal += amt;
+                if (tableCtx.tournId && stalkerState.liveTournaments.has(tableCtx.tournId)) {
+                    stalkerState.liveTournaments.get(tableCtx.tournId).currentBB = amt;
+                }
+            }
+
+            // Флоп
             let flopMatch = xml.match(/<DealingFlop><Cards>(.*?)<\/Cards><\/DealingFlop>/);
             if (flopMatch) {
                 tableCtx.street = 'FLOP';
                 tableCtx.board = Array.from(flopMatch[1].matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]);
+                tableCtx.potOnFlop = tableCtx.potTotal;
+                tableCtx.playersOnFlop = tableCtx.activeSeatsInHand.size;
             }
+
+            // Терн
             let turnMatch = xml.match(/<DealingTurn><Cards><Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card><\/Cards><\/DealingTurn>/i);
             if (turnMatch) {
                 tableCtx.street = 'TURN';
                 tableCtx.board.push(turnMatch[1] + turnMatch[2]);
+                tableCtx.potOnTurn = tableCtx.potTotal;
             }
+
+            // Ривер
             let riverMatch = xml.match(/<DealingRiver><Cards><Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card><\/Cards><\/DealingRiver>/i);
             if (riverMatch) {
                 tableCtx.street = 'RIVER';
                 tableCtx.board.push(riverMatch[1] + riverMatch[2]);
+                tableCtx.potOnRiver = tableCtx.potTotal;
+                tableCtx.playersOnRiver = tableCtx.activeSeatsInHand.size;
             }
 
-            // Действия игроков с разделением ОЛЛ-ИНОВ
+            // Действия игроков с точным учетом сайзинга и пота
             let playerActions = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*>(.*?)<\/PlayerAction>/gs);
             for (let pa of playerActions) {
                 let seatNum = parseInt(pa[1]);
@@ -685,25 +828,30 @@ javascript:(function(){
 
                 if (actionBody.includes('<Call')) {
                     if (actionAmount >= currentStack && currentStack > 0) {
-                        actName = 'CALL_ALLIN'; // Колл на стек!
+                        actName = 'CALL_ALLIN';
                     } else {
                         actName = 'CALL';
                     }
+                    if (seatInfo) seatInfo.stack = Math.max(0, currentStack - actionAmount);
                 } else if (actionBody.includes('<AllIn')) {
-                    actName = 'SHOVE_ALLIN'; // Свой пуш!
+                    actName = 'SHOVE_ALLIN';
+                    if (seatInfo) seatInfo.stack = 0;
                 } else if (actionBody.includes('<Raise') || actionBody.includes('<Bet')) {
                     if (actionAmount >= currentStack && currentStack > 0) {
                         actName = 'SHOVE_ALLIN';
+                        if (seatInfo) seatInfo.stack = 0;
                     } else {
                         actName = actionBody.includes('<Raise') ? 'RAISE' : 'BET';
+                        if (seatInfo) seatInfo.stack = Math.max(0, currentStack - actionAmount);
                     }
                 } else if (actionBody.includes('<Check')) {
                     actName = 'CHECK';
                 } else if (actionBody.includes('<Fold')) {
                     actName = 'FOLD';
+                    tableCtx.activeSeatsInHand.delete(seatNum);
                 }
 
-                tableCtx.recordAction(seatNum, actName);
+                tableCtx.recordAction(seatNum, actName, actionAmount);
 
                 if (seatInfo && TARGET_WATCHLIST.has(seatInfo.cleanNick) && !tableCtx.sittingOutSeats.has(seatNum)) {
                     let p = getOrCreatePlayerProfile(seatInfo.cleanNick);
@@ -739,7 +887,7 @@ javascript:(function(){
             }
         }
 
-        // Шоудаун и Muck Leak
+        // Шоудаун и Muck Leak с полной гранулярной телеметрией
         if (xml.includes('<Show') || xml.includes('<Muck>')) {
             let showMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><(?:Show|Muck)[^>]*><Cards>(.*?)<\/Cards>/g);
             for (let sm of showMatches) {
@@ -753,14 +901,29 @@ javascript:(function(){
 
                     if (seatInfo) {
                         let actionsList = tableCtx.getActionsForSeat(seatNum);
+                        let position = tableCtx.positionsMap[seatNum] || 'N/A';
+                        let stackStart = seatInfo.stackStart || seatInfo.stack || 0;
+                        let stackBB = tableCtx.currentBB > 0 ? (stackStart / tableCtx.currentBB) : 0;
+                        let isMuckLeak = sm[0].includes('<Muck');
+
                         queueServerEvent("HAND_SHOWDOWN_COMPLETED", {
                             hand_number: tableCtx.currentHand || `h_${Date.now()}`,
                             tournament_id: tableCtx.tournId || "MTT",
+                            tournament_name: tableCtx.tournId && stalkerState.liveTournaments.has(tableCtx.tournId) ? stalkerState.liveTournaments.get(tableCtx.tournId).name : 'MTT',
                             uuid: seatInfo.uuid || `target_${seatInfo.cleanNick}`,
                             name: seatInfo.cleanNick,
+                            position: position,
+                            stack_start: stackStart,
+                            stack_bb: parseFloat(stackBB.toFixed(1)),
+                            sb_level: tableCtx.currentSB,
+                            bb_level: tableCtx.currentBB,
+                            pot_total: tableCtx.potTotal,
+                            players_on_flop: tableCtx.playersOnFlop,
+                            players_on_river: tableCtx.playersOnRiver,
                             cards: cards,
                             board: tableCtx.board.join(' '),
-                            actions: actionsList
+                            actions: actionsList,
+                            is_muck_leak: isMuckLeak ? 1 : 0
                         });
                     }
                 }
@@ -794,12 +957,11 @@ javascript:(function(){
                 };
             });
 
-            // Мгновенный таймаут на 1.5 секунды, чтобы не висеть 7 минут
             try {
                 let controller = new AbortController();
                 let timeoutId = setTimeout(() => controller.abort(), 1500);
 
-                let res = await fetch(`${scoutServerUrl}/api/get_export_json`, { signal: controller.signal });
+                let res = await fetch(`${scoutServerUrl}/scout_api/export`, { signal: controller.signal });
                 clearTimeout(timeoutId);
                 if (res.ok) {
                     exportData.serverBackup = await res.json();
@@ -809,7 +971,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_holdem_dossier_${Date.now()}.json`;
+            a.download = `pokerdom_ultra_dossier_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -849,8 +1011,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV18) return;
-        ws.__stalkerHookedV18 = true;
+        if (!ws || ws.__stalkerHookedV19) return;
+        ws.__stalkerHookedV19 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -889,5 +1051,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🎯 [VIP Scout v18.5 PRO HOLD'EM ONLY] Полностью готов к работе.");
+    console.log("🎯 [VIP Scout v19.0 ULTRA RAW TELEMETRY] Готов к работе.");
 })();
