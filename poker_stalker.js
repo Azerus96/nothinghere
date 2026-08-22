@@ -1,12 +1,12 @@
 javascript:(function(){
     if (window.__pokerStalkerV20Headless) {
-        alert('🎯 VIP Stalker v20.0 HEADLESS AUTO-SPECTATOR уже запущен!');
+        alert('🎯 VIP Stalker v20.1 FULL DOSSIER уже запущен!');
         return;
     }
     window.__pokerStalkerV20Headless = true;
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
-    const MAX_BACKGROUND_TABLES = 10; // Держим до 10 столов целей в невидимом фоне
+    const MAX_BACKGROUND_TABLES = 10;
 
     const TARGET_WATCHLIST = new Set([
         "vesnushka", "bagzik", "nogano777", "dostigatel", "bankiir", 
@@ -23,11 +23,12 @@ javascript:(function(){
         hfStatus: 'Проверка...',
         userViewingTournId: null,
         outboxQueue: [],
+        completedHandsArchive: [], // Локальный архив всех перехваченных раздач с банками и позициями!
         auth: { sessionId: null, wssUrl: null, clientVersion: "71.0.138" },
         sockets: { lobby: null, tables: new Map() },
         liveTournaments: new Map(),
-        discoveredTargetTables: new Map(), // tableId -> { tournId, targetNick, stack }
-        backgroundTableSockets: new Map(),  // tableId -> ws
+        discoveredTargetTables: new Map(),
+        backgroundTableSockets: new Map(),
         activeTables: new Map(),
         stalkedPlayers: new Map(),
         scannerQueue: [],
@@ -186,9 +187,16 @@ javascript:(function(){
         return stalkerState.stalkedPlayers.get(cleanNick);
     }
 
-    // ── СЕТЕВОЙ МОСТ /SCOUT_API/ (ГАРАНТИРОВАННАЯ ДОСТАВКА) ─────────────
+    // ── ГАРАНТИРОВАННАЯ ДОСТАВКА В ОБЛАКО ─────────────────────────────
     function queueServerEvent(type, payload) {
-        stalkerState.outboxQueue.push({ type: type, payload: payload, timestamp: Date.now() });
+        let eventObj = { type: type, payload: payload, timestamp: Date.now() };
+        stalkerState.outboxQueue.push(eventObj);
+        
+        // Если это сыгранная раздача со всеми данными — сохраняем её в локальный архив для JSON!
+        if (type === "HAND_SHOWDOWN_COMPLETED") {
+            stalkerState.completedHandsArchive.push(payload);
+        }
+
         processOutboxQueue();
     }
 
@@ -294,7 +302,7 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="st-dot" style="color:#a78bfa;font-size:12px;">👁️</span>
-                <strong style="color:#a78bfa;font-size:12px;" id="st-hud-title">AUTO-SPECTATOR v20.0</strong>
+                <strong style="color:#a78bfa;font-size:12px;" id="st-hud-title">AUTO-SPECTATOR v20.1</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
@@ -321,7 +329,7 @@ javascript:(function(){
             </div>
 
             <button id="btn-export-db" style="width:100%;padding:8px;background:#7c3aed;color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:11px;cursor:pointer;box-shadow:0 4px 12px rgba(124,58,237,0.4);">
-                📥 Экспорт полного досье в JSON
+                📥 Экспорт полного досье + РАЗДАЧ в JSON
             </button>
         </div>
     `;
@@ -410,7 +418,7 @@ javascript:(function(){
         let wsUrl = stalkerState.auth.wssUrl;
         if (!sid || !wsUrl) return;
 
-        // 1. Очищаем столы, где цель уже выбыла
+        // 1. Очищаем сокеты столов, где цель выбыла
         for (let [tableId, ws] of stalkerState.backgroundTableSockets.entries()) {
             let tableCtx = stalkerState.activeTables.get(tableId);
             let hasActiveTarget = false;
@@ -426,10 +434,11 @@ javascript:(function(){
             }
         }
 
-        // 2. Открываем новые невидимые сокеты столов для найденных целей
+        // 2. Открываем новые невидимые сокеты столов
         for (let [tableId, tInfo] of stalkerState.discoveredTargetTables.entries()) {
             if (stalkerState.backgroundTableSockets.size >= MAX_BACKGROUND_TABLES) break;
             if (stalkerState.backgroundTableSockets.has(tableId)) continue;
+            if (tInfo.tournId === stalkerState.userViewingTournId) continue; // Анти-коллизия
 
             let tableWs = new OrigWS(wsUrl);
             stalkerState.backgroundTableSockets.set(tableId, tableWs);
@@ -460,7 +469,7 @@ javascript:(function(){
         }
         updateHUD();
     }
-    setInterval(manageBackgroundSpectatorPool, 4000); // Проверка пула каждые 4 сек
+    setInterval(manageBackgroundSpectatorPool, 4000);
 
     // ── ФОНОВЫЙ КРАУЛЕР ТУРНИРОВ ──────────────────────────────────────
     function triggerLobbyTournamentRefresh() {
@@ -483,7 +492,7 @@ javascript:(function(){
 
         while (stalkerState.scannerQueue.length > 0) {
             let tId = stalkerState.scannerQueue.shift();
-            if (tId === stalkerState.userViewingTournId) continue; // Защита от коллизии
+            if (tId === stalkerState.userViewingTournId) continue;
 
             await scanSingleTournamentBackground(tId);
             await sleep(350);
@@ -576,7 +585,6 @@ javascript:(function(){
                             let isBusted = (place > 0);
                             let stackBB = currentBB > 0 ? (stack / currentBB) : 0;
 
-                            // Запоминаем ID стола цели для авто-спектатора!
                             if (tableId && stack > 0 && !isBusted) {
                                 stalkerState.discoveredTargetTables.set(tableId, {
                                     tournId: tournId,
@@ -950,7 +958,7 @@ javascript:(function(){
                         let stackBB = tableCtx.currentBB > 0 ? (stackStart / tableCtx.currentBB) : 0;
                         let isMuckLeak = sm[0].includes('<Muck');
 
-                        queueServerEvent("HAND_SHOWDOWN_COMPLETED", {
+                        let handPayload = {
                             hand_number: tableCtx.currentHand || `h_${Date.now()}`,
                             tournament_id: tableCtx.tournId || "MTT",
                             tournament_name: tableCtx.tournId && stalkerState.liveTournaments.has(tableCtx.tournId) ? stalkerState.liveTournaments.get(tableCtx.tournId).name : 'MTT',
@@ -968,7 +976,9 @@ javascript:(function(){
                             board: tableCtx.board.join(' '),
                             actions: actionsList,
                             is_muck_leak: isMuckLeak ? 1 : 0
-                        });
+                        };
+
+                        queueServerEvent("HAND_SHOWDOWN_COMPLETED", handPayload);
                     }
                 }
             }
@@ -979,7 +989,7 @@ javascript:(function(){
     setInterval(sendHudBatch, 5000);
     setInterval(processOutboxQueue, 4000);
 
-    // ── МГНОВЕННЫЙ ЭКСПОРТ (0.1 СЕКУНДЫ) ─────────────────────────────
+    // ── МГНОВЕННЫЙ ЭКСПОРТ (С ПОЛНЫМ ДАМПОМ ВСЕХ РАЗДАЧ В JSON) ───────
     document.getElementById('btn-export-db').onclick = async function() {
         try {
             let exportData = {
@@ -988,6 +998,7 @@ javascript:(function(){
                 targetsCount: stalkerState.stalkedPlayers.size,
                 liveTournamentsCount: stalkerState.liveTournaments.size,
                 outboxQueueLength: stalkerState.outboxQueue.length,
+                recorded_showdowns_and_hands: stalkerState.completedHandsArchive, // ВСЕ РАЗДАЧИ С БАНКАМИ И КАРТАМИ!
                 players: {}
             };
 
@@ -1015,7 +1026,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_auto_spectator_${Date.now()}.json`;
+            a.download = `pokerdom_full_dossier_with_hands_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1095,5 +1106,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🎯 [VIP Scout v20.0 HEADLESS AUTO-SPECTATOR] Полностью готов к работе.");
+    console.log("🎯 [VIP Scout v20.1 FULL DOSSIER] Готов к работе.");
 })();
