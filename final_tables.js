@@ -1,13 +1,19 @@
 javascript:(function(){
-    if (window.__pokerLiveBBRecorderV22) {
-        alert('🎯 LIVE BB HUD v22.1 (SYNC FIXED) уже активен!');
+    if (window.__pokerLiveBBRecorderV23) {
+        alert('🎯 LIVE BB HUD v23.0 уже активен!');
         return;
     }
-    window.__pokerLiveBBRecorderV22 = true;
+    window.__pokerLiveBBRecorderV23 = true;
+
+    const STORAGE_KEY = '__poker_hands_archive_v23';
+    let savedHands = [];
+    try {
+        savedHands = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+    } catch(e) { savedHands = []; }
 
     const ftState = {
         isCollapsed: false,
-        handsArchive: [],
+        handsArchive: savedHands,
         activeTables: new Map()
     };
 
@@ -203,6 +209,9 @@ javascript:(function(){
             let alreadyExists = ftState.handsArchive.some(h => h.hand_number === this.currentHand && h.table_id === this.tableId);
             if (!alreadyExists) {
                 ftState.handsArchive.push(fullHandObject);
+                try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(ftState.handsArchive));
+                } catch(e) {}
                 updateFTUI();
             }
         }
@@ -217,22 +226,23 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="ft-dot" style="color:#22c55e;font-size:12px;">●</span>
-                <strong style="color:#22c55e;font-size:12px;">LIVE BB HUD v22.1 PRO</strong>
+                <strong style="color:#22c55e;font-size:12px;">LIVE BB HUD v23.0 PRO</strong>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-toggle-ft" style="background:transparent;border:1px solid #475569;color:#22c55e;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('ft-recorder-hud').remove();window.__pokerLiveBBRecorderV22=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('ft-recorder-hud').remove();window.__pokerLiveBBRecorderV23=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
         <div id="ft-hud-body" style="margin-top:8px;">
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;background:#030712;padding:5px 8px;border-radius:6px;border:1px solid #1e293b;margin-bottom:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#94a3b8;background:#030712;padding:5px 8px;border-radius:6px;border:1px solid #1e293b;margin-bottom:6px;">
                 <span>Столов: <b id="ft-tables-count" style="color:#38bdf8;">0</b></span>
-                <span>Записано раздач: <b id="ft-hands-count" style="color:#22c55e;">0</b></span>
+                <span>Записано: <b id="ft-hands-count" style="color:#22c55e;">${ftState.handsArchive.length}</b></span>
+                <button id="btn-clear-ft" style="background:#334155;border:none;color:#cbd5e1;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:9.5px;">Сброс</button>
             </div>
 
             <div id="ft-live-tables" style="max-height:260px;overflow-y:auto;margin-bottom:8px;">
-                <div style="color:#94a3b8;font-size:10px;text-align:center;padding:8px;">Ожидание активных столов...</div>
+                <div style="color:#94a3b8;font-size:10px;text-align:center;padding:8px;">Ожидание раздач...</div>
             </div>
 
             <button id="btn-export-ft-json" style="width:100%;padding:8px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:11px;cursor:pointer;">
@@ -255,6 +265,14 @@ javascript:(function(){
         }
     };
 
+    document.getElementById('btn-clear-ft').onclick = function() {
+        if (confirm('Очистить сохраненные раздачи?')) {
+            ftState.handsArchive = [];
+            localStorage.removeItem(STORAGE_KEY);
+            updateFTUI();
+        }
+    };
+
     function updateFTUI() {
         let handsEl = document.getElementById('ft-hands-count');
         let tablesEl = document.getElementById('ft-tables-count');
@@ -265,7 +283,7 @@ javascript:(function(){
         tablesEl.innerText = ftState.activeTables.size;
 
         if (ftState.activeTables.size === 0) {
-            liveEl.innerHTML = `<div style="color:#94a3b8;font-size:10px;text-align:center;padding:8px;">Ожидание столов...</div>`;
+            liveEl.innerHTML = `<div style="color:#94a3b8;font-size:10px;text-align:center;padding:8px;">Ожидание активных раздач...</div>`;
             return;
         }
 
@@ -308,7 +326,7 @@ javascript:(function(){
     document.getElementById('btn-export-ft-json').onclick = function() {
         try {
             let exportData = {
-                recorder_version: "v22.1_LIVE_BB_RECORDER",
+                recorder_version: "v23.0_LIVE_BB_RECORDER",
                 export_time: new Date().toISOString(),
                 total_hands_recorded: ftState.handsArchive.length,
                 recorded_hands: ftState.handsArchive
@@ -325,19 +343,19 @@ javascript:(function(){
         }
     };
 
-    // ── СТРОГИЙ ПАРСЕР XML СОКЕТОВ (БЕЗ ФАНТОМОВ) ────────────────────
+    // ── СТРОГИЙ ПАРСЕР XML СОКЕТОВ ────────────────────────────────────
     function parseXmlStream(xml, ws) {
         if (!xml || typeof xml !== 'string') return;
         xml = xml.trim();
         if (!xml.startsWith('<')) return;
 
-        // Фильтр лобби-конфигов
-        if (xml.includes('<ClientAppearanceConfig') || xml.includes('<TableAttributes>') || xml.includes('<TablesTags>')) {
+        // Игнорируем фоновые списки лобби
+        if (xml.includes('<ClientAppearanceConfig') || xml.includes('<TableAttributes') || xml.includes('<TablesTags') || xml.includes('<Tables offset=') || xml.includes('<MyTables') || xml.includes('<MyTournaments')) {
             return;
         }
 
-        // 1. Привязка ТОЛЬКО реальных столов
-        let mTable = xml.match(/<(?:TableDetails|TournamentTable)\s+[^>]*?\bid="([^"]+)"/i);
+        // 1. Привязка ТОЛЬКО реального игрового стола
+        let mTable = xml.match(/<TableDetails\s+[^>]*?\bid="([^"]+)"/i);
         if (mTable) {
             let tableId = mTable[1];
             if (tableId && tableId.toUpperCase() !== 'TABLE' && tableId.toUpperCase() !== 'TOURNAMENT') {
@@ -598,5 +616,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🟢 [LIVE BB HUD v22.1 PRO] Запущен. Синхронизация 100%!");
+    console.log("🟢 [LIVE BB HUD v23.0] Запущен. Память защищена, дубли столов устранены!");
 })();
