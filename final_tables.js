@@ -1,22 +1,22 @@
 javascript:(function(){
     if (window.__pokerSyncV29) {
-        alert('вњ… MASTER SYNC HUD v29.0 СѓР¶Рµ Р°РєС‚РёРІРµРЅ!');
+        alert('✅ MASTER SYNC HUD v29.0 уже активен!');
         return;
     }
     window.__pokerSyncV29 = true;
 
-    /* в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-       MASTER SYNC HUD v29.0 вЂ” PERFECT STACK SYNC ENGINE
-       РЇРґСЂРѕ РїСЂРѕС‚РѕРєРѕР»Р° (РїСЂРѕРІРµСЂРµРЅРѕ РЅР° СЂРµР°Р»СЊРЅС‹С… Р»РѕРіР°С…, 17/17 СЂР°Р·РґР°С‡ Р±РµР· РґСЂРµР№С„Р°):
-       вЂў GameState/TableDetails: stack-size = СЃС‚РµРє Р—Рђ СЃС‚РѕР»РѕРј (bet РќР• РІС…РѕРґРёС‚!)
-       вЂў PostAnte/PostSB/PostBB/Bet/Raise/Call amount = Р¤РРЁРљР, РїРµСЂРµРІРѕРґРёРјС‹Рµ
-         СЌС‚РёРј РґРµР№СЃС‚РІРёРµРј (Raise/Call = Р”Р•Р›Р¬РўРђ Рє СѓР¶Рµ РІРЅРµСЃС‘РЅРЅРѕРјСѓ РЅР° СѓР»РёС†Рµ)
-       вЂў UncalledBet amount = РІРѕР·РІСЂР°С‚ РёРіСЂРѕРєСѓ
-       вЂў Winner amount = Р·Р°С‡РёСЃР»РµРЅРёРµ РІ СЃС‚РµРє
-       вЂў PotsChange Pot change = Р°РІС‚РѕСЂРёС‚РµС‚РЅС‹Р№ РїРµСЂРµРЅРѕСЃ РІ Р±Р°РЅРє
-         (РµСЃР»Рё change == С‚РµРєСѓС‰Р°СЏ СЃС‚Р°РІРєР° РёРіСЂРѕРєР° вЂ” СЃС‚Р°РІРєР° СѓС…РѕРґРёС‚ РІ Р±Р°РЅРє, UI: bet=0)
-       РРЅРІР°СЂРёР°РЅС‚ (РїСЂРѕРІРµСЂСЏРµС‚СЃСЏ РєР°Р¶РґСѓСЋ СЂР°Р·РґР°С‡Сѓ): ОЈ СЃС‚РµРєРѕРІ РІ РєРѕРЅС†Рµ == ОЈ РЅР° СЃС‚Р°СЂС‚Рµ.
-       в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ */
+    /* ══════════════════════════════════════════════════════════════════
+       MASTER SYNC HUD v29.0 — PERFECT STACK SYNC ENGINE
+       Ядро протокола (проверено на реальных логах, 17/17 раздач без дрейфа):
+       • GameState/TableDetails: stack-size = стек ЗА столом (bet НЕ входит!)
+       • PostAnte/PostSB/PostBB/Bet/Raise/Call amount = ФИШКИ, переводимые
+         этим действием (Raise/Call = ДЕЛЬТА к уже внесённому на улице)
+       • UncalledBet amount = возврат игроку
+       • Winner amount = зачисление в стек
+       • PotsChange Pot change = авторитетный перенос в банк
+         (если change == текущая ставка игрока — ставка уходит в банк, UI: bet=0)
+       Инвариант (проверяется каждую раздачу): Σ стеков в конце == Σ на старте.
+       ══════════════════════════════════════════════════════════════════ */
 
     /*ENGINE-START*/
     'use strict';
@@ -47,17 +47,17 @@ javascript:(function(){
             seats: {},                    // seat -> seatObj
             hand: null, dealer: null,
             board: [], street: 'PREFLOP',
-            activeSeats: {},              // seat -> true (РІ СЂР°Р·РґР°С‡Рµ, РЅРµ СЃС„РѕР»РґРёР»Рё)
-            dealtSeats: {},               // seat -> true (РїРѕР»СѓС‡РёР»Рё РєР°СЂС‚С‹ РІ СЌС‚РѕР№ СЂР°Р·РґР°С‡Рµ)
+            activeSeats: {},              // seat -> true (в раздаче, не сфолдили)
+            dealtSeats: {},               // seat -> true (получили карты в этой раздаче)
             positions: {},                // seat -> 'BTN' | 'SB' | ...
-            potSwept: 0,                  // Р°РІС‚РѕСЂРёС‚РµС‚РЅС‹Р№ Р±Р°РЅРє РёР· PotsChange
+            potSwept: 0,                  // авторитетный банк из PotsChange
             winnerSum: 0,
             winners: [],                  // [{seat, amount, combination, cards}]
             showdownCards: {},            // seat -> {cards, isMuck, combination}
-            handStart: {},                // seat -> stack РЅР° СЃС‚Р°СЂС‚Рµ СЂР°Р·РґР°С‡Рё
+            handStart: {},                // seat -> stack на старте раздачи
             handOrigin: null,             // 'newhand' | 'midhand-sync'
-            handLevel: null,              // {sb,bb,ante,number} РЅР° СЃС‚Р°СЂС‚Рµ СЂР°Р·РґР°С‡Рё
-            lastSyncReport: null,         // РѕС‚С‡С‘С‚ РїРѕСЃР»РµРґРЅРµР№ СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёРё
+            handLevel: null,              // {sb,bb,ante,number} на старте раздачи
+            lastSyncReport: null,         // отчёт последней синхронизации
             handsCompleted: 0,
             syncFails: 0,
             sawFullSeats: false
@@ -118,7 +118,7 @@ javascript:(function(){
         }
     }
 
-    /* вЂ” РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ СЃС‚РµРєРѕРІ РёР· СЃРЅР°РїС€РѕС‚Р° (TableDetails / GameState): stack-size = СЃС‚РµРє Р—Рђ СЃС‚РѕР»РѕРј вЂ” */
+    /* — Синхронизация стеков из снапшота (TableDetails / GameState): stack-size = стек ЗА столом — */
     function syncSeatsFromSnapshot(ctx, xml, isGameState) {
         var m, report = { seq: Date.now(), isGameState: isGameState, diffs: [], applied: 0 };
         SEAT_BLOCK_RE.lastIndex = 0;
@@ -170,7 +170,7 @@ javascript:(function(){
             ctx.dealtSeats[sn] = true;
             ctx.seats[sn].inHand = true;
             ctx.seats[sn].handActions = [];
-            ctx.handStart[sn] = ctx.seats[sn].stack;   /* СЃС‚РµРє РЅР° СЃС‚Р°СЂС‚Рµ СЂР°Р·РґР°С‡Рё */
+            ctx.handStart[sn] = ctx.seats[sn].stack;   /* стек на старте раздачи */
         }
         ctx.positions = calcPositions(activeSeatsList, dealerSeat);
     }
@@ -197,7 +197,7 @@ javascript:(function(){
         } else if (kind === 'Bet') {
             s.stack -= amount; s.streetBet = amount;
         } else if (kind === 'Raise') {
-            /* Raise amount = Р”РћРџРћР›РќРРўР•Р›Р¬РќР«Р• С„РёС€РєРё РґРµР№СЃС‚РІРёСЏ (РЅРµ raise-to!) */
+            /* Raise amount = ДОПОЛНИТЕЛЬНЫЕ фишки действия (не raise-to!) */
             s.stack -= amount; s.streetBet = (s.streetBet || 0) + amount;
         } else if (kind === 'Call' || kind === 'AllIn') {
             s.stack -= amount; s.streetBet = (s.streetBet || 0) + amount;
@@ -219,24 +219,24 @@ javascript:(function(){
         s.handActions.push(str);
     }
 
-    /* в”Ђв”Ђв”Ђ Р“Р›РђР’РќР«Р™ РџР РћР¦Р•РЎРЎРћР : РѕРґРёРЅ XML-РїР°РєРµС‚ СЃС‚РѕР»Р° в”Ђв”Ђв”Ђ */
+    /* ─── ГЛАВНЫЙ ПРОЦЕССОР: один XML-пакет стола ─── */
     function processTableMessage(ctx, xml, meta) {
         if (!xml || typeof xml !== 'string') return [];
         xml = xml.trim();
         if (xml.charAt(0) !== '<') return [];
         var trace = [];
 
-        /* 0. Р›РѕР±Р±Рё-С€СѓРј РѕС‚СЃРµРёРІР°РµРј */
+        /* 0. Лобби-шум отсеиваем */
         if (/^<(ClientAppearanceConfig|TableAttributes|TablesTags|Tables |MyTables|MyTournaments|Tournaments |TournamentDetails|QuickSeatBlocks|ServerInfo|HudConfig)/.test(xml) && !/^<TournamentDetails/.test(xml)) {
             return trace;
         }
 
-        /* 1. TableDetails вЂ” РїРѕР»РЅС‹Р№ СЃРЅР°РїС€РѕС‚ СЃС‚РѕР»Р° (РёРјСЏ + СЃС‚РµРєРё) */
+        /* 1. TableDetails — полный снапшот стола (имя + стеки) */
         if (/^<TableDetails/.test(xml)) {
             var tdId = attr(xml.match(/<TableDetails[^>]*>/)[0], 'id');
             var tdName = decodeHtml(attr(xml.match(/<TableDetails[^>]*>/)[0], 'name') || '');
             if (tdId && !ctx.id) ctx.id = tdId;
-            if (tdName && (!ctx.name || ctx.name === 'РЎС‚РѕР»')) ctx.name = tdName;
+            if (tdName && (!ctx.name || ctx.name === 'Стол')) ctx.name = tdName;
             var tt = xml.match(/<TournamentTable[^>]*>/);
             if (tt) {
                 var tn = attr(tt[0], 'tournamentName');
@@ -254,7 +254,7 @@ javascript:(function(){
             return trace;
         }
 
-        /* 2. GameState вЂ” РїРѕР»РЅС‹Р№ СЃРЅР°РїС€РѕС‚ СЃРѕСЃС‚РѕСЏРЅРёСЏ (РІ С‚.С‡. СЃРµСЂРµРґРёРЅР° СЂР°Р·РґР°С‡Рё) */
+        /* 2. GameState — полный снапшот состояния (в т.ч. середина раздачи) */
         var gsM = xml.match(/<GameState\s+([^>]*)>/);
         if (gsM) {
             var gh = attr(gsM[0], 'hand');
@@ -262,11 +262,11 @@ javascript:(function(){
             if (hi) setLevelFromTag(ctx, hi[0]);
             var seatsTag = xml.match(/<Seats\s+([^>]*)>/);
             var gsDealer = seatsTag ? iattr(seatsTag[0], 'dealer') : null;
-            /* РЎРќРђР§РђР›Рђ СЃРёРЅС…СЂРѕРЅРёР·РёСЂСѓРµРј СЃС‚РµРєРё, РїРѕС‚РѕРј РЅР°С‡РёРЅР°РµРј СЂР°Р·РґР°С‡Сѓ вЂ” handStart Р±СѓРґРµС‚ С‚РѕС‡РЅС‹Рј */
+            /* СНАЧАЛА синхронизируем стеки, потом начинаем раздачу — handStart будет точным */
             var rep = syncSeatsFromSnapshot(ctx, xml, true);
             trace.push('SYNC:GameState' + (rep.diffs.length ? ' DRIFT[' + rep.diffs.length + ']' : ' OK'));
             if (gh && (!ctx.hand || ctx.hand !== gh)) {
-                /* РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РїРѕСЃСЂРµРґРё С‡СѓР¶РѕР№ СЂР°Р·РґР°С‡Рё: РЅР°С‡РёРЅР°РµРј РµС‘ РѕС‚СЃР»РµР¶РёРІР°С‚СЊ */
+                /* Синхронизация посреди чужой раздачи: начинаем её отслеживать */
                 var actList = [];
                 SEAT_BLOCK_RE.lastIndex = 0;
                 var mm;
@@ -274,7 +274,7 @@ javascript:(function(){
                     if (/activeInHand="true"/.test(mm[1]) && mm[3] && /<PlayerInfo/.test(mm[3])) actList.push(parseInt(mm[2], 10));
                 }
                 beginHand(ctx, gh, gsDealer === null ? 0 : gsDealer, actList);
-                ctx.handOrigin = 'midhand-sync';   /* СЂР°Р·РґР°С‡Р° РЅР°С‡Р°С‚Р° РґРѕ РЅР°СЃ вЂ” РёРЅРІР°СЂРёР°РЅС‚ РЅРµ РїСЂРѕРІРµСЂСЏРµС‚СЃСЏ */
+                ctx.handOrigin = 'midhand-sync';   /* раздача начата до нас — инвариант не проверяется */
             } else if (gsDealer !== null) {
                 ctx.dealer = gsDealer;
             }
@@ -299,12 +299,12 @@ javascript:(function(){
         }
 
         if (xml.charAt(0) !== '<' || !/^<Message/.test(xml)) {
-            /* РћС‚РґРµР»СЊРЅС‹Рµ РѕС‚РІРµС‚С‹ РІРЅРµ Message РЅР°СЃ РЅРµ РёРЅС‚РµСЂРµСЃСѓСЋС‚ */
+            /* Отдельные ответы вне Message нас не интересуют */
             if (/^<TournamentInfo/.test(xml)) processTournamentInfo(ctx, xml);
             return trace;
         }
 
-        /* 3. РРЅРєСЂРµРјРµРЅС‚Р°Р»СЊРЅС‹Рµ РёР·РјРµРЅРµРЅРёСЏ <Message><Changes>вЂ¦</Changes></Message> */
+        /* 3. Инкрементальные изменения <Message><Changes>…</Changes></Message> */
         var newHandM = xml.match(/<NewHand\s+([^>]*)\/>/);
         if (newHandM) {
             var handNum = attr(newHandM[0], 'number');
@@ -320,7 +320,7 @@ javascript:(function(){
             trace.push('NEWHAND:' + handNum + ' dealer=' + dealer);
         }
 
-        /* Р”РµР№СЃС‚РІРёСЏ РёРіСЂРѕРєРѕРІ вЂ” СЃС‚СЂРѕРіРѕ РІ РїРѕСЂСЏРґРєРµ РґРѕРєСѓРјРµРЅС‚Р° */
+        /* Действия игроков — строго в порядке документа */
         var am;
         ACTION_RE.lastIndex = 0;
         while ((am = ACTION_RE.exec(xml)) !== null) {
@@ -362,10 +362,10 @@ javascript:(function(){
                     { cards: mc.length >= 2 ? mc.slice(0, 2).join(' ') : null, isMuck: true, combination: '' };
                 if (ctx.showdownCards[seatNum] && !ctx.showdownCards[seatNum].isMuck) ctx.showdownCards[seatNum].isMuck = true;
             }
-            /* UseTimeBank / TimedOut / SendEmoji / ChatMessage вЂ” Р±РµР· РІР»РёСЏРЅРёСЏ РЅР° С„РёС€РєРё */
+            /* UseTimeBank / TimedOut / SendEmoji / ChatMessage — без влияния на фишки */
         }
 
-        /* PotsChange вЂ” Р°РІС‚РѕСЂРёС‚РµС‚РЅС‹Р№ РїРµСЂРµРЅРѕСЃ СЃС‚Р°РІРѕРє РІ Р±Р°РЅРє */
+        /* PotsChange — авторитетный перенос ставок в банк */
         var pcM, pcRe = /<PotsChange>([\s\S]*?)<\/PotsChange>/g;
         while ((pcM = pcRe.exec(xml)) !== null) {
             var potM, potEntryRe = /<Pot\s+([^>]*)\/>/g;
@@ -374,12 +374,12 @@ javascript:(function(){
                 if (pChange === null || pChange <= 0) continue;
                 ctx.potSwept += pChange;
                 var ps = ctx.seats[pSeat];
-                if (ps && ps.streetBet === pChange) ps.streetBet = 0; /* СЃС‚Р°РІРєР° РІРёР·СѓР°Р»СЊРЅРѕ СѓС€Р»Р° РІ Р±Р°РЅРє */
+                if (ps && ps.streetBet === pChange) ps.streetBet = 0; /* ставка визуально ушла в банк */
             }
             trace.push('POTS swept=' + ctx.potSwept);
         }
 
-        /* РЈР»РёС†С‹ */
+        /* Улицы */
         var streets = [['DealingFlop', 'FLOP', 3], ['DealingTurn', 'TURN', 4], ['DealingRiver', 'RIVER', 5]];
         for (var si = 0; si < streets.length; si++) {
             var stM = xml.match(new RegExp('<' + streets[si][0] + '>[\\s\\S]*?<Card[^>]*>([^<]+)<\\/Card>[\\s\\S]*?<\\/' + streets[si][0] + '>'));
@@ -396,7 +396,7 @@ javascript:(function(){
             }
         }
 
-        /* РљР°СЂС‚С‹ РёРіСЂРѕРєРѕРІ РїСЂРё СЂР°Р·РґР°С‡Рµ (РґР»СЏ РіРµСЂРѕСЏ РєР°СЂС‚С‹ СЂРµР°Р»СЊРЅС‹Рµ) */
+        /* Карты игроков при раздаче (для героя карты реальные) */
         var dcM = xml.match(/<DealingCards>([\s\S]*?)<\/DealingCards>/);
         if (dcM) {
             var dSeatRe = /<Seat\s+id="(\d+)">([\s\S]*?)<\/Seat>/g, dsm;
@@ -409,7 +409,7 @@ javascript:(function(){
             }
         }
 
-        /* Winners вЂ” РјРіРЅРѕРІРµРЅРЅРѕРµ Р·Р°С‡РёСЃР»РµРЅРёРµ */
+        /* Winners — мгновенное зачисление */
         var wM, wRe = /<Winner\s+([^>]*)>([\s\S]*?)<\/Winner>|<Winner\s+([^>]*)\/>/g;
         while ((wM = wRe.exec(xml)) !== null) {
             var wAttr = wM[1] || wM[3] || '';
@@ -425,7 +425,7 @@ javascript:(function(){
             }
         }
 
-        /* РќРѕРєР°СѓС‚С‹ Рё РІС‹Р»РµС‚С‹ */
+        /* Нокауты и вылеты */
         var koM = xml.match(/<Knockout\s+([^>]*)busted="(\d+)"/);
         if (koM) {
             var bSeat = parseInt(koM[2], 10);
@@ -444,7 +444,7 @@ javascript:(function(){
                 ctx.seats[npSeat].vacated = true;
                 ctx.seats[npSeat].inHand = false;
             }
-            /* available="true" СЃ PlayerInfo/Chips вЂ” РЅРѕРІРѕРµ РјРµСЃС‚Рѕ (СЂРµР±Р°Р»Р°РЅСЃ) */
+            /* available="true" с PlayerInfo/Chips — новое место (ребаланс) */
             var npBody = npM[0];
             if (npAvail === 'true' && /stack-size=/.test(xml)) {
                 var npChips = xml.match(/<Chips[^>]*stack-size="(\d+)"[^>]*\/>/);
@@ -457,13 +457,13 @@ javascript:(function(){
             }
         }
 
-        /* РЈСЂРѕРІРµРЅСЊ Р±Р»Р°Р№РЅРґРѕРІ */
+        /* Уровень блайндов */
         var lvlM = xml.match(/<CurrentLevel\s+([^>]*)\/>/) || xml.match(/<HandInfo\s+([^>]*)\/>/);
         if (lvlM) setLevelFromTag(ctx, lvlM[0]);
         var tiM = xml.match(/<TournamentInfo[\s\S]*?<\/TournamentInfo>/);
         if (tiM) processTournamentInfo(ctx, tiM[0]);
 
-        /* РљРѕРЅРµС† СЂР°Р·РґР°С‡Рё вЂ” С„РёРЅР°Р»РёР·Р°С†РёСЏ + РёРЅРІР°СЂРёР°РЅС‚ */
+        /* Конец раздачи — финализация + инвариант */
         if (/<EndHand/.test(xml)) {
             finalizeHand(ctx, meta);
             trace.push('ENDHAND');
@@ -549,12 +549,12 @@ javascript:(function(){
     }
     /*ENGINE-END*/
 
-    /* в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ STATE / STORAGE в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ */
+    /* ═══════════════ STATE / STORAGE ═══════════════ */
     var STORAGE_KEY = '__poker_hands_archive_v29';
     var handsArchive = [];
     try { handsArchive = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch (e) { handsArchive = []; }
 
-    var engineLog = [];          /* РєРѕР»СЊС†РµРІРѕР№ Р»РѕРі РїРѕСЃР»РµРґРЅРёС… СЃРѕР±С‹С‚РёР№ РґРІРёР¶РєР° */
+    var engineLog = [];          /* кольцевой лог последних событий движка */
     function logEngine(tableKey, trace) {
         for (var i = 0; i < trace.length; i++) {
             engineLog.push({ t: Date.now(), table: tableKey, msg: trace[i] });
@@ -582,31 +582,31 @@ javascript:(function(){
         return tables[ws.__syncUid];
     }
 
-    /* в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ UI в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ */
+    /* ═══════════════ UI ═══════════════ */
     var ui = document.createElement('div');
     ui.id = 'sync-hud-v29';
     ui.style.cssText = 'position:fixed;top:6px;left:50%;transform:translateX(-50%);width:96vw;max-width:470px;z-index:2147483647;background:rgba(8,12,22,0.97);color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,monospace;font-size:11px;padding:9px 11px;border-radius:12px;border:2px solid #22d3ee;box-shadow:0 14px 44px rgba(0,0,0,0.9);backdrop-filter:blur(14px);box-sizing:border-box;';
     ui.innerHTML = [
         '<div style="display:flex;justify-content:space-between;align-items:center;">',
         '  <div style="display:flex;align-items:center;gap:6px;">',
-        '    <span id="v29-dot" style="color:#22d3ee;">в—Џ</span>',
-        '    <b style="color:#22d3ee;font-size:12px;">SYNC HUD v29 В· 100% РЎРўР•РљР</b>',
+        '    <span id="v29-dot" style="color:#22d3ee;">●</span>',
+        '    <b style="color:#22d3ee;font-size:12px;">SYNC HUD v29 · 100% СТЕКИ</b>',
         '  </div>',
         '  <div style="display:flex;gap:6px;align-items:center;">',
-        '    <span id="v29-syncbadge" style="font-size:9.5px;color:#22c55e;border:1px solid #22c55e;border-radius:4px;padding:0 4px;">SYNC вњ“</span>',
-        '    <button id="v29-toggle" style="background:transparent;border:1px solid #475569;color:#22d3ee;cursor:pointer;font-size:11px;padding:0 6px;border-radius:4px;">в–ѕ</button>',
-        '    <button id="v29-close" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;">вњ•</button>',
+        '    <span id="v29-syncbadge" style="font-size:9.5px;color:#22c55e;border:1px solid #22c55e;border-radius:4px;padding:0 4px;">SYNC ✓</span>',
+        '    <button id="v29-toggle" style="background:transparent;border:1px solid #475569;color:#22d3ee;cursor:pointer;font-size:11px;padding:0 6px;border-radius:4px;">▾</button>',
+        '    <button id="v29-close" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;">✕</button>',
         '  </div>',
         '</div>',
         '<div id="v29-body" style="margin-top:7px;">',
         '  <div style="display:flex;justify-content:space-between;align-items:center;font-size:10.5px;color:#94a3b8;background:#0b1220;padding:4px 8px;border-radius:7px;border:1px solid #1e293b;margin-bottom:6px;">',
-        '    <span>РЎС‚РѕР»РѕРІ: <b id="v29-tcount" style="color:#38bdf8;">0</b></span>',
-        '    <span>Р Р°Р·РґР°С‡: <b id="v29-hcount" style="color:#22c55e;">0</b></span>',
-        '    <span>РЎР±РѕР№ СЃРёРЅС…СЂ.: <b id="v29-fcount" style="color:#f87171;">0</b></span>',
-        '    <button id="v29-clear" style="background:#334155;border:none;color:#cbd5e1;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:9px;">РЎР±СЂРѕСЃ</button>',
+        '    <span>Столов: <b id="v29-tcount" style="color:#38bdf8;">0</b></span>',
+        '    <span>Раздач: <b id="v29-hcount" style="color:#22c55e;">0</b></span>',
+        '    <span>Сбой синхр.: <b id="v29-fcount" style="color:#f87171;">0</b></span>',
+        '    <button id="v29-clear" style="background:#334155;border:none;color:#cbd5e1;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:9px;">Сброс</button>',
         '  </div>',
         '  <div id="v29-tables" style="max-height:300px;overflow-y:auto;margin-bottom:7px;"></div>',
-        '  <button id="v29-export" style="width:100%;padding:7px;background:linear-gradient(90deg,#0891b2,#16a34a);color:#fff;border:none;border-radius:7px;font-weight:bold;font-size:11px;cursor:pointer;">рџ“Ґ РЎРєР°С‡Р°С‚СЊ JSON (СЂР°Р·РґР°С‡Рё + Р¶РёРІС‹Рµ СЃС‚РµРєРё + Р»РѕРі)</button>',
+        '  <button id="v29-export" style="width:100%;padding:7px;background:linear-gradient(90deg,#0891b2,#16a34a);color:#fff;border:none;border-radius:7px;font-weight:bold;font-size:11px;cursor:pointer;">📥 Скачать JSON (раздачи + живые стеки + лог)</button>',
         '</div>'].join('');
     document.body.appendChild(ui);
 
@@ -614,14 +614,14 @@ javascript:(function(){
         var b = document.getElementById('v29-body');
         var hidden = b.style.display === 'none';
         b.style.display = hidden ? 'block' : 'none';
-        this.innerText = hidden ? 'в–ѕ' : 'в–ґ';
+        this.innerText = hidden ? '▾' : '▴';
     };
     document.getElementById('v29-close').onclick = function () {
         ui.remove();
         window.__pokerSyncV29 = false;
     };
     document.getElementById('v29-clear').onclick = function () {
-        if (confirm('РћС‡РёСЃС‚РёС‚СЊ Р°СЂС…РёРІ СЂР°Р·РґР°С‡?')) {
+        if (confirm('Очистить архив раздач?')) {
             handsArchive = [];
             localStorage.removeItem(STORAGE_KEY);
             renderUI();
@@ -636,7 +636,7 @@ javascript:(function(){
                 var s = c.seats[sn];
                 if (s.stack === null || s.busted || s.vacated) return;
                 seats.push({
-                    seat: sn, nick: s.nick, position: c.positions[sn] || 'вЂ”',
+                    seat: sn, nick: s.nick, position: c.positions[sn] || '—',
                     stack: s.stack, stack_bb: liveStackBB(c, s.stack),
                     street_bet: s.streetBet || 0, in_hand: !!c.activeSeats[sn],
                     cards: c.showdownCards[sn] ? c.showdownCards[sn].cards : null
@@ -665,7 +665,7 @@ javascript:(function(){
     };
 
     function fmtChips(n) {
-        if (n === null || n === undefined) return 'вЂ”';
+        if (n === null || n === undefined) return '—';
         if (n >= 1e6) return (n / 1e6).toFixed(n % 1e6 === 0 ? 0 : 1) + 'M';
         if (n >= 1e3) return (n / 1e3).toFixed(n % 1e3 === 0 ? 0 : 1) + 'K';
         return String(n);
@@ -686,27 +686,27 @@ javascript:(function(){
             var totalFails = activeCtx.reduce(function (a, c) { return a + (c.syncFails || 0); }, 0);
             document.getElementById('v29-fcount').innerText = totalFails;
             var badge = document.getElementById('v29-syncbadge');
-            badge.textContent = totalFails ? 'DRIFT ' + totalFails : 'SYNC вњ“';
+            badge.textContent = totalFails ? 'DRIFT ' + totalFails : 'SYNC ✓';
             badge.style.color = totalFails ? '#f87171' : '#22c55e';
             badge.style.borderColor = totalFails ? '#f87171' : '#22c55e';
 
             if (!activeCtx.length) {
-                tEl.innerHTML = '<div style="color:#64748b;text-align:center;padding:10px;font-size:10px;">РћР¶РёРґР°РЅРёРµ РёРіСЂРѕРІС‹С… СЃС‚РѕР»РѕРІвЂ¦ (РѕС‚РєСЂРѕР№С‚Рµ СЃС‚РѕР» РїРѕСЃР»Рµ Р·Р°РїСѓСЃРєР°)</div>';
+                tEl.innerHTML = '<div style="color:#64748b;text-align:center;padding:10px;font-size:10px;">Ожидание игровых столов… (откройте стол после запуска)</div>';
                 return;
             }
             var html = '';
             activeCtx.forEach(function (c) {
                 var bb = c.level.bb || 0;
                 var lvl = 'SB ' + fmtChips(c.level.sb) + ' / BB ' + fmtChips(bb) + (c.level.ante ? ' / ANTE ' + fmtChips(c.level.ante) : '');
-                if (c.nextLevel && c.nextLevel.bb) lvl += ' <span style="color:#64748b;">в†’ BB ' + fmtChips(c.nextLevel.bb) + '</span>';
+                if (c.nextLevel && c.nextLevel.bb) lvl += ' <span style="color:#64748b;">→ BB ' + fmtChips(c.nextLevel.bb) + '</span>';
                 var pot = displayPot(c);
                 html += '<div style="background:#0b1220;border:1px solid #1e293b;border-radius:8px;padding:6px 8px;margin-bottom:6px;">';
                 html += '<div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1e293b;padding-bottom:3px;margin-bottom:4px;">';
-                html += '<span style="color:#38bdf8;font-weight:bold;">рџџў ' + (c.name || 'РЎС‚РѕР»') + (c.tournamentName ? ' В· ' + c.tournamentName.substr(0, 22) : '') + '</span>';
+                html += '<span style="color:#38bdf8;font-weight:bold;">🟢 ' + (c.name || 'Стол') + (c.tournamentName ? ' · ' + c.tournamentName.substr(0, 22) : '') + '</span>';
                 html += '<span style="color:#f59e0b;">' + lvl + '</span></div>';
                 html += '<div style="display:flex;justify-content:space-between;color:#94a3b8;font-size:9.5px;margin-bottom:3px;">';
-                html += '<span>Р СѓРєР° #' + (c.hand || 'вЂ”') + ' В· ' + c.street + ' В· D: РјРµСЃС‚Рѕ ' + (c.dealer !== null ? c.dealer : 'вЂ”') + '</span>';
-                html += '<span>Р‘РђРќРљ <b style="color:#fbbf24;">' + fmtChips(pot) + '</b>' + (bb ? ' (' + Math.round(pot / bb * 10) / 10 + ' BB)' : '') + '</span></div>';
+                html += '<span>Рука #' + (c.hand || '—') + ' · ' + c.street + ' · D: место ' + (c.dealer !== null ? c.dealer : '—') + '</span>';
+                html += '<span>БАНК <b style="color:#fbbf24;">' + fmtChips(pot) + '</b>' + (bb ? ' (' + Math.round(pot / bb * 10) / 10 + ' BB)' : '') + '</span></div>';
                 if (c.board.length) {
                     html += '<div style="color:#a855f7;font-size:10px;margin-bottom:3px;"> Board: ' + c.board.join(' ') + '</div>';
                 }
@@ -716,9 +716,9 @@ javascript:(function(){
                     if (s.stack === null) return;
                     var dead = s.busted || s.vacated;
                     var bbv = bb ? (s.stack / bb) : 0;
-                    var bbStr = bb ? bbv.toFixed(1) : 'вЂ”';
+                    var bbStr = bb ? bbv.toFixed(1) : '—';
                     var col = dead ? '#475569' : (bbv < 15 ? '#ef4444' : (bbv < 30 ? '#f59e0b' : '#22c55e'));
-                    var dot = dead ? 'рџ’Ђ' : (c.activeSeats[sn] ? 'рџџў' : 'вљЄ');
+                    var dot = dead ? '💀' : (c.activeSeats[sn] ? '🟢' : '⚪');
                     var dBtn = (c.dealer === sn) ? '<span style="color:#fbbf24;">[D]</span>' : '';
                     var pos = c.positions[sn] ? '<span style="color:#94a3b8;">(' + c.positions[sn] + ')</span>' : '';
                     var bet = '';
@@ -738,7 +738,7 @@ javascript:(function(){
         });
     }
 
-    /* в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ WEBSOCKET INTERCEPT в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ */
+    /* ═══════════════ WEBSOCKET INTERCEPT ═══════════════ */
     function decodePayload(data) {
         if (!data) return '';
         if (typeof data === 'string') return data;
@@ -810,7 +810,7 @@ javascript:(function(){
                         var tid = attr(et[0], 'tableId');
                         if (tid) {
                             ctx.id = tid;
-                            ctx.name = ctx.name || 'РЎС‚РѕР» ' + tid.substr(-4);
+                            ctx.name = ctx.name || 'Стол ' + tid.substr(-4);
                         }
                         ctx.tournamentId = attr(et[0], 'tournamentId') || ctx.tournamentId;
                     }
@@ -829,5 +829,5 @@ javascript:(function(){
     };
 
     renderUI();
-    console.log('%cвњ… [SYNC HUD v29.0] Р—Р°РїСѓС‰РµРЅ. Р”РІРёР¶РѕРє: Raise=РґРµР»СЊС‚Р°, stack-size=Р·Р° СЃС‚РѕР»РѕРј, PotsChange=Р°РІС‚РѕСЂРёС‚РµС‚. РРЅРІР°СЂРёР°РЅС‚ С„РёС€РµРє РїСЂРѕРІРµСЂСЏРµС‚СЃСЏ РєР°Р¶РґСѓСЋ СЂР°Р·РґР°С‡Сѓ.', 'color:#22d3ee;font-weight:bold;');
+    console.log('%c✅ [SYNC HUD v29.0] Запущен. Движок: Raise=дельта, stack-size=за столом, PotsChange=авторитет. Инвариант фишек проверяется каждую раздачу.', 'color:#22d3ee;font-weight:bold;');
 })();
