@@ -1,6 +1,6 @@
 javascript:(function(){
     if (window.__pokerMasterRecorderV26) {
-        alert('🎯 MASTER BB HUD v26.0 уже активен!');
+        alert('🎯 MASTER BB HUD v26.1 (2-DECIMAL & SYNC FIXED) уже активен!');
         return;
     }
     window.__pokerMasterRecorderV26 = true;
@@ -172,7 +172,7 @@ javascript:(function(){
                     let seatInfo = this.seats.get(seatNum) || { nick: `Seat_${seatNum}`, stackStart: 0, currentStack: 0 };
                     let sCards = this.showdownHands.get(seatNum);
                     let stkStart = seatInfo.stackStart || 0;
-                    let stkBB = this.currentBB > 0 ? parseFloat((stkStart / this.currentBB).toFixed(1)) : 0;
+                    let stkBB = this.currentBB > 0 ? parseFloat((stkStart / this.currentBB).toFixed(2)) : 0;
 
                     playersSummary.push({
                         seat: seatNum,
@@ -217,7 +217,7 @@ javascript:(function(){
         }
     }
 
-    // ── HUD С ЖИВЫМИ СТЕКАМИ В ББ ─────────────────────────────────────
+    // ── HUD С ТОЧНЫМИ СТЕКАМИ В ББ (2 ЗНАКА) ──────────────────────────
     let ui = document.createElement('div');
     ui.id = 'ft-recorder-hud';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:96vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #22c55e;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
@@ -226,7 +226,7 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="ft-dot" style="color:#22c55e;font-size:12px;">●</span>
-                <strong style="color:#22c55e;font-size:12px;">MASTER BB HUD v26.0</strong>
+                <strong style="color:#22c55e;font-size:12px;">MASTER BB HUD v26.1</strong>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-toggle-ft" style="background:transparent;border:1px solid #475569;color:#22c55e;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
@@ -303,7 +303,7 @@ javascript:(function(){
                 sortedSeats.forEach(sNum => {
                     let s = t.seats.get(sNum);
                     let stChips = s.currentStack || 0;
-                    let stBB = bbVal > 0 ? (stChips / bbVal).toFixed(1) : '0.0';
+                    let stBB = bbVal > 0 ? (stChips / bbVal).toFixed(2) : '0.00';
                     let pos = t.positionsMap[sNum] || '—';
                     let inHand = t.activeSeatsInHand.has(sNum);
                     let sCards = t.showdownHands.get(sNum);
@@ -314,7 +314,7 @@ javascript:(function(){
 
                     html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;font-size:10.5px;">
                         <span>${dot} <b>${s.nick}</b> <span style="color:#94a3b8;">(${pos})</span> ${cardsStr}</span>
-                        <span><b style="color:${bbColor};font-size:12px;">${stBB} BB</b> <span style="color:#64748b;font-size:9.5px;">(${(stChips).toLocaleString()})</span></span>
+                        <span><b style="color:${bbColor};font-size:12px;">${stBB} ББ</b> <span style="color:#64748b;font-size:9.5px;">(${(stChips).toLocaleString()})</span></span>
                     </div>`;
                 });
             }
@@ -326,7 +326,7 @@ javascript:(function(){
     document.getElementById('btn-export-ft-json').onclick = function() {
         try {
             let exportData = {
-                recorder_version: "v26.0_LIVE_BB_RECORDER",
+                recorder_version: "v26.1_LIVE_BB_RECORDER",
                 export_time: new Date().toISOString(),
                 total_hands_recorded: ftState.handsArchive.length,
                 recorded_hands: ftState.handsArchive
@@ -379,14 +379,13 @@ javascript:(function(){
         let tableCtx = ws.__tableContext;
         if (!tableCtx) return;
 
-        // 1. Места и синхронизация фишек (ТОЧНЫЙ ПОБОКСОВЫЙ ПАРСИНГ)
+        // 1. Места и синхронизация фишек (автономный парсер боксов)
         if (xml.includes('<Seats') || (xml.includes('<Seat ') && (xml.includes('<PlayerInfo') || xml.includes('<Chips')))) {
             let seatBlocks = xml.matchAll(/<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>(.*?)<\/Seat>)/gs);
             for (let sb of seatBlocks) {
                 let seatNum = parseInt(sb[2]);
                 let seatBody = sb[3] || '';
 
-                // Если место стало пустым (<Seat id="X"/>), удаляем игрока из списка
                 if (!seatBody || !seatBody.includes('<PlayerInfo')) {
                     if (seatBody.includes('<Chips')) {
                         let stM = seatBody.match(/stack-size="([^"]+)"/);
@@ -546,7 +545,7 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 6. Вылет игрока (МГНОВЕННОЕ УДАЛЕНИЕ ИЗ СПИСКА)
+        // 6. Вылет игрока (удаление из памяти стола)
         if (xml.includes('<Knockout ') || xml.includes('<TournamentPlayerRanked')) {
             let koMatch = xml.match(/<Knockout\s+[^>]*busted="(\d+)"/i);
             let rankedMatch = xml.match(/<TournamentPlayerRanked\s+[^>]*seat="(\d+)"/i);
@@ -558,7 +557,6 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 7. Завершение раздачи
         if (xml.includes('<EndHand')) {
             tableCtx.finalizeAndSaveHand();
         }
@@ -630,5 +628,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🟢 [MASTER BB HUD v26.0] Запущен. Синхронизация стеков 100%!");
+    console.log("🟢 [MASTER BB HUD v26.1] Запущен. Точность 100% (2 знака ББ)!");
 })();
