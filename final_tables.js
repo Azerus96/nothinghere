@@ -1,6 +1,6 @@
 javascript:(function(){
     if (window.__pokerLiveBBRecorderV22) {
-        alert('🎯 LIVE BB HUD & RECORDER v22.0 уже активен!');
+        alert('🎯 LIVE BB HUD v22.1 (SYNC FIXED) уже активен!');
         return;
     }
     window.__pokerLiveBBRecorderV22 = true;
@@ -208,7 +208,7 @@ javascript:(function(){
         }
     }
 
-    // ── HUD С РЕАЛ-ТАЙМ СТЕКАМИ В ББ ──────────────────────────────────
+    // ── HUD С ЖИВЫМИ СТЕКАМИ В ББ ─────────────────────────────────────
     let ui = document.createElement('div');
     ui.id = 'ft-recorder-hud';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:96vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #22c55e;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
@@ -217,7 +217,7 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="ft-dot" style="color:#22c55e;font-size:12px;">●</span>
-                <strong style="color:#22c55e;font-size:12px;">LIVE BB HUD & RECORDER v22.0</strong>
+                <strong style="color:#22c55e;font-size:12px;">LIVE BB HUD v22.1 PRO</strong>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-toggle-ft" style="background:transparent;border:1px solid #475569;color:#22c55e;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
@@ -228,12 +228,11 @@ javascript:(function(){
         <div id="ft-hud-body" style="margin-top:8px;">
             <div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;background:#030712;padding:5px 8px;border-radius:6px;border:1px solid #1e293b;margin-bottom:6px;">
                 <span>Столов: <b id="ft-tables-count" style="color:#38bdf8;">0</b></span>
-                <span>Записано: <b id="ft-hands-count" style="color:#22c55e;">0</b></span>
+                <span>Записано раздач: <b id="ft-hands-count" style="color:#22c55e;">0</b></span>
             </div>
 
-            <!-- ЗДЕСЬ В РЕАЛЬНОМ ВРЕМЕНИ ОТОБРАЖАЮТСЯ СТЕКИ В ББ -->
             <div id="ft-live-tables" style="max-height:260px;overflow-y:auto;margin-bottom:8px;">
-                <div style="color:#94a3b8;font-size:10px;text-align:center;padding:8px;">Ожидание активных раздач...</div>
+                <div style="color:#94a3b8;font-size:10px;text-align:center;padding:8px;">Ожидание активных столов...</div>
             </div>
 
             <button id="btn-export-ft-json" style="width:100%;padding:8px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:11px;cursor:pointer;">
@@ -274,8 +273,8 @@ javascript:(function(){
         ftState.activeTables.forEach(t => {
             let bbVal = t.currentBB || 1;
             html += `<div style="background:#030712;padding:6px 8px;border-radius:6px;border:1px solid #1e293b;margin-bottom:6px;">
-                <div style="display:flex;justify-content:space-between;font-weight:bold;color:#38bdf8;border-bottom:1px solid #1e293b;padding-bottom:3px;margin-bottom:4px;">
-                    <span>🟢 ${t.tableName}</span>
+                <div style="display:flex;justify-content:space-between;align-items:center;font-weight:bold;color:#38bdf8;border-bottom:1px solid #1e293b;padding-bottom:3px;margin-bottom:4px;">
+                    <span style="max-width:65%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">🟢 ${t.tableName}</span>
                     <span style="color:#f59e0b;">1 ББ = ${(bbVal).toLocaleString()}</span>
                 </div>`;
 
@@ -291,7 +290,6 @@ javascript:(function(){
                     let inHand = t.activeSeatsInHand.has(sNum);
                     let sCards = t.showdownHands.get(sNum);
 
-                    // Цветовая градация стека
                     let bbColor = parseFloat(stBB) < 15 ? '#ef4444' : (parseFloat(stBB) < 30 ? '#f59e0b' : '#22c55e');
                     let dot = inHand ? '🟢' : '⚪';
                     let cardsStr = sCards ? `<span style="color:#a855f7;font-weight:bold;">[${sCards.cards}]</span>` : '';
@@ -310,7 +308,7 @@ javascript:(function(){
     document.getElementById('btn-export-ft-json').onclick = function() {
         try {
             let exportData = {
-                recorder_version: "v22.0_LIVE_BB_RECORDER",
+                recorder_version: "v22.1_LIVE_BB_RECORDER",
                 export_time: new Date().toISOString(),
                 total_hands_recorded: ftState.handsArchive.length,
                 recorded_hands: ftState.handsArchive
@@ -327,18 +325,25 @@ javascript:(function(){
         }
     };
 
-    // ── ПАРСЕР XML СОКЕТОВ ────────────────────────────────────────────
+    // ── СТРОГИЙ ПАРСЕР XML СОКЕТОВ (БЕЗ ФАНТОМОВ) ────────────────────
     function parseXmlStream(xml, ws) {
         if (!xml || typeof xml !== 'string') return;
         xml = xml.trim();
         if (!xml.startsWith('<')) return;
 
-        if (xml.includes('<TableDetails') || xml.includes('<TournamentTable') || xml.includes('<Tables')) {
-            let tableId = getAttr(xml, 'id') || getAttr(xml, 'tableId');
-            let tournId = getAttr(xml, 'tournamentId');
-            let tName = getAttr(xml, 'name') || getAttr(xml, 'tournamentName');
+        // Фильтр лобби-конфигов
+        if (xml.includes('<ClientAppearanceConfig') || xml.includes('<TableAttributes>') || xml.includes('<TablesTags>')) {
+            return;
+        }
 
-            if (tableId) {
+        // 1. Привязка ТОЛЬКО реальных столов
+        let mTable = xml.match(/<(?:TableDetails|TournamentTable)\s+[^>]*?\bid="([^"]+)"/i);
+        if (mTable) {
+            let tableId = mTable[1];
+            if (tableId && tableId.toUpperCase() !== 'TABLE' && tableId.toUpperCase() !== 'TOURNAMENT') {
+                let tournId = getAttr(xml, 'tournamentId') || getAttr(xml, 'tournamentSettingsId');
+                let tName = getAttr(xml, 'name') || getAttr(xml, 'tournamentName');
+
                 ws.__tableId = tableId;
                 if (!ftState.activeTables.has(tableId)) {
                     let ctx = new TableContext(tableId, tournId);
@@ -361,7 +366,7 @@ javascript:(function(){
         let nameMatch = xml.match(/<TableDetails[^>]*\bname="([^"]*)"/i);
         if (nameMatch) tableCtx.tableName = decodeHtml(nameMatch[1]);
 
-        // Считывание мест и стеков
+        // 2. Места и игроки
         if (xml.includes('<Seats') || (xml.includes('<Seat ') && xml.includes('<PlayerInfo'))) {
             let seatBlocks = xml.matchAll(/<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>(.*?)<\/Seat>)/gs);
             for (let sb of seatBlocks) {
@@ -384,7 +389,7 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // Обновление стеков из фишек
+        // 3. Синхронизация текущих фишек
         if (xml.includes('<Chips ')) {
             let chipMatches = xml.matchAll(/<Seat\s+[^>]*\bid="(\d+)"[^>]*>.*?<Chips\s+[^>]*stack-size="(\d+)"/gs);
             for (let cm of chipMatches) {
@@ -396,13 +401,19 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // Уровень блайндов и раздачи
-        if (xml.includes('<Message>') || xml.includes('<GameState')) {
-            let hs = getAttr(xml, 'highStake');
-            if (hs) tableCtx.currentBB = parseInt(hs);
-            let ls = getAttr(xml, 'lowStake');
+        // 4. Мгновенное обновление уровня блайндов
+        let curLevelMatch = xml.match(/<(?:CurrentLevel|HandInfo)\s+[^>]*?highStake="(\d+)"/i);
+        if (curLevelMatch) {
+            tableCtx.currentBB = parseInt(curLevelMatch[1]);
+            let ls = getAttr(curLevelMatch[0], 'lowStake');
             if (ls) tableCtx.currentSB = parseInt(ls);
+            let an = getAttr(curLevelMatch[0], 'ante');
+            if (an) tableCtx.currentAnte = parseInt(an);
+            updateFTUI();
+        }
 
+        // 5. Жизненный цикл раздачи
+        if (xml.includes('<Message>') || xml.includes('<GameState')) {
             let newHandMatch = xml.match(/<NewHand\s+[^>]*\bnumber="(\d+)"/);
             if (newHandMatch) {
                 let dealerSeat = parseInt(getAttr(newHandMatch[0], 'dealer') || '0');
@@ -417,7 +428,7 @@ javascript:(function(){
                 updateFTUI();
             }
 
-            // Анте и блайнды
+            // Анте и блайнды с вычетом из стека
             let anteMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><PostAnte\s+amount="(\d+)"/g);
             for (let am of anteMatches) {
                 let sNum = parseInt(am[1]);
@@ -452,7 +463,7 @@ javascript:(function(){
 
             tableCtx.updateBoard(xml);
 
-            // Действия
+            // Действия игроков
             let playerActions = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*>(.*?)<\/PlayerAction>/gs);
             for (let pa of playerActions) {
                 let seatNum = parseInt(pa[1]);
@@ -496,7 +507,7 @@ javascript:(function(){
             }
         }
 
-        // Вскрытия
+        // 6. Шоудауны
         if (xml.includes('<Show') || xml.includes('<Muck>')) {
             let showMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><(?:Show|Muck)[^>]*><Cards>(.*?)<\/Cards>/g);
             for (let sm of showMatches) {
@@ -510,7 +521,7 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // Победители
+        // 7. Победители
         if (xml.includes('<Winners>')) {
             let winnerMatches = xml.matchAll(/<Winner\s+[^>]*amount="(\d+)"[^>]*seat="(\d+)"/g);
             for (let wm of winnerMatches) {
@@ -523,7 +534,7 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // Вылет игрока
+        // 8. Вылет игрока
         if (xml.includes('<Knockout ') || xml.includes('<TournamentPlayerRanked')) {
             let koMatch = xml.match(/<Knockout\s+[^>]*busted="(\d+)"/i);
             let rankedMatch = xml.match(/<TournamentPlayerRanked\s+[^>]*seat="(\d+)"/i);
@@ -587,5 +598,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🟢 [LIVE BB HUD v22.0] Запущен. Стеки в ББ отображаются в реальном времени!");
+    console.log("🟢 [LIVE BB HUD v22.1 PRO] Запущен. Синхронизация 100%!");
 })();
