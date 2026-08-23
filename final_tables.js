@@ -1,11 +1,11 @@
 javascript:(function(){
-    if (window.__pokerMasterRecorderV25) {
-        alert('🎯 MASTER BB HUD & RECORDER v25.0 уже активен!');
+    if (window.__pokerMasterRecorderV26) {
+        alert('🎯 MASTER BB HUD v26.0 уже активен!');
         return;
     }
-    window.__pokerMasterRecorderV25 = true;
+    window.__pokerMasterRecorderV26 = true;
 
-    const STORAGE_KEY = '__poker_hands_archive_v25';
+    const STORAGE_KEY = '__poker_hands_archive_v26';
     let savedHands = [];
     try {
         savedHands = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
@@ -226,11 +226,11 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="ft-dot" style="color:#22c55e;font-size:12px;">●</span>
-                <strong style="color:#22c55e;font-size:12px;">MASTER BB HUD v25.0</strong>
+                <strong style="color:#22c55e;font-size:12px;">MASTER BB HUD v26.0</strong>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-toggle-ft" style="background:transparent;border:1px solid #475569;color:#22c55e;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('ft-recorder-hud').remove();window.__pokerMasterRecorderV25=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('ft-recorder-hud').remove();window.__pokerMasterRecorderV26=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
@@ -326,7 +326,7 @@ javascript:(function(){
     document.getElementById('btn-export-ft-json').onclick = function() {
         try {
             let exportData = {
-                recorder_version: "v25.0_LIVE_BB_RECORDER",
+                recorder_version: "v26.0_LIVE_BB_RECORDER",
                 export_time: new Date().toISOString(),
                 total_hands_recorded: ftState.handsArchive.length,
                 recorded_hands: ftState.handsArchive
@@ -343,18 +343,16 @@ javascript:(function(){
         }
     };
 
-    // ── ГАРАНТИРОВАННЫЙ АВТОЗАХВАТ СТОЛА (AUTO-BINDING) ───────────────
+    // ── СТРОГИЙ И ТОЧНЫЙ ПАРСЕР СОКЕТОВ ──────────────────────────────
     function parseXmlStream(xml, ws) {
         if (!xml || typeof xml !== 'string') return;
         xml = xml.trim();
         if (!xml.startsWith('<')) return;
 
-        // Игнорируем фоновые системные пакеты лобби
         if (xml.includes('<ClientAppearanceConfig') || xml.includes('<TableAttributes') || xml.includes('<TablesTags') || xml.includes('<Tables offset=') || xml.includes('<MyTables') || xml.includes('<MyTournaments')) {
             return;
         }
 
-        // Проверяем, относится ли пакет к игровой сессии
         let isGameMsg = xml.includes('<NewHand') || xml.includes('<GameState') || xml.includes('<Seats') || xml.includes('<PlayerAction') || xml.includes('<Dealing') || xml.includes('<Winners') || xml.includes('<EndHand') || xml.includes('<TournamentInfo') || xml.includes('<TableDetails');
 
         if (isGameMsg) {
@@ -381,12 +379,23 @@ javascript:(function(){
         let tableCtx = ws.__tableContext;
         if (!tableCtx) return;
 
-        // 1. Места и игроки
-        if (xml.includes('<Seats') || (xml.includes('<Seat ') && xml.includes('<PlayerInfo'))) {
+        // 1. Места и синхронизация фишек (ТОЧНЫЙ ПОБОКСОВЫЙ ПАРСИНГ)
+        if (xml.includes('<Seats') || (xml.includes('<Seat ') && (xml.includes('<PlayerInfo') || xml.includes('<Chips')))) {
             let seatBlocks = xml.matchAll(/<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>(.*?)<\/Seat>)/gs);
             for (let sb of seatBlocks) {
                 let seatNum = parseInt(sb[2]);
                 let seatBody = sb[3] || '';
+
+                // Если место стало пустым (<Seat id="X"/>), удаляем игрока из списка
+                if (!seatBody || !seatBody.includes('<PlayerInfo')) {
+                    if (seatBody.includes('<Chips')) {
+                        let stM = seatBody.match(/stack-size="([^"]+)"/);
+                        let sObj = tableCtx.seats.get(seatNum);
+                        if (sObj && stM) sObj.currentStack = parseInt(stM[1]);
+                    }
+                    continue;
+                }
+
                 let rawNick = getAttr(seatBody, 'nickname');
                 let stackM = seatBody.match(/stack-size="([^"]+)"/);
                 let stack = stackM ? parseInt(stackM[1]) : 0;
@@ -404,19 +413,7 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 2. Синхронизация текущих фишек
-        if (xml.includes('<Chips ')) {
-            let chipMatches = xml.matchAll(/<Seat\s+[^>]*\bid="(\d+)"[^>]*>.*?<Chips\s+[^>]*stack-size="(\d+)"/gs);
-            for (let cm of chipMatches) {
-                let sNum = parseInt(cm[1]);
-                let stVal = parseInt(cm[2]);
-                let sObj = tableCtx.seats.get(sNum);
-                if (sObj && stVal > 0) sObj.currentStack = stVal;
-            }
-            updateFTUI();
-        }
-
-        // 3. Мгновенное обновление уровня блайндов
+        // 2. Мгновенное обновление уровня блайндов
         let curLevelMatch = xml.match(/<(?:CurrentLevel|HandInfo)\s+[^>]*?highStake="(\d+)"/i);
         if (curLevelMatch) {
             tableCtx.currentBB = parseInt(curLevelMatch[1]);
@@ -427,7 +424,7 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 4. Жизненный цикл раздачи
+        // 3. Жизненный цикл раздачи
         if (xml.includes('<Message>') || xml.includes('<GameState')) {
             let newHandMatch = xml.match(/<NewHand\s+[^>]*\bnumber="(\d+)"/);
             if (newHandMatch) {
@@ -443,6 +440,7 @@ javascript:(function(){
                 updateFTUI();
             }
 
+            // Вычет анте и блайндов
             let anteMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><PostAnte\s+amount="(\d+)"/g);
             for (let am of anteMatches) {
                 let sNum = parseInt(am[1]);
@@ -477,6 +475,7 @@ javascript:(function(){
 
             tableCtx.updateBoard(xml);
 
+            // Действия игроков
             let playerActions = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*>(.*?)<\/PlayerAction>/gs);
             for (let pa of playerActions) {
                 let seatNum = parseInt(pa[1]);
@@ -520,7 +519,7 @@ javascript:(function(){
             }
         }
 
-        // 5. Шоудауны
+        // 4. Шоудауны
         if (xml.includes('<Show') || xml.includes('<Muck>')) {
             let showMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><(?:Show|Muck)[^>]*><Cards>(.*?)<\/Cards>/g);
             for (let sm of showMatches) {
@@ -534,7 +533,7 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 6. Победители
+        // 5. Победители
         if (xml.includes('<Winners>')) {
             let winnerMatches = xml.matchAll(/<Winner\s+[^>]*amount="(\d+)"[^>]*seat="(\d+)"/g);
             for (let wm of winnerMatches) {
@@ -547,19 +546,19 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 7. Вылет игрока
+        // 6. Вылет игрока (МГНОВЕННОЕ УДАЛЕНИЕ ИЗ СПИСКА)
         if (xml.includes('<Knockout ') || xml.includes('<TournamentPlayerRanked')) {
             let koMatch = xml.match(/<Knockout\s+[^>]*busted="(\d+)"/i);
             let rankedMatch = xml.match(/<TournamentPlayerRanked\s+[^>]*seat="(\d+)"/i);
             let bustedSeat = koMatch ? parseInt(koMatch[1]) : (rankedMatch ? parseInt(rankedMatch[1]) : null);
             if (bustedSeat !== null) {
-                let bObj = tableCtx.seats.get(bustedSeat);
-                if (bObj) bObj.currentStack = 0;
+                tableCtx.seats.delete(bustedSeat);
+                tableCtx.activeSeatsInHand.delete(bustedSeat);
             }
             updateFTUI();
         }
 
-        // 8. Конец раздачи — моментальная запись
+        // 7. Завершение раздачи
         if (xml.includes('<EndHand')) {
             tableCtx.finalizeAndSaveHand();
         }
@@ -631,5 +630,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🟢 [MASTER BB HUD v25.0] Запущен. Автозахват активен, запись 100%!");
+    console.log("🟢 [MASTER BB HUD v26.0] Запущен. Синхронизация стеков 100%!");
 })();
