@@ -1,26 +1,16 @@
 javascript:(function(){
-    if (window.__pokerSyncV29) {
-        alert('✅ MASTER SYNC HUD v29.0 уже активен!');
+    if (window.__pokerSyncV30) {
+        alert('✅ MASTER SYNC HUD v30.0 уже активен!');
         return;
     }
-    window.__pokerSyncV29 = true;
+    window.__pokerSyncV30 = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       MASTER SYNC HUD v29.0 — PERFECT STACK SYNC ENGINE
-       Ядро протокола (проверено на реальных логах, 17/17 раздач без дрейфа):
-       • GameState/TableDetails: stack-size = стек ЗА столом (bet НЕ входит!)
-       • PostAnte/PostSB/PostBB/Bet/Raise/Call amount = ФИШКИ, переводимые
-         этим действием (Raise/Call = ДЕЛЬТА к уже внесённому на улице)
-       • UncalledBet amount = возврат игроку
-       • Winner amount = зачисление в стек
-       • PotsChange Pot change = авторитетный перенос в банк
-         (если change == текущая ставка игрока — ставка уходит в банк, UI: bet=0)
-       Инвариант (проверяется каждую раздачу): Σ стеков в конце == Σ на старте.
+       MASTER SYNC HUD v30.0 — AUTO-DISCOVERY & PERFECT STACK SYNC
        ══════════════════════════════════════════════════════════════════ */
 
-    /*ENGINE-START*/
     'use strict';
-    var SYNC_ENGINE_VERSION = 'v29.0-SYNC-ENGINE';
+    var SYNC_ENGINE_VERSION = 'v30.0-PRO-SYNC';
 
     function attr(str, name) {
         if (!str) return null;
@@ -44,20 +34,20 @@ javascript:(function(){
             id: null, name: null, tournamentId: null, tournamentName: null,
             level: { sb: 0, bb: 0, ante: 0, number: null, remaining: null },
             nextLevel: null,
-            seats: {},                    // seat -> seatObj
+            seats: {},
             hand: null, dealer: null,
             board: [], street: 'PREFLOP',
-            activeSeats: {},              // seat -> true (в раздаче, не сфолдили)
-            dealtSeats: {},               // seat -> true (получили карты в этой раздаче)
-            positions: {},                // seat -> 'BTN' | 'SB' | ...
-            potSwept: 0,                  // авторитетный банк из PotsChange
+            activeSeats: {},
+            dealtSeats: {},
+            positions: {},
+            potSwept: 0,
             winnerSum: 0,
-            winners: [],                  // [{seat, amount, combination, cards}]
-            showdownCards: {},            // seat -> {cards, isMuck, combination}
-            handStart: {},                // seat -> stack на старте раздачи
-            handOrigin: null,             // 'newhand' | 'midhand-sync'
-            handLevel: null,              // {sb,bb,ante,number} на старте раздачи
-            lastSyncReport: null,         // отчёт последней синхронизации
+            winners: [],
+            showdownCards: {},
+            handStart: {},
+            handOrigin: null,
+            handLevel: null,
+            lastSyncReport: null,
             handsCompleted: 0,
             syncFails: 0,
             sawFullSeats: false
@@ -67,17 +57,19 @@ javascript:(function(){
     function ensureSeat(ctx, seatNum, nick) {
         if (!ctx.seats[seatNum]) {
             ctx.seats[seatNum] = {
-                seat: seatNum, nick: null, stack: null, streetBet: 0,
-                inHand: false, busted: false, vacated: false, lastSeen: 0
+                seat: seatNum, nick: nick || ('Seat ' + seatNum), stack: null, streetBet: 0,
+                inHand: false, busted: false, vacated: false, lastSeen: Date.now()
             };
         }
-        if (nick) ctx.seats[seatNum].nick = nick;
+        if (nick && (!ctx.seats[seatNum].nick || ctx.seats[seatNum].nick.indexOf('Seat ') === 0)) {
+            ctx.seats[seatNum].nick = nick;
+        }
         return ctx.seats[seatNum];
     }
 
     function liveStackBB(ctx, chips) {
         var bb = ctx.level.bb || 0;
-        return bb > 0 ? Math.round((chips / bb) * 10) / 10 : null;
+        return (bb > 0 && chips !== null) ? Math.round((chips / bb) * 10) / 10 : null;
     }
 
     function calcPositions(activeList, dealerSeat) {
@@ -88,13 +80,22 @@ javascript:(function(){
         if (dIdx === -1) dIdx = 0;
         var ordered = [];
         for (var i = 0; i < n; i++) ordered.push(seats[(dIdx + i) % n]);
+        
         if (n === 2) {
             map[ordered[0]] = 'BTN/SB'; map[ordered[1]] = 'BB';
+        } else if (n === 3) {
+            map[ordered[0]] = 'BTN'; map[ordered[1]] = 'SB'; map[ordered[2]] = 'BB';
         } else {
             map[ordered[0]] = 'BTN'; map[ordered[1]] = 'SB'; map[ordered[2]] = 'BB';
-            var rest = ['UTG', 'UTG+1', 'MP', 'LJ', 'HJ', 'CO'];
-            for (var j = 3; j < n; j++) {
-                map[ordered[j]] = (j === n - 1) ? 'CO' : rest[j - 3] || ('MP+' + (j - 5));
+            var namedBack = { 1: 'CO', 2: 'HJ', 3: 'LJ', 4: 'MP' };
+            for (var idx = 3; idx < n; idx++) {
+                var distFromEnd = n - idx;
+                if (namedBack[distFromEnd] && distFromEnd <= 3) {
+                    map[ordered[idx]] = namedBack[distFromEnd];
+                } else {
+                    var utgOffset = idx - 3;
+                    map[ordered[idx]] = utgOffset === 0 ? 'UTG' : ('UTG+' + utgOffset);
+                }
             }
         }
         return map;
@@ -118,7 +119,6 @@ javascript:(function(){
         }
     }
 
-    /* — Синхронизация стеков из снапшота (TableDetails / GameState): stack-size = стек ЗА столом — */
     function syncSeatsFromSnapshot(ctx, xml, isGameState) {
         var m, report = { seq: Date.now(), isGameState: isGameState, diffs: [], applied: 0 };
         SEAT_BLOCK_RE.lastIndex = 0;
@@ -160,8 +160,8 @@ javascript:(function(){
             var s = ctx.seats[seatNum];
             s.streetBet = 0;
             s.inHand = false;
-            if (s.busted || s.vacated || s.stack === null) continue;
-            s.handActionCount = 0;
+            if (s.busted || s.vacated) continue;
+            s.handActions = [];
         }
         for (var i = 0; i < activeSeatsList.length; i++) {
             var sn = activeSeatsList[i];
@@ -170,7 +170,7 @@ javascript:(function(){
             ctx.dealtSeats[sn] = true;
             ctx.seats[sn].inHand = true;
             ctx.seats[sn].handActions = [];
-            ctx.handStart[sn] = ctx.seats[sn].stack;   /* стек на старте раздачи */
+            ctx.handStart[sn] = ctx.seats[sn].stack;
         }
         ctx.positions = calcPositions(activeSeatsList, dealerSeat);
     }
@@ -183,8 +183,10 @@ javascript:(function(){
     function displayPot(ctx) { return ctx.potSwept + streetBetTotal(ctx); }
 
     function applyChipAction(ctx, seatNum, kind, amount) {
-        var s = ctx.seats[seatNum];
-        if (!s || !amount) return;
+        var s = ensureSeat(ctx, seatNum, null);
+        if (!amount) return;
+        if (s.stack === null) s.stack = 0;
+        
         if (kind === 'PostAnte') {
             s.stack -= amount;
             if (!ctx.handLevel || !ctx.handLevel.ante) { ctx.level.ante = amount; if (ctx.handLevel) ctx.handLevel.ante = amount; }
@@ -197,7 +199,6 @@ javascript:(function(){
         } else if (kind === 'Bet') {
             s.stack -= amount; s.streetBet = amount;
         } else if (kind === 'Raise') {
-            /* Raise amount = ДОПОЛНИТЕЛЬНЫЕ фишки действия (не raise-to!) */
             s.stack -= amount; s.streetBet = (s.streetBet || 0) + amount;
         } else if (kind === 'Call' || kind === 'AllIn') {
             s.stack -= amount; s.streetBet = (s.streetBet || 0) + amount;
@@ -208,8 +209,7 @@ javascript:(function(){
     }
 
     function recordAction(ctx, seatNum, label, amount) {
-        var s = ctx.seats[seatNum];
-        if (!s) return;
+        var s = ensureSeat(ctx, seatNum, null);
         if (!s.handActions) s.handActions = [];
         var str = ctx.street + '_' + label;
         if (amount) {
@@ -219,29 +219,31 @@ javascript:(function(){
         s.handActions.push(str);
     }
 
-    /* ─── ГЛАВНЫЙ ПРОЦЕССОР: один XML-пакет стола ─── */
     function processTableMessage(ctx, xml, meta) {
         if (!xml || typeof xml !== 'string') return [];
         xml = xml.trim();
         if (xml.charAt(0) !== '<') return [];
         var trace = [];
 
-        /* 0. Лобби-шум отсеиваем */
-        if (/^<(ClientAppearanceConfig|TableAttributes|TablesTags|Tables |MyTables|MyTournaments|Tournaments |TournamentDetails|QuickSeatBlocks|ServerInfo|HudConfig)/.test(xml) && !/^<TournamentDetails/.test(xml)) {
+        /* 0. Лобби-фильтр */
+        if (/^<(ClientAppearanceConfig|TableAttributes|TablesTags|Tables |MyTables|MyTournaments|Tournaments |QuickSeatBlocks|ServerInfo|HudConfig)/.test(xml)) {
             return trace;
         }
 
-        /* 1. TableDetails — полный снапшот стола (имя + стеки) */
-        if (/^<TableDetails/.test(xml)) {
-            var tdId = attr(xml.match(/<TableDetails[^>]*>/)[0], 'id');
-            var tdName = decodeHtml(attr(xml.match(/<TableDetails[^>]*>/)[0], 'name') || '');
-            if (tdId && !ctx.id) ctx.id = tdId;
-            if (tdName && (!ctx.name || ctx.name === 'Стол')) ctx.name = tdName;
+        /* 1. TableDetails — снапшот стола */
+        if (/<TableDetails/.test(xml)) {
+            var tdMatch = xml.match(/<TableDetails[^>]*>/);
+            if (tdMatch) {
+                var tdId = attr(tdMatch[0], 'id');
+                var tdName = decodeHtml(attr(tdMatch[0], 'name') || '');
+                if (tdId) ctx.id = tdId;
+                if (tdName && (!ctx.name || ctx.name === 'Стол')) ctx.name = tdName;
+            }
             var tt = xml.match(/<TournamentTable[^>]*>/);
             if (tt) {
                 var tn = attr(tt[0], 'tournamentName');
                 if (tn) ctx.tournamentName = decodeHtml(tn);
-                var tId = attr(tt[0], 'id') || tdId;
+                var tId = attr(tt[0], 'id') || ctx.id;
                 if (tId) ctx.id = tId;
             }
             var par = xml.match(/<Parameters[^>]*\/>/);
@@ -254,7 +256,7 @@ javascript:(function(){
             return trace;
         }
 
-        /* 2. GameState — полный снапшот состояния (в т.ч. середина раздачи) */
+        /* 2. GameState — полное состояние */
         var gsM = xml.match(/<GameState\s+([^>]*)>/);
         if (gsM) {
             var gh = attr(gsM[0], 'hand');
@@ -262,11 +264,9 @@ javascript:(function(){
             if (hi) setLevelFromTag(ctx, hi[0]);
             var seatsTag = xml.match(/<Seats\s+([^>]*)>/);
             var gsDealer = seatsTag ? iattr(seatsTag[0], 'dealer') : null;
-            /* СНАЧАЛА синхронизируем стеки, потом начинаем раздачу — handStart будет точным */
             var rep = syncSeatsFromSnapshot(ctx, xml, true);
             trace.push('SYNC:GameState' + (rep.diffs.length ? ' DRIFT[' + rep.diffs.length + ']' : ' OK'));
             if (gh && (!ctx.hand || ctx.hand !== gh)) {
-                /* Синхронизация посреди чужой раздачи: начинаем её отслеживать */
                 var actList = [];
                 SEAT_BLOCK_RE.lastIndex = 0;
                 var mm;
@@ -274,7 +274,7 @@ javascript:(function(){
                     if (/activeInHand="true"/.test(mm[1]) && mm[3] && /<PlayerInfo/.test(mm[3])) actList.push(parseInt(mm[2], 10));
                 }
                 beginHand(ctx, gh, gsDealer === null ? 0 : gsDealer, actList);
-                ctx.handOrigin = 'midhand-sync';   /* раздача начата до нас — инвариант не проверяется */
+                ctx.handOrigin = 'midhand-sync';
             } else if (gsDealer !== null) {
                 ctx.dealer = gsDealer;
             }
@@ -298,13 +298,7 @@ javascript:(function(){
             return trace;
         }
 
-        if (xml.charAt(0) !== '<' || !/^<Message/.test(xml)) {
-            /* Отдельные ответы вне Message нас не интересуют */
-            if (/^<TournamentInfo/.test(xml)) processTournamentInfo(ctx, xml);
-            return trace;
-        }
-
-        /* 3. Инкрементальные изменения <Message><Changes>…</Changes></Message> */
+        /* 3. Инкрементальные изменения */
         var newHandM = xml.match(/<NewHand\s+([^>]*)\/>/);
         if (newHandM) {
             var handNum = attr(newHandM[0], 'number');
@@ -320,7 +314,7 @@ javascript:(function(){
             trace.push('NEWHAND:' + handNum + ' dealer=' + dealer);
         }
 
-        /* Действия игроков — строго в порядке документа */
+        /* Действия игроков */
         var am;
         ACTION_RE.lastIndex = 0;
         while ((am = ACTION_RE.exec(xml)) !== null) {
@@ -362,10 +356,9 @@ javascript:(function(){
                     { cards: mc.length >= 2 ? mc.slice(0, 2).join(' ') : null, isMuck: true, combination: '' };
                 if (ctx.showdownCards[seatNum] && !ctx.showdownCards[seatNum].isMuck) ctx.showdownCards[seatNum].isMuck = true;
             }
-            /* UseTimeBank / TimedOut / SendEmoji / ChatMessage — без влияния на фишки */
         }
 
-        /* PotsChange — авторитетный перенос ставок в банк */
+        /* PotsChange — перенос в банк */
         var pcM, pcRe = /<PotsChange>([\s\S]*?)<\/PotsChange>/g;
         while ((pcM = pcRe.exec(xml)) !== null) {
             var potM, potEntryRe = /<Pot\s+([^>]*)\/>/g;
@@ -374,42 +367,48 @@ javascript:(function(){
                 if (pChange === null || pChange <= 0) continue;
                 ctx.potSwept += pChange;
                 var ps = ctx.seats[pSeat];
-                if (ps && ps.streetBet === pChange) ps.streetBet = 0; /* ставка визуально ушла в банк */
+                if (ps && ps.streetBet === pChange) ps.streetBet = 0;
             }
             trace.push('POTS swept=' + ctx.potSwept);
         }
 
-        /* Улицы */
+        /* Улицы (исправлен флоп) */
         var streets = [['DealingFlop', 'FLOP', 3], ['DealingTurn', 'TURN', 4], ['DealingRiver', 'RIVER', 5]];
         for (var si = 0; si < streets.length; si++) {
-            var stM = xml.match(new RegExp('<' + streets[si][0] + '>[\\s\\S]*?<Card[^>]*>([^<]+)<\\/Card>[\\s\\S]*?<\\/' + streets[si][0] + '>'));
+            var tag = streets[si][0], sName = streets[si][1], maxCount = streets[si][2];
+            var stM = xml.match(new RegExp('<' + tag + '>[\\s\\S]*?<\\/' + tag + '>'));
             if (stM) {
-                var full = xml.match(new RegExp('<' + streets[si][0] + '>([\\s\\S]*?)<\\/' + streets[si][0] + '>'));
-                var fc = parseCards(full ? full[1] : stM[0]);
-                ctx.street = streets[si][1];
+                var fc = parseCards(stM[0]);
+                ctx.street = sName;
                 for (var ssn in ctx.seats) ctx.seats[ssn].streetBet = 0;
-                if (fc.length && ctx.board.length < streets[si][2]) {
-                    while (ctx.board.length < streets[si][2] - 1) ctx.board.push('??');
-                    ctx.board.push(fc[fc.length - 1]);
+                if (fc.length) {
+                    if (sName === 'FLOP') {
+                        ctx.board = fc.slice(0, 3);
+                    } else if (ctx.board.length < maxCount) {
+                        while (ctx.board.length < maxCount - 1) ctx.board.push('??');
+                        ctx.board.push(fc[fc.length - 1]);
+                    }
                 }
-                trace.push('STREET:' + streets[si][1]);
+                trace.push('STREET:' + sName);
             }
         }
 
-        /* Карты игроков при раздаче (для героя карты реальные) */
+        /* Раздача карт */
         var dcM = xml.match(/<DealingCards>([\s\S]*?)<\/DealingCards>/);
         if (dcM) {
             var dSeatRe = /<Seat\s+id="(\d+)">([\s\S]*?)<\/Seat>/g, dsm;
             while ((dsm = dSeatRe.exec(dcM[1])) !== null) {
+                var sId = parseInt(dsm[1], 10);
+                ensureSeat(ctx, sId, null);
                 var hc = parseCards(dsm[2]);
                 if (hc.length >= 2 && hc[0] !== 'xx') {
                     ctx.holeCardsNow = ctx.holeCardsNow || {};
-                    ctx.holeCardsNow[parseInt(dsm[1], 10)] = hc.slice(0, 2).join(' ');
+                    ctx.holeCardsNow[sId] = hc.slice(0, 2).join(' ');
                 }
             }
         }
 
-        /* Winners — мгновенное зачисление */
+        /* Winners */
         var wM, wRe = /<Winner\s+([^>]*)>([\s\S]*?)<\/Winner>|<Winner\s+([^>]*)\/>/g;
         while ((wM = wRe.exec(xml)) !== null) {
             var wAttr = wM[1] || wM[3] || '';
@@ -417,15 +416,16 @@ javascript:(function(){
             var wComb = decodeHtml(attr(wAttr, 'combination') || '');
             var wCards = parseCards(wM[2] || '').slice(0, 5).join(' ');
             if (wSeat !== null && wAmt > 0) {
-                var ws2 = ctx.seats[wSeat];
-                if (ws2) ws2.stack += wAmt;
+                var ws2 = ensureSeat(ctx, wSeat, null);
+                if (ws2.stack === null) ws2.stack = 0;
+                ws2.stack += wAmt;
                 ctx.winnerSum += wAmt;
                 ctx.winners.push({ seat: wSeat, amount: wAmt, combination: wComb, cards: wCards });
                 trace.push('WIN: seat' + wSeat + ' +' + wAmt.toLocaleString());
             }
         }
 
-        /* Нокауты и вылеты */
+        /* Нокауты / Вылеты / Новые игроки */
         var koM = xml.match(/<Knockout\s+([^>]*)busted="(\d+)"/);
         if (koM) {
             var bSeat = parseInt(koM[2], 10);
@@ -444,8 +444,6 @@ javascript:(function(){
                 ctx.seats[npSeat].vacated = true;
                 ctx.seats[npSeat].inHand = false;
             }
-            /* available="true" с PlayerInfo/Chips — новое место (ребаланс) */
-            var npBody = npM[0];
             if (npAvail === 'true' && /stack-size=/.test(xml)) {
                 var npChips = xml.match(/<Chips[^>]*stack-size="(\d+)"[^>]*\/>/);
                 var npNick = xml.match(/<PlayerInfo[^>]*nickname="([^"]+)"/);
@@ -457,13 +455,13 @@ javascript:(function(){
             }
         }
 
-        /* Уровень блайндов */
+        /* Уровни турнира */
         var lvlM = xml.match(/<CurrentLevel\s+([^>]*)\/>/) || xml.match(/<HandInfo\s+([^>]*)\/>/);
         if (lvlM) setLevelFromTag(ctx, lvlM[0]);
         var tiM = xml.match(/<TournamentInfo[\s\S]*?<\/TournamentInfo>/);
         if (tiM) processTournamentInfo(ctx, tiM[0]);
 
-        /* Конец раздачи — финализация + инвариант */
+        /* Конец раздачи */
         if (/<EndHand/.test(xml)) {
             finalizeHand(ctx, meta);
             trace.push('ENDHAND');
@@ -501,11 +499,11 @@ javascript:(function(){
             var startStack = (ctx.handStart[sn] !== undefined && ctx.handStart[sn] !== null) ? ctx.handStart[sn] : s.stack;
             if (startStack === null || isNaN(startStack)) startStack = 0;
             startTotal += startStack;
-            endTotal += s.stack;
+            endTotal += (s.stack || 0);
             var sd = ctx.showdownCards[sn];
             players.push({
                 seat: sn,
-                nick: s.nick || ('Seat_' + sn),
+                nick: s.nick || ('Seat ' + sn),
                 position: ctx.positions[sn] || 'N/A',
                 stack_start: startStack,
                 stack_start_bb: liveStackBB(ctx, startStack),
@@ -518,7 +516,7 @@ javascript:(function(){
             });
         }
         if (!anyStart) return;
-        var partial = ctx.handOrigin === 'midhand-sync';
+        var partial = ctx.handOrigin === 'midhand-sync' || startTotal === 0;
         var conserved = partial ? null : (startTotal === endTotal);
         var potTotal = ctx.winnerSum > 0 ? ctx.winnerSum : ctx.potSwept;
         var handObj = {
@@ -547,14 +545,13 @@ javascript:(function(){
             try { meta.onHandFinished(handObj, ctx); } catch (e) {}
         }
     }
-    /*ENGINE-END*/
 
     /* ═══════════════ STATE / STORAGE ═══════════════ */
-    var STORAGE_KEY = '__poker_hands_archive_v29';
+    var STORAGE_KEY = '__poker_hands_archive_v30';
     var handsArchive = [];
     try { handsArchive = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch (e) { handsArchive = []; }
 
-    var engineLog = [];          /* кольцевой лог последних событий движка */
+    var engineLog = [];
     function logEngine(tableKey, trace) {
         for (var i = 0; i < trace.length; i++) {
             engineLog.push({ t: Date.now(), table: tableKey, msg: trace[i] });
@@ -562,12 +559,12 @@ javascript:(function(){
         if (engineLog.length > 400) engineLog.splice(0, engineLog.length - 400);
     }
 
-    var tables = {};             /* wsUid -> ctx */
+    var tables = {};
     var wsSeq = 0;
 
     function persistArchive() {
         try {
-            if (handsArchive.length > 3000) handsArchive = handsArchive.slice(-3000);
+            if (handsArchive.length > 1000) handsArchive = handsArchive.slice(-1000);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(handsArchive));
         } catch (e) {}
     }
@@ -584,57 +581,57 @@ javascript:(function(){
 
     /* ═══════════════ UI ═══════════════ */
     var ui = document.createElement('div');
-    ui.id = 'sync-hud-v29';
+    ui.id = 'sync-hud-v30';
     ui.style.cssText = 'position:fixed;top:6px;left:50%;transform:translateX(-50%);width:96vw;max-width:470px;z-index:2147483647;background:rgba(8,12,22,0.97);color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,monospace;font-size:11px;padding:9px 11px;border-radius:12px;border:2px solid #22d3ee;box-shadow:0 14px 44px rgba(0,0,0,0.9);backdrop-filter:blur(14px);box-sizing:border-box;';
     ui.innerHTML = [
         '<div style="display:flex;justify-content:space-between;align-items:center;">',
         '  <div style="display:flex;align-items:center;gap:6px;">',
-        '    <span id="v29-dot" style="color:#22d3ee;">●</span>',
-        '    <b style="color:#22d3ee;font-size:12px;">SYNC HUD v29 · 100% СТЕКИ</b>',
+        '    <span id="v30-dot" style="color:#22d3ee;">●</span>',
+        '    <b style="color:#22d3ee;font-size:12px;">SYNC HUD v30 · 100% СТЕКИ</b>',
         '  </div>',
         '  <div style="display:flex;gap:6px;align-items:center;">',
-        '    <span id="v29-syncbadge" style="font-size:9.5px;color:#22c55e;border:1px solid #22c55e;border-radius:4px;padding:0 4px;">SYNC ✓</span>',
-        '    <button id="v29-toggle" style="background:transparent;border:1px solid #475569;color:#22d3ee;cursor:pointer;font-size:11px;padding:0 6px;border-radius:4px;">▾</button>',
-        '    <button id="v29-close" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;">✕</button>',
+        '    <span id="v30-syncbadge" style="font-size:9.5px;color:#22c55e;border:1px solid #22c55e;border-radius:4px;padding:0 4px;">SYNC ✓</span>',
+        '    <button id="v30-toggle" style="background:transparent;border:1px solid #475569;color:#22d3ee;cursor:pointer;font-size:11px;padding:0 6px;border-radius:4px;">▾</button>',
+        '    <button id="v30-close" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;">✕</button>',
         '  </div>',
         '</div>',
-        '<div id="v29-body" style="margin-top:7px;">',
+        '<div id="v30-body" style="margin-top:7px;">',
         '  <div style="display:flex;justify-content:space-between;align-items:center;font-size:10.5px;color:#94a3b8;background:#0b1220;padding:4px 8px;border-radius:7px;border:1px solid #1e293b;margin-bottom:6px;">',
-        '    <span>Столов: <b id="v29-tcount" style="color:#38bdf8;">0</b></span>',
-        '    <span>Раздач: <b id="v29-hcount" style="color:#22c55e;">0</b></span>',
-        '    <span>Сбой синхр.: <b id="v29-fcount" style="color:#f87171;">0</b></span>',
-        '    <button id="v29-clear" style="background:#334155;border:none;color:#cbd5e1;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:9px;">Сброс</button>',
+        '    <span>Столов: <b id="v30-tcount" style="color:#38bdf8;">0</b></span>',
+        '    <span>Раздач: <b id="v30-hcount" style="color:#22c55e;">0</b></span>',
+        '    <span>Сбой: <b id="v30-fcount" style="color:#f87171;">0</b></span>',
+        '    <button id="v30-clear" style="background:#334155;border:none;color:#cbd5e1;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:9px;">Сброс</button>',
         '  </div>',
-        '  <div id="v29-tables" style="max-height:300px;overflow-y:auto;margin-bottom:7px;"></div>',
-        '  <button id="v29-export" style="width:100%;padding:7px;background:linear-gradient(90deg,#0891b2,#16a34a);color:#fff;border:none;border-radius:7px;font-weight:bold;font-size:11px;cursor:pointer;">📥 Скачать JSON (раздачи + живые стеки + лог)</button>',
+        '  <div id="v30-tables" style="max-height:300px;overflow-y:auto;margin-bottom:7px;"></div>',
+        '  <button id="v30-export" style="width:100%;padding:7px;background:linear-gradient(90deg,#0891b2,#16a34a);color:#fff;border:none;border-radius:7px;font-weight:bold;font-size:11px;cursor:pointer;">📥 Скачать JSON (раздачи + стеки + лог)</button>',
         '</div>'].join('');
     document.body.appendChild(ui);
 
-    document.getElementById('v29-toggle').onclick = function () {
-        var b = document.getElementById('v29-body');
+    document.getElementById('v30-toggle').onclick = function () {
+        var b = document.getElementById('v30-body');
         var hidden = b.style.display === 'none';
         b.style.display = hidden ? 'block' : 'none';
         this.innerText = hidden ? '▾' : '▴';
     };
-    document.getElementById('v29-close').onclick = function () {
+    document.getElementById('v30-close').onclick = function () {
         ui.remove();
-        window.__pokerSyncV29 = false;
+        window.__pokerSyncV30 = false;
     };
-    document.getElementById('v29-clear').onclick = function () {
+    document.getElementById('v30-clear').onclick = function () {
         if (confirm('Очистить архив раздач?')) {
             handsArchive = [];
             localStorage.removeItem(STORAGE_KEY);
             renderUI();
         }
     };
-    document.getElementById('v29-export').onclick = function () {
+    document.getElementById('v30-export').onclick = function () {
         var liveTables = [];
         Object.keys(tables).forEach(function (k) {
             var c = tables[k];
             var seats = [];
             Object.keys(c.seats).map(Number).sort(function (a, b) { return a - b; }).forEach(function (sn) {
                 var s = c.seats[sn];
-                if (s.stack === null || s.busted || s.vacated) return;
+                if (s.busted || s.vacated) return;
                 seats.push({
                     seat: sn, nick: s.nick, position: c.positions[sn] || '—',
                     stack: s.stack, stack_bb: liveStackBB(c, s.stack),
@@ -660,7 +657,7 @@ javascript:(function(){
         var blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
         var a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'pokerdom_sync_v29_' + Date.now() + '.json';
+        a.download = 'pokerdom_sync_v30_' + Date.now() + '.json';
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
     };
 
@@ -677,21 +674,21 @@ javascript:(function(){
         rafPending = true;
         requestAnimationFrame(function () {
             rafPending = false;
-            var tEl = document.getElementById('v29-tables');
+            var tEl = document.getElementById('v30-tables');
             if (!tEl) return;
             var activeCtx = Object.keys(tables).map(function (k) { return tables[k]; })
                 .filter(function (c) { return Object.keys(c.seats).length > 0; });
-            document.getElementById('v29-tcount').innerText = activeCtx.length;
-            document.getElementById('v29-hcount').innerText = handsArchive.length;
+            document.getElementById('v30-tcount').innerText = activeCtx.length;
+            document.getElementById('v30-hcount').innerText = handsArchive.length;
             var totalFails = activeCtx.reduce(function (a, c) { return a + (c.syncFails || 0); }, 0);
-            document.getElementById('v29-fcount').innerText = totalFails;
-            var badge = document.getElementById('v29-syncbadge');
+            document.getElementById('v30-fcount').innerText = totalFails;
+            var badge = document.getElementById('v30-syncbadge');
             badge.textContent = totalFails ? 'DRIFT ' + totalFails : 'SYNC ✓';
             badge.style.color = totalFails ? '#f87171' : '#22c55e';
             badge.style.borderColor = totalFails ? '#f87171' : '#22c55e';
 
             if (!activeCtx.length) {
-                tEl.innerHTML = '<div style="color:#64748b;text-align:center;padding:10px;font-size:10px;">Ожидание игровых столов… (откройте стол после запуска)</div>';
+                tEl.innerHTML = '<div style="color:#64748b;text-align:center;padding:10px;font-size:10px;">Ожидание данных стола… (сделайте действие или откройте стол)</div>';
                 return;
             }
             var html = '';
@@ -713,11 +710,10 @@ javascript:(function(){
                 var seatNums = Object.keys(c.seats).map(Number).sort(function (a, b) { return a - b; });
                 seatNums.forEach(function (sn) {
                     var s = c.seats[sn];
-                    if (s.stack === null) return;
                     var dead = s.busted || s.vacated;
-                    var bbv = bb ? (s.stack / bb) : 0;
-                    var bbStr = bb ? bbv.toFixed(1) : '—';
-                    var col = dead ? '#475569' : (bbv < 15 ? '#ef4444' : (bbv < 30 ? '#f59e0b' : '#22c55e'));
+                    var bbv = bb && s.stack !== null ? (s.stack / bb) : null;
+                    var bbStr = bbv !== null ? bbv.toFixed(1) + ' BB' : '—';
+                    var col = dead ? '#475569' : (bbv !== null && bbv < 15 ? '#ef4444' : (bbv !== null && bbv < 30 ? '#f59e0b' : '#22c55e'));
                     var dot = dead ? '💀' : (c.activeSeats[sn] ? '🟢' : '⚪');
                     var dBtn = (c.dealer === sn) ? '<span style="color:#fbbf24;">[D]</span>' : '';
                     var pos = c.positions[sn] ? '<span style="color:#94a3b8;">(' + c.positions[sn] + ')</span>' : '';
@@ -729,7 +725,7 @@ javascript:(function(){
                         ? ' <span style="color:' + (c.showdownCards[sn].isMuck ? '#94a3b8' : '#a855f7') + ';font-weight:bold;">[' + c.showdownCards[sn].cards + ']</span>' : '';
                     html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:1.5px 0;' + (dead ? 'opacity:0.45;text-decoration:line-through;' : '') + '">';
                     html += '<span>' + dot + ' <b>' + (s.nick || ('Seat ' + sn)) + '</b> ' + pos + dBtn + ' ' + bet + cards + '</span>';
-                    html += '<span><b style="color:' + col + ';font-size:11.5px;">' + bbStr + ' BB</b> <span style="color:#64748b;font-size:9.5px;">' + fmtChips(s.stack) + '</span></span>';
+                    html += '<span><b style="color:' + col + ';font-size:11.5px;">' + bbStr + '</b> <span style="color:#64748b;font-size:9.5px;">' + fmtChips(s.stack) + '</span></span>';
                     html += '</div>';
                 });
                 html += '</div>';
@@ -740,13 +736,17 @@ javascript:(function(){
 
     /* ═══════════════ WEBSOCKET INTERCEPT ═══════════════ */
     function decodePayload(data) {
-        if (!data) return '';
-        if (typeof data === 'string') return data;
+        if (!data) return Promise.resolve('');
+        if (typeof data === 'string') return Promise.resolve(data);
         return Promise.resolve(data instanceof ArrayBuffer ? data : data.arrayBuffer()).then(function (buf) {
             var u8 = new Uint8Array(buf);
             if (u8.length > 2 && ((u8[0] === 0x1f && u8[1] === 0x8b) || u8[0] === 0x78)) {
-                var ds = new DecompressionStream(u8[0] === 0x1f ? 'gzip' : 'deflate');
-                return new Response(new Response(buf).body.pipeThrough(ds)).text();
+                if (typeof DecompressionStream !== 'undefined') {
+                    try {
+                        var ds = new DecompressionStream(u8[0] === 0x1f ? 'gzip' : 'deflate');
+                        return new Response(new Response(buf).body.pipeThrough(ds)).text();
+                    } catch (e) {}
+                }
             }
             return new TextDecoder('utf-8').decode(buf);
         }).catch(function () { return ''; });
@@ -771,8 +771,8 @@ javascript:(function(){
     }
 
     function hookWs(ws) {
-        if (!ws || ws.__v29Hooked) return;
-        ws.__v29Hooked = true;
+        if (!ws || ws.__v30Hooked) return;
+        ws.__v30Hooked = true;
         ws.addEventListener('message', function (e) {
             decodePayload(e.data).then(function (text) { handleTableXml(ws, text); }).catch(function () {});
         });
@@ -783,11 +783,17 @@ javascript:(function(){
                 renderUI();
             }
         });
+        // Принудительно запрашиваем снапшот стола, если подключились посреди игры
+        try {
+            if (ws.readyState === 1) {
+                ws.send('<GetTableDetails/>');
+            }
+        } catch (e) {}
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__v29WsProxy) {
-        window.__v29WsProxy = true;
+    if (OrigWS && !window.__v30WsProxy) {
+        window.__v30WsProxy = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function (target, args) {
                 var ws = Reflect.construct(target, args);
@@ -800,7 +806,7 @@ javascript:(function(){
         });
         var origSend = OrigWS.prototype.send;
         OrigWS.prototype.send = function () {
-            if (!this.__v29Hooked) hookWs(this);
+            if (!this.__v30Hooked) hookWs(this);
             try {
                 var arg = arguments[0];
                 if (typeof arg === 'string' && arg.charAt(0) === '<') {
@@ -820,14 +826,14 @@ javascript:(function(){
         };
     }
 
-    window.__pokerSyncV29API = {
+    window.__pokerSyncV30API = {
         version: SYNC_ENGINE_VERSION,
         tables: tables,
         archive: handsArchive,
         engineLog: engineLog,
-        export: function () { document.getElementById('v29-export').click(); }
+        export: function () { document.getElementById('v30-export').click(); }
     };
 
     renderUI();
-    console.log('%c✅ [SYNC HUD v29.0] Запущен. Движок: Raise=дельта, stack-size=за столом, PotsChange=авторитет. Инвариант фишек проверяется каждую раздачу.', 'color:#22d3ee;font-weight:bold;');
+    console.log('%c✅ [SYNC HUD v30.0] Запущен. Автообнаружение столов активно.', 'color:#22d3ee;font-weight:bold;');
 })();
