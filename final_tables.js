@@ -1,11 +1,11 @@
 javascript:(function(){
-    if (window.__pokerMasterRecorderV27) {
-        alert('🎯 MASTER BB HUD v27.0 LIVE SYNC уже активен!');
+    if (window.__pokerMasterRecorderV28) {
+        alert('🎯 MASTER BB HUD v28.0 DEFINITIVE уже активен!');
         return;
     }
-    window.__pokerMasterRecorderV27 = true;
+    window.__pokerMasterRecorderV28 = true;
 
-    const STORAGE_KEY = '__poker_hands_archive_v27';
+    const STORAGE_KEY = '__poker_hands_archive_v28';
     let savedHands = [];
     try {
         savedHands = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
@@ -217,7 +217,7 @@ javascript:(function(){
         }
     }
 
-    // ── HUD С ЖИВЫМИ СТЕКАМИ И СТАВКАМИ ───────────────────────────────
+    // ── HUD С РЕАЛ-ТАЙМ СТЕКАМИ И СТАВКАМИ ────────────────────────────
     let ui = document.createElement('div');
     ui.id = 'ft-recorder-hud';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:96vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #22c55e;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
@@ -226,11 +226,11 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="ft-dot" style="color:#22c55e;font-size:12px;">●</span>
-                <strong style="color:#22c55e;font-size:12px;">MASTER BB HUD v27.0 LIVE</strong>
+                <strong style="color:#22c55e;font-size:12px;">MASTER BB HUD v28.0 PRO</strong>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-toggle-ft" style="background:transparent;border:1px solid #475569;color:#22c55e;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('ft-recorder-hud').remove();window.__pokerMasterRecorderV27=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('ft-recorder-hud').remove();window.__pokerMasterRecorderV28=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
@@ -312,7 +312,6 @@ javascript:(function(){
                     let dot = inHand ? '🟢' : '⚪';
                     let cardsStr = sCards ? `<span style="color:#a855f7;font-weight:bold;">[${sCards.cards}]</span>` : '';
 
-                    // Отображение текущей активной ставки игрока в банке
                     let betStr = '';
                     if (s.streetBet > 0 && bbVal > 0) {
                         let betBB = (s.streetBet / bbVal).toFixed(2);
@@ -333,7 +332,7 @@ javascript:(function(){
     document.getElementById('btn-export-ft-json').onclick = function() {
         try {
             let exportData = {
-                recorder_version: "v27.0_LIVE_BB_RECORDER",
+                recorder_version: "v28.0_LIVE_BB_RECORDER",
                 export_time: new Date().toISOString(),
                 total_hands_recorded: ftState.handsArchive.length,
                 recorded_hands: ftState.handsArchive
@@ -350,7 +349,7 @@ javascript:(function(){
         }
     };
 
-    // ── СТРОГИЙ ПАРСЕР XML СОКЕТОВ С ЖИВЫМ ВЫЧЕТОМ СТАВОК ──────────────
+    // ── СТРОГИЙ ДВИЖОК ОБРАБОТКИ ПАКЕТОВ ──────────────────────────────
     function parseXmlStream(xml, ws) {
         if (!xml || typeof xml !== 'string') return;
         xml = xml.trim();
@@ -386,7 +385,7 @@ javascript:(function(){
         let tableCtx = ws.__tableContext;
         if (!tableCtx) return;
 
-        // 1. Места и точная синхронизация фишек (stack-size минус текущий bet)
+        // 1. Парсинг мест и точная синхронизация фишек (stack-size минус текущая ставка)
         if (xml.includes('<Seats') || (xml.includes('<Seat ') && (xml.includes('<PlayerInfo') || xml.includes('<Chips')))) {
             let seatBlocks = xml.matchAll(/<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>(.*?)<\/Seat>)/gs);
             for (let sb of seatBlocks) {
@@ -401,8 +400,8 @@ javascript:(function(){
                         let sObj = tableCtx.seats.get(seatNum);
                         if (sObj && stM) {
                             let totalStk = parseInt(stM[1]);
-                            sObj.currentStack = Math.max(0, totalStk - betVal);
-                            sObj.streetBet = betVal;
+                            sObj.currentStack = Math.max(0, totalStk - (betVal || sObj.streetBet || 0));
+                            if (betM) sObj.streetBet = betVal;
                         }
                     }
                     continue;
@@ -442,7 +441,7 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 3. Жизненный цикл раздачи и мгновенный вычет ставок
+        // 3. Жизненный цикл раздачи и мгновенный вычет ставок в реальном времени
         if (xml.includes('<Message>') || xml.includes('<GameState')) {
             let newHandMatch = xml.match(/<NewHand\s+[^>]*\bnumber="(\d+)"/);
             if (newHandMatch) {
@@ -458,7 +457,7 @@ javascript:(function(){
                 updateFTUI();
             }
 
-            // Вычет анте
+            // Мгновенный вычет анте
             let anteMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><PostAnte\s+amount="(\d+)"/g);
             for (let am of anteMatches) {
                 let sNum = parseInt(am[1]);
@@ -469,7 +468,7 @@ javascript:(function(){
                 if (sObj) sObj.currentStack = Math.max(0, sObj.currentStack - amt);
             }
 
-            // Вычет малого блайнда
+            // Мгновенный вычет малого блайнда
             let sbMatch = xml.match(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><PostSmallBlind\s+amount="(\d+)"/);
             if (sbMatch) {
                 let sNum = parseInt(sbMatch[1]);
@@ -483,7 +482,7 @@ javascript:(function(){
                 }
             }
 
-            // Вычет большого блайнда
+            // Мгновенный вычет большого блайнда
             let bbMatch = xml.match(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><PostBigBlind\s+amount="(\d+)"/);
             if (bbMatch) {
                 let sNum = parseInt(bbMatch[1]);
@@ -499,7 +498,7 @@ javascript:(function(){
 
             tableCtx.updateBoard(xml);
 
-            // Действия игроков — МГНОВЕННЫЙ ВЫЧЕТ ИЗ СТЕКА
+            // Обработка действий игроков — МГНОВЕННЫЙ ВЫЧЕТ ИЗ СТЕКА
             let playerActions = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*>(.*?)<\/PlayerAction>/gs);
             for (let pa of playerActions) {
                 let seatNum = parseInt(pa[1]);
@@ -575,7 +574,7 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 5. Победители — МГНОВЕННОЕ ДОБАВЛЕНИЕ ВЫИГРЫША К СТЕКУ
+        // 5. Победители — МГНОВЕННОЕ ПОПОЛНЕНИЕ СТЕКА
         if (xml.includes('<Winners>')) {
             let winnerMatches = xml.matchAll(/<Winner\s+[^>]*amount="(\d+)"[^>]*seat="(\d+)"/g);
             for (let wm of winnerMatches) {
@@ -588,7 +587,7 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 6. Вылет игрока
+        // 6. Вылет игрока (удаление из списка)
         if (xml.includes('<Knockout ') || xml.includes('<TournamentPlayerRanked')) {
             let koMatch = xml.match(/<Knockout\s+[^>]*busted="(\d+)"/i);
             let rankedMatch = xml.match(/<TournamentPlayerRanked\s+[^>]*seat="(\d+)"/i);
@@ -671,5 +670,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🟢 [MASTER BB HUD v27.0 LIVE SYNC] Запущен. Живое изменение стеков на бетах и выигрышах активно!");
+    console.log("🟢 [MASTER BB HUD v28.0 DEFINITIVE] Запущен. Живое обновление стеков 100%!");
 })();
