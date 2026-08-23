@@ -1,11 +1,11 @@
 javascript:(function(){
-    if (window.__pokerLiveBBRecorderV23) {
-        alert('🎯 LIVE BB HUD v23.0 уже активен!');
+    if (window.__pokerLiveBBRecorderV24) {
+        alert('🎯 LIVE BB HUD v24.0 ULTRA STEALTH уже активен!');
         return;
     }
-    window.__pokerLiveBBRecorderV23 = true;
+    window.__pokerLiveBBRecorderV24 = true;
 
-    const STORAGE_KEY = '__poker_hands_archive_v23';
+    const STORAGE_KEY = '__poker_hands_archive_v24';
     let savedHands = [];
     try {
         savedHands = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
@@ -226,11 +226,11 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="ft-dot" style="color:#22c55e;font-size:12px;">●</span>
-                <strong style="color:#22c55e;font-size:12px;">LIVE BB HUD v23.0 PRO</strong>
+                <strong style="color:#22c55e;font-size:12px;">LIVE BB HUD v24.0 PRO</strong>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-toggle-ft" style="background:transparent;border:1px solid #475569;color:#22c55e;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('ft-recorder-hud').remove();window.__pokerLiveBBRecorderV23=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('ft-recorder-hud').remove();window.__pokerLiveBBRecorderV24=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
@@ -242,7 +242,7 @@ javascript:(function(){
             </div>
 
             <div id="ft-live-tables" style="max-height:260px;overflow-y:auto;margin-bottom:8px;">
-                <div style="color:#94a3b8;font-size:10px;text-align:center;padding:8px;">Ожидание раздач...</div>
+                <div style="color:#94a3b8;font-size:10px;text-align:center;padding:8px;">Ожидание активных раздач...</div>
             </div>
 
             <button id="btn-export-ft-json" style="width:100%;padding:8px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:11px;cursor:pointer;">
@@ -326,7 +326,7 @@ javascript:(function(){
     document.getElementById('btn-export-ft-json').onclick = function() {
         try {
             let exportData = {
-                recorder_version: "v23.0_LIVE_BB_RECORDER",
+                recorder_version: "v24.0_LIVE_BB_RECORDER",
                 export_time: new Date().toISOString(),
                 total_hands_recorded: ftState.handsArchive.length,
                 recorded_hands: ftState.handsArchive
@@ -349,12 +349,10 @@ javascript:(function(){
         xml = xml.trim();
         if (!xml.startsWith('<')) return;
 
-        // Игнорируем фоновые списки лобби
         if (xml.includes('<ClientAppearanceConfig') || xml.includes('<TableAttributes') || xml.includes('<TablesTags') || xml.includes('<Tables offset=') || xml.includes('<MyTables') || xml.includes('<MyTournaments')) {
             return;
         }
 
-        // 1. Привязка ТОЛЬКО реального игрового стола
         let mTable = xml.match(/<TableDetails\s+[^>]*?\bid="([^"]+)"/i);
         if (mTable) {
             let tableId = mTable[1];
@@ -384,7 +382,6 @@ javascript:(function(){
         let nameMatch = xml.match(/<TableDetails[^>]*\bname="([^"]*)"/i);
         if (nameMatch) tableCtx.tableName = decodeHtml(nameMatch[1]);
 
-        // 2. Места и игроки
         if (xml.includes('<Seats') || (xml.includes('<Seat ') && xml.includes('<PlayerInfo'))) {
             let seatBlocks = xml.matchAll(/<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>(.*?)<\/Seat>)/gs);
             for (let sb of seatBlocks) {
@@ -407,7 +404,6 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 3. Синхронизация текущих фишек
         if (xml.includes('<Chips ')) {
             let chipMatches = xml.matchAll(/<Seat\s+[^>]*\bid="(\d+)"[^>]*>.*?<Chips\s+[^>]*stack-size="(\d+)"/gs);
             for (let cm of chipMatches) {
@@ -419,7 +415,6 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 4. Мгновенное обновление уровня блайндов
         let curLevelMatch = xml.match(/<(?:CurrentLevel|HandInfo)\s+[^>]*?highStake="(\d+)"/i);
         if (curLevelMatch) {
             tableCtx.currentBB = parseInt(curLevelMatch[1]);
@@ -430,7 +425,6 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 5. Жизненный цикл раздачи
         if (xml.includes('<Message>') || xml.includes('<GameState')) {
             let newHandMatch = xml.match(/<NewHand\s+[^>]*\bnumber="(\d+)"/);
             if (newHandMatch) {
@@ -446,7 +440,6 @@ javascript:(function(){
                 updateFTUI();
             }
 
-            // Анте и блайнды с вычетом из стека
             let anteMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><PostAnte\s+amount="(\d+)"/g);
             for (let am of anteMatches) {
                 let sNum = parseInt(am[1]);
@@ -481,7 +474,6 @@ javascript:(function(){
 
             tableCtx.updateBoard(xml);
 
-            // Действия игроков
             let playerActions = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*>(.*?)<\/PlayerAction>/gs);
             for (let pa of playerActions) {
                 let seatNum = parseInt(pa[1]);
@@ -525,7 +517,6 @@ javascript:(function(){
             }
         }
 
-        // 6. Шоудауны
         if (xml.includes('<Show') || xml.includes('<Muck>')) {
             let showMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><(?:Show|Muck)[^>]*><Cards>(.*?)<\/Cards>/g);
             for (let sm of showMatches) {
@@ -539,7 +530,6 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 7. Победители
         if (xml.includes('<Winners>')) {
             let winnerMatches = xml.matchAll(/<Winner\s+[^>]*amount="(\d+)"[^>]*seat="(\d+)"/g);
             for (let wm of winnerMatches) {
@@ -552,7 +542,6 @@ javascript:(function(){
             updateFTUI();
         }
 
-        // 8. Вылет игрока
         if (xml.includes('<Knockout ') || xml.includes('<TournamentPlayerRanked')) {
             let koMatch = xml.match(/<Knockout\s+[^>]*busted="(\d+)"/i);
             let rankedMatch = xml.match(/<TournamentPlayerRanked\s+[^>]*seat="(\d+)"/i);
@@ -569,7 +558,7 @@ javascript:(function(){
         }
     }
 
-    // ── ПЕРЕХВАТ WEBSOCKET ────────────────────────────────────────────
+    // ── 100% БЕЗОПАСНЫЙ И НЕЗАМЕТНЫЙ ПЕРЕХВАТЧИК WEBSOCKET ───────────
     async function decodePayload(data) {
         if (!data) return '';
         if (typeof data === 'string') return data;
@@ -588,33 +577,53 @@ javascript:(function(){
     function hookWs(ws) {
         if (!ws || ws.__ftHooked) return;
         ws.__ftHooked = true;
+
         ws.addEventListener('message', async function (e) {
-            let text = await decodePayload(e.data);
-            parseXmlStream(text, ws);
+            try {
+                let text = await decodePayload(e.data);
+                if (text && typeof text === 'string') {
+                    parseXmlStream(text, ws);
+                }
+            } catch (err) {}
         });
+
         ws.addEventListener('close', function() {
-            if (ws.__tableId) {
-                ftState.activeTables.delete(ws.__tableId);
-                updateFTUI();
+            try {
+                if (ws.__tableId && ftState.activeTables.has(ws.__tableId)) {
+                    ftState.activeTables.delete(ws.__tableId);
+                    updateFTUI();
+                }
+            } catch(err) {}
+        });
+    }
+
+    const OrigWS = window.WebSocket;
+    if (OrigWS && !window.__wsProxyInstalled) {
+        window.__wsProxyInstalled = true;
+
+        // Чистый нативный Proxy — исключает разрывы и дубликаты авторизации
+        window.WebSocket = new Proxy(OrigWS, {
+            construct(target, args) {
+                const ws = Reflect.construct(target, args);
+                hookWs(ws);
+                return ws;
             }
         });
-    }
 
-    var OrigWS = window.WebSocket;
-    if (OrigWS) {
-        window.WebSocket = function (...args) {
-            let ws = new OrigWS(...args);
-            hookWs(ws);
-            return ws;
-        };
-        window.WebSocket.prototype = OrigWS.prototype;
+        ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'].forEach(prop => {
+            if (OrigWS[prop] !== undefined) {
+                window.WebSocket[prop] = OrigWS[prop];
+            }
+        });
 
-        let origSend = OrigWS.prototype.send;
-        OrigWS.prototype.send = function (data) {
-            hookWs(this);
-            return origSend.apply(this, arguments);
+        const origSend = OrigWS.prototype.send;
+        OrigWS.prototype.send = function(...args) {
+            if (!this.__ftHooked) {
+                hookWs(this);
+            }
+            return origSend.apply(this, args);
         };
     }
 
-    console.log("🟢 [LIVE BB HUD v23.0] Запущен. Память защищена, дубли столов устранены!");
+    console.log("🟢 [LIVE BB HUD v24.0 ULTRA STEALTH] Запущен. Защита соединения активна!");
 })();
