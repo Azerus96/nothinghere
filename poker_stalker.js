@@ -1,6 +1,6 @@
 javascript:(function(){
     if (window.__pokerStalkerV20Headless) {
-        alert('🎯 VIP Stalker v20.1 FULL DOSSIER уже запущен!');
+        alert('🎯 VIP Stalker v20.3 UNIVERSAL BOARD уже запущен!');
         return;
     }
     window.__pokerStalkerV20Headless = true;
@@ -23,7 +23,7 @@ javascript:(function(){
         hfStatus: 'Проверка...',
         userViewingTournId: null,
         outboxQueue: [],
-        completedHandsArchive: [], // Локальный архив всех перехваченных раздач с банками и позициями!
+        completedHandsArchive: [],
         auth: { sessionId: null, wssUrl: null, clientVersion: "71.0.138" },
         sockets: { lobby: null, tables: new Map() },
         liveTournaments: new Map(),
@@ -91,6 +91,7 @@ javascript:(function(){
             this.tournId = tournId;
             this.seats = new Map();
             this.seatActions = new Map();
+            this.recordedShowdownSeats = new Set();
             this.sittingOutSeats = new Set();
             this.currentHand = null;
             this.board = [];
@@ -124,8 +125,54 @@ javascript:(function(){
             this.activeSeatsInHand.clear();
             this.playersActedThisHand.clear();
             this.seatActions.clear();
+            this.recordedShowdownSeats.clear();
 
             this.seats.forEach(s => { s.stackStart = s.stack || 0; });
+        }
+
+        // ── УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ДОСКИ (ПАТЧ БОРДА) ─────────────
+        updateBoardFromXml(xml) {
+            // 1. Если доска пришла целиком одним тегом <Board> (Префлоп Олл-ин)
+            let boardDirect = xml.match(/<Board>(.*?)<\/Board>/i);
+            if (boardDirect) {
+                let cards = Array.from(boardDirect[1].matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]);
+                if (cards.length >= 3) {
+                    this.board = cards.slice(0, 5);
+                    if (this.board.length === 3) this.street = 'FLOP';
+                    else if (this.board.length === 4) this.street = 'TURN';
+                    else if (this.board.length === 5) this.street = 'RIVER';
+                    return;
+                }
+            }
+
+            // 2. Пошагово: Флоп (строго 3 карты)
+            let flopMatch = xml.match(/<DealingFlop><Cards>(.*?)<\/Cards><\/DealingFlop>/i);
+            if (flopMatch && this.board.length === 0) {
+                this.street = 'FLOP';
+                let flopCards = Array.from(flopMatch[1].matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]);
+                if (flopCards.length >= 3) {
+                    this.board = flopCards.slice(0, 3);
+                    this.potOnFlop = this.potTotal;
+                    this.playersOnFlop = this.activeSeatsInHand.size;
+                }
+            }
+
+            // 3. Пошагово: Терн (строго 4-я карта)
+            let turnMatch = xml.match(/<DealingTurn><Cards><Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card><\/Cards><\/DealingTurn>/i);
+            if (turnMatch && this.board.length === 3) {
+                this.street = 'TURN';
+                this.board.push(turnMatch[1] + turnMatch[2]);
+                this.potOnTurn = this.potTotal;
+            }
+
+            // 4. Пошагово: Ривер (строго 5-я карта)
+            let riverMatch = xml.match(/<DealingRiver><Cards><Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card><\/Cards><\/DealingRiver>/i);
+            if (riverMatch && this.board.length === 4) {
+                this.street = 'RIVER';
+                this.board.push(riverMatch[1] + riverMatch[2]);
+                this.potOnRiver = this.potTotal;
+                this.playersOnRiver = this.activeSeatsInHand.size;
+            }
         }
 
         recordAction(seatId, actionType, amount = 0) {
@@ -187,12 +234,10 @@ javascript:(function(){
         return stalkerState.stalkedPlayers.get(cleanNick);
     }
 
-    // ── ГАРАНТИРОВАННАЯ ДОСТАВКА В ОБЛАКО ─────────────────────────────
     function queueServerEvent(type, payload) {
         let eventObj = { type: type, payload: payload, timestamp: Date.now() };
         stalkerState.outboxQueue.push(eventObj);
         
-        // Если это сыгранная раздача со всеми данными — сохраняем её в локальный архив для JSON!
         if (type === "HAND_SHOWDOWN_COMPLETED") {
             stalkerState.completedHandsArchive.push(payload);
         }
@@ -302,7 +347,7 @@ javascript:(function(){
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="st-dot" style="color:#a78bfa;font-size:12px;">👁️</span>
-                <strong style="color:#a78bfa;font-size:12px;" id="st-hud-title">AUTO-SPECTATOR v20.1</strong>
+                <strong style="color:#a78bfa;font-size:12px;" id="st-hud-title">AUTO-SPECTATOR v20.3</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
@@ -316,7 +361,7 @@ javascript:(function(){
             <div style="background:#030712;padding:6px 8px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;">
                 <div style="display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;">
                     <span>Фоновый Спектатор: <b id="st-spectator-count" style="color:#38bdf8;">0 / ${MAX_BACKGROUND_TABLES} столов</b></span>
-                    <span id="st-scan-status" style="color:#4ade80;">Headless 0ms</span>
+                    <span id="st-scan-status" style="color:#4ade80;">Full-Board v20.3</span>
                 </div>
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;margin-top:4px;">
                     <span>Холдем-турниров: <b id="st-tourns-count" style="color:#38bdf8;">0</b></span>
@@ -412,13 +457,12 @@ javascript:(function(){
         }
     }
 
-    // ── АВТО-СПЕКТАТОР: НЕВИДИМЫЙ ФОНОВЫЙ ПУЛ СТОЛОВ ──────────────────
+    // ── АВТО-СПЕКТАТОР (ФОНОВЫЙ ПУЛ) ─────────────────────────────────
     async function manageBackgroundSpectatorPool() {
         let sid = stalkerState.auth.sessionId || autoDetectSessionId();
         let wsUrl = stalkerState.auth.wssUrl;
         if (!sid || !wsUrl) return;
 
-        // 1. Очищаем сокеты столов, где цель выбыла
         for (let [tableId, ws] of stalkerState.backgroundTableSockets.entries()) {
             let tableCtx = stalkerState.activeTables.get(tableId);
             let hasActiveTarget = false;
@@ -434,11 +478,10 @@ javascript:(function(){
             }
         }
 
-        // 2. Открываем новые невидимые сокеты столов
         for (let [tableId, tInfo] of stalkerState.discoveredTargetTables.entries()) {
             if (stalkerState.backgroundTableSockets.size >= MAX_BACKGROUND_TABLES) break;
             if (stalkerState.backgroundTableSockets.has(tableId)) continue;
-            if (tInfo.tournId === stalkerState.userViewingTournId) continue; // Анти-коллизия
+            if (tInfo.tournId === stalkerState.userViewingTournId) continue;
 
             let tableWs = new OrigWS(wsUrl);
             stalkerState.backgroundTableSockets.set(tableId, tableWs);
@@ -471,7 +514,7 @@ javascript:(function(){
     }
     setInterval(manageBackgroundSpectatorPool, 4000);
 
-    // ── ФОНОВЫЙ КРАУЛЕР ТУРНИРОВ ──────────────────────────────────────
+    // ── ФОНОВЫЙ КРАУЛЕР ──────────────────────────────────────────────
     function triggerLobbyTournamentRefresh() {
         let lobbyWs = stalkerState.sockets.lobby;
         if (lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
@@ -647,7 +690,7 @@ javascript:(function(){
         });
     }
 
-    // ── ОСНОВНОЙ ПАРСЕР ПОТОКА (С ПОЛНОЙ ТЕЛЕМЕТРИЕЙ РАЗДАЧ) ───────────
+    // ── ОСНОВНОЙ ПАРСЕР ПОТОКА (С ПОЛНЫМ ПАТЧЕМ ДОСКИ) ─────────────────
     function parseXmlStream(xml, ws, dir = 'IN') {
         if (!xml || typeof xml !== 'string') return;
         xml = xml.trim();
@@ -841,33 +884,10 @@ javascript:(function(){
                 tableCtx.potTotal += amt;
             }
 
-            // Флоп
-            let flopMatch = xml.match(/<DealingFlop><Cards>(.*?)<\/Cards><\/DealingFlop>/);
-            if (flopMatch) {
-                tableCtx.street = 'FLOP';
-                tableCtx.board = Array.from(flopMatch[1].matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]);
-                tableCtx.potOnFlop = tableCtx.potTotal;
-                tableCtx.playersOnFlop = tableCtx.activeSeatsInHand.size;
-            }
+            // ── УНИВЕРСАЛЬНЫЙ ПАТЧ ДОСКИ (ВЫЗОВ МЕТОДА) ───────────────
+            tableCtx.updateBoardFromXml(xml);
 
-            // Терн
-            let turnMatch = xml.match(/<DealingTurn><Cards><Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card><\/Cards><\/DealingTurn>/i);
-            if (turnMatch) {
-                tableCtx.street = 'TURN';
-                tableCtx.board.push(turnMatch[1] + turnMatch[2]);
-                tableCtx.potOnTurn = tableCtx.potTotal;
-            }
-
-            // Ривер
-            let riverMatch = xml.match(/<DealingRiver><Cards><Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card><\/Cards><\/DealingRiver>/i);
-            if (riverMatch) {
-                tableCtx.street = 'RIVER';
-                tableCtx.board.push(riverMatch[1] + riverMatch[2]);
-                tableCtx.potOnRiver = tableCtx.potTotal;
-                tableCtx.playersOnRiver = tableCtx.activeSeatsInHand.size;
-            }
-
-            // Действия
+            // Действия игроков
             let playerActions = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*>(.*?)<\/PlayerAction>/gs);
             for (let pa of playerActions) {
                 let seatNum = parseInt(pa[1]);
@@ -939,11 +959,15 @@ javascript:(function(){
             }
         }
 
-        // Шоудаун и Muck Leak
+        // Шоудаун и Muck Leak (СТРОГО 2 КАРТЫ ХОЛДЕМА, БЕЗ ДУБЛЕЙ)
         if (xml.includes('<Show') || xml.includes('<Muck>')) {
             let showMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><(?:Show|Muck)[^>]*><Cards>(.*?)<\/Cards>/g);
             for (let sm of showMatches) {
                 let seatNum = parseInt(sm[1]);
+                
+                if (tableCtx.recordedShowdownSeats.has(seatNum)) continue;
+                tableCtx.recordedShowdownSeats.add(seatNum);
+
                 let cardsRaw = sm[2];
                 let cardsParsed = Array.from(cardsRaw.matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]);
                 
@@ -957,6 +981,9 @@ javascript:(function(){
                         let stackStart = seatInfo.stackStart || seatInfo.stack || 0;
                         let stackBB = tableCtx.currentBB > 0 ? (stackStart / tableCtx.currentBB) : 0;
                         let isMuckLeak = sm[0].includes('<Muck');
+                        let isTarget = TARGET_WATCHLIST.has(seatInfo.cleanNick);
+
+                        let leakType = isTarget ? (isMuckLeak ? "TARGET_MUCK_LEAK" : "TARGET_SHOWDOWN") : (isMuckLeak ? "OPPONENT_MUCK_LEAK" : "OPPONENT_SHOWDOWN");
 
                         let handPayload = {
                             hand_number: tableCtx.currentHand || `h_${Date.now()}`,
@@ -964,6 +991,8 @@ javascript:(function(){
                             tournament_name: tableCtx.tournId && stalkerState.liveTournaments.has(tableCtx.tournId) ? stalkerState.liveTournaments.get(tableCtx.tournId).name : 'MTT',
                             uuid: seatInfo.uuid || `target_${seatInfo.cleanNick}`,
                             name: seatInfo.cleanNick,
+                            is_target_player: isTarget,
+                            leak_type: leakType,
                             position: position,
                             stack_start: stackStart,
                             stack_bb: parseFloat(stackBB.toFixed(1)),
@@ -989,7 +1018,7 @@ javascript:(function(){
     setInterval(sendHudBatch, 5000);
     setInterval(processOutboxQueue, 4000);
 
-    // ── МГНОВЕННЫЙ ЭКСПОРТ (С ПОЛНЫМ ДАМПОМ ВСЕХ РАЗДАЧ В JSON) ───────
+    // ── МГНОВЕННЫЙ ЭКСПОРТ (ПОЛНЫЙ ДАМП ВСЕХ РАЗДАЧ) ──────────────────
     document.getElementById('btn-export-db').onclick = async function() {
         try {
             let exportData = {
@@ -998,7 +1027,7 @@ javascript:(function(){
                 targetsCount: stalkerState.stalkedPlayers.size,
                 liveTournamentsCount: stalkerState.liveTournaments.size,
                 outboxQueueLength: stalkerState.outboxQueue.length,
-                recorded_showdowns_and_hands: stalkerState.completedHandsArchive, // ВСЕ РАЗДАЧИ С БАНКАМИ И КАРТАМИ!
+                recorded_showdowns_and_hands: stalkerState.completedHandsArchive,
                 players: {}
             };
 
@@ -1026,7 +1055,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_full_dossier_with_hands_${Date.now()}.json`;
+            a.download = `pokerdom_ultra_dossier_with_hands_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1106,5 +1135,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🎯 [VIP Scout v20.1 FULL DOSSIER] Готов к работе.");
+    console.log("🎯 [VIP Scout v20.3 UNIVERSAL BOARD] Готов к работе.");
 })();
