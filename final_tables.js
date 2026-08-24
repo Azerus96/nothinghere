@@ -1,16 +1,16 @@
 javascript:(function(){
-    if (window.__pokerSyncV30) {
-        alert('✅ MASTER SYNC HUD v30.0 уже активен!');
+    if (window.__pokerSyncV31) {
+        alert('✅ MASTER SYNC HUD v31.0 уже активен!');
         return;
     }
-    window.__pokerSyncV30 = true;
+    window.__pokerSyncV31 = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       MASTER SYNC HUD v30.0 — AUTO-DISCOVERY & PERFECT STACK SYNC
+       MASTER SYNC HUD v31.0 — ZERO-DRIFT HAND LEVEL LOCK ENGINE
        ══════════════════════════════════════════════════════════════════ */
 
     'use strict';
-    var SYNC_ENGINE_VERSION = 'v30.0-PRO-SYNC';
+    var SYNC_ENGINE_VERSION = 'v31.0-PRO-SYNC';
 
     function attr(str, name) {
         if (!str) return null;
@@ -67,9 +67,16 @@ javascript:(function(){
         return ctx.seats[seatNum];
     }
 
+    function getActiveHandBB(ctx) {
+        if (ctx.hand && ctx.handLevel && ctx.handLevel.bb > 0) {
+            return ctx.handLevel.bb;
+        }
+        return ctx.level.bb || 0;
+    }
+
     function liveStackBB(ctx, chips) {
-        var bb = ctx.level.bb || 0;
-        return (bb > 0 && chips !== null) ? Math.round((chips / bb) * 10) / 10 : null;
+        var bb = getActiveHandBB(ctx);
+        return (bb > 0 && chips !== null) ? Math.round((chips / bb) * 100) / 100 : null;
     }
 
     function calcPositions(activeList, dealerSeat) {
@@ -116,6 +123,9 @@ javascript:(function(){
             ctx.level.sb = sb !== null ? sb : Math.round(bb / 2);
             ctx.level.ante = an !== null ? an : 0;
             if (num !== null) ctx.level.number = num;
+            if (!ctx.hand || !ctx.handLevel || !ctx.handLevel.bb) {
+                ctx.handLevel = { sb: ctx.level.sb, bb: ctx.level.bb, ante: ctx.level.ante, number: ctx.level.number };
+            }
         }
     }
 
@@ -155,6 +165,7 @@ javascript:(function(){
         ctx.handStart = {};
         ctx.activeSeats = {};
         ctx.dealtSeats = {};
+        /* Фиксируем уровень строго для этой раздачи */
         ctx.handLevel = { sb: ctx.level.sb, bb: ctx.level.bb, ante: ctx.level.ante, number: ctx.level.number };
         for (var seatNum in ctx.seats) {
             var s = ctx.seats[seatNum];
@@ -192,10 +203,10 @@ javascript:(function(){
             if (!ctx.handLevel || !ctx.handLevel.ante) { ctx.level.ante = amount; if (ctx.handLevel) ctx.handLevel.ante = amount; }
         } else if (kind === 'PostSmallBlind') {
             s.stack -= amount; s.streetBet = amount;
-            ctx.level.sb = amount; if (ctx.handLevel) ctx.handLevel.sb = amount;
+            if (!ctx.handLevel || !ctx.handLevel.sb) { ctx.level.sb = amount; if (ctx.handLevel) ctx.handLevel.sb = amount; }
         } else if (kind === 'PostBigBlind') {
             s.stack -= amount; s.streetBet = amount;
-            ctx.level.bb = amount; if (ctx.handLevel) ctx.handLevel.bb = amount;
+            if (!ctx.handLevel || !ctx.handLevel.bb) { ctx.level.bb = amount; if (ctx.handLevel) ctx.handLevel.bb = amount; }
         } else if (kind === 'Bet') {
             s.stack -= amount; s.streetBet = amount;
         } else if (kind === 'Raise') {
@@ -225,12 +236,10 @@ javascript:(function(){
         if (xml.charAt(0) !== '<') return [];
         var trace = [];
 
-        /* 0. Лобби-фильтр */
         if (/^<(ClientAppearanceConfig|TableAttributes|TablesTags|Tables |MyTables|MyTournaments|Tournaments |QuickSeatBlocks|ServerInfo|HudConfig)/.test(xml)) {
             return trace;
         }
 
-        /* 1. TableDetails — снапшот стола */
         if (/<TableDetails/.test(xml)) {
             var tdMatch = xml.match(/<TableDetails[^>]*>/);
             if (tdMatch) {
@@ -256,7 +265,6 @@ javascript:(function(){
             return trace;
         }
 
-        /* 2. GameState — полное состояние */
         var gsM = xml.match(/<GameState\s+([^>]*)>/);
         if (gsM) {
             var gh = attr(gsM[0], 'hand');
@@ -298,7 +306,6 @@ javascript:(function(){
             return trace;
         }
 
-        /* 3. Инкрементальные изменения */
         var newHandM = xml.match(/<NewHand\s+([^>]*)\/>/);
         if (newHandM) {
             var handNum = attr(newHandM[0], 'number');
@@ -314,7 +321,6 @@ javascript:(function(){
             trace.push('NEWHAND:' + handNum + ' dealer=' + dealer);
         }
 
-        /* Действия игроков */
         var am;
         ACTION_RE.lastIndex = 0;
         while ((am = ACTION_RE.exec(xml)) !== null) {
@@ -358,7 +364,6 @@ javascript:(function(){
             }
         }
 
-        /* PotsChange — перенос в банк */
         var pcM, pcRe = /<PotsChange>([\s\S]*?)<\/PotsChange>/g;
         while ((pcM = pcRe.exec(xml)) !== null) {
             var potM, potEntryRe = /<Pot\s+([^>]*)\/>/g;
@@ -372,7 +377,6 @@ javascript:(function(){
             trace.push('POTS swept=' + ctx.potSwept);
         }
 
-        /* Улицы (исправлен флоп) */
         var streets = [['DealingFlop', 'FLOP', 3], ['DealingTurn', 'TURN', 4], ['DealingRiver', 'RIVER', 5]];
         for (var si = 0; si < streets.length; si++) {
             var tag = streets[si][0], sName = streets[si][1], maxCount = streets[si][2];
@@ -393,7 +397,6 @@ javascript:(function(){
             }
         }
 
-        /* Раздача карт */
         var dcM = xml.match(/<DealingCards>([\s\S]*?)<\/DealingCards>/);
         if (dcM) {
             var dSeatRe = /<Seat\s+id="(\d+)">([\s\S]*?)<\/Seat>/g, dsm;
@@ -408,7 +411,6 @@ javascript:(function(){
             }
         }
 
-        /* Winners */
         var wM, wRe = /<Winner\s+([^>]*)>([\s\S]*?)<\/Winner>|<Winner\s+([^>]*)\/>/g;
         while ((wM = wRe.exec(xml)) !== null) {
             var wAttr = wM[1] || wM[3] || '';
@@ -425,7 +427,6 @@ javascript:(function(){
             }
         }
 
-        /* Нокауты / Вылеты / Новые игроки */
         var koM = xml.match(/<Knockout\s+([^>]*)busted="(\d+)"/);
         if (koM) {
             var bSeat = parseInt(koM[2], 10);
@@ -455,13 +456,11 @@ javascript:(function(){
             }
         }
 
-        /* Уровни турнира */
         var lvlM = xml.match(/<CurrentLevel\s+([^>]*)\/>/) || xml.match(/<HandInfo\s+([^>]*)\/>/);
         if (lvlM) setLevelFromTag(ctx, lvlM[0]);
         var tiM = xml.match(/<TournamentInfo[\s\S]*?<\/TournamentInfo>/);
         if (tiM) processTournamentInfo(ctx, tiM[0]);
 
-        /* Конец раздачи */
         if (/<EndHand/.test(xml)) {
             finalizeHand(ctx, meta);
             trace.push('ENDHAND');
@@ -488,6 +487,7 @@ javascript:(function(){
 
     function finalizeHand(ctx, meta) {
         if (!ctx.hand) return;
+        var handBB = getActiveHandBB(ctx);
         var startTotal = 0, endTotal = 0, anyStart = false;
         var players = [];
         var seatNums = Object.keys(ctx.seats).map(Number).sort(function (a, b) { return a - b; });
@@ -506,9 +506,9 @@ javascript:(function(){
                 nick: s.nick || ('Seat ' + sn),
                 position: ctx.positions[sn] || 'N/A',
                 stack_start: startStack,
-                stack_start_bb: liveStackBB(ctx, startStack),
+                stack_start_bb: handBB > 0 ? Math.round(startStack / handBB * 100) / 100 : null,
                 stack_end: s.stack,
-                stack_end_bb: liveStackBB(ctx, s.stack),
+                stack_end_bb: handBB > 0 ? Math.round((s.stack || 0) / handBB * 100) / 100 : null,
                 cards: sd ? sd.cards : ((ctx.holeCardsNow && ctx.holeCardsNow[sn]) || 'xx xx'),
                 is_muck_leak: sd ? (sd.isMuck ? 1 : 0) : 0,
                 busted: s.busted ? 1 : 0,
@@ -529,7 +529,7 @@ javascript:(function(){
             dealer_seat: ctx.dealer,
             board: ctx.board.join(' '),
             pot_total: potTotal,
-            pot_bb: ctx.level.bb ? Math.round(potTotal / ctx.level.bb * 10) / 10 : null,
+            pot_bb: handBB > 0 ? Math.round(potTotal / handBB * 100) / 100 : null,
             winners: ctx.winners,
             players: players,
             sync_verified: partial ? null : (conserved && (ctx.winnerSum === 0 || ctx.winnerSum === ctx.potSwept)),
@@ -547,7 +547,7 @@ javascript:(function(){
     }
 
     /* ═══════════════ STATE / STORAGE ═══════════════ */
-    var STORAGE_KEY = '__poker_hands_archive_v30';
+    var STORAGE_KEY = '__poker_hands_archive_v31';
     var handsArchive = [];
     try { handsArchive = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch (e) { handsArchive = []; }
 
@@ -581,53 +581,54 @@ javascript:(function(){
 
     /* ═══════════════ UI ═══════════════ */
     var ui = document.createElement('div');
-    ui.id = 'sync-hud-v30';
+    ui.id = 'sync-hud-v31';
     ui.style.cssText = 'position:fixed;top:6px;left:50%;transform:translateX(-50%);width:96vw;max-width:470px;z-index:2147483647;background:rgba(8,12,22,0.97);color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,monospace;font-size:11px;padding:9px 11px;border-radius:12px;border:2px solid #22d3ee;box-shadow:0 14px 44px rgba(0,0,0,0.9);backdrop-filter:blur(14px);box-sizing:border-box;';
     ui.innerHTML = [
         '<div style="display:flex;justify-content:space-between;align-items:center;">',
         '  <div style="display:flex;align-items:center;gap:6px;">',
-        '    <span id="v30-dot" style="color:#22d3ee;">●</span>',
-        '    <b style="color:#22d3ee;font-size:12px;">SYNC HUD v30 · 100% СТЕКИ</b>',
+        '    <span id="v31-dot" style="color:#22d3ee;">●</span>',
+        '    <b style="color:#22d3ee;font-size:12px;">SYNC HUD v31 · 100% СТЕКИ</b>',
         '  </div>',
         '  <div style="display:flex;gap:6px;align-items:center;">',
-        '    <span id="v30-syncbadge" style="font-size:9.5px;color:#22c55e;border:1px solid #22c55e;border-radius:4px;padding:0 4px;">SYNC ✓</span>',
-        '    <button id="v30-toggle" style="background:transparent;border:1px solid #475569;color:#22d3ee;cursor:pointer;font-size:11px;padding:0 6px;border-radius:4px;">▾</button>',
-        '    <button id="v30-close" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;">✕</button>',
+        '    <span id="v31-syncbadge" style="font-size:9.5px;color:#22c55e;border:1px solid #22c55e;border-radius:4px;padding:0 4px;">SYNC ✓</span>',
+        '    <button id="v31-toggle" style="background:transparent;border:1px solid #475569;color:#22d3ee;cursor:pointer;font-size:11px;padding:0 6px;border-radius:4px;">▾</button>',
+        '    <button id="v31-close" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;">✕</button>',
         '  </div>',
         '</div>',
-        '<div id="v30-body" style="margin-top:7px;">',
+        '<div id="v31-body" style="margin-top:7px;">',
         '  <div style="display:flex;justify-content:space-between;align-items:center;font-size:10.5px;color:#94a3b8;background:#0b1220;padding:4px 8px;border-radius:7px;border:1px solid #1e293b;margin-bottom:6px;">',
-        '    <span>Столов: <b id="v30-tcount" style="color:#38bdf8;">0</b></span>',
-        '    <span>Раздач: <b id="v30-hcount" style="color:#22c55e;">0</b></span>',
-        '    <span>Сбой: <b id="v30-fcount" style="color:#f87171;">0</b></span>',
-        '    <button id="v30-clear" style="background:#334155;border:none;color:#cbd5e1;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:9px;">Сброс</button>',
+        '    <span>Столов: <b id="v31-tcount" style="color:#38bdf8;">0</b></span>',
+        '    <span>Раздач: <b id="v31-hcount" style="color:#22c55e;">0</b></span>',
+        '    <span>Сбой: <b id="v31-fcount" style="color:#f87171;">0</b></span>',
+        '    <button id="v31-clear" style="background:#334155;border:none;color:#cbd5e1;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:9px;">Сброс</button>',
         '  </div>',
-        '  <div id="v30-tables" style="max-height:300px;overflow-y:auto;margin-bottom:7px;"></div>',
-        '  <button id="v30-export" style="width:100%;padding:7px;background:linear-gradient(90deg,#0891b2,#16a34a);color:#fff;border:none;border-radius:7px;font-weight:bold;font-size:11px;cursor:pointer;">📥 Скачать JSON (раздачи + стеки + лог)</button>',
+        '  <div id="v31-tables" style="max-height:300px;overflow-y:auto;margin-bottom:7px;"></div>',
+        '  <button id="v31-export" style="width:100%;padding:7px;background:linear-gradient(90deg,#0891b2,#16a34a);color:#fff;border:none;border-radius:7px;font-weight:bold;font-size:11px;cursor:pointer;">📥 Скачать JSON (раздачи + стеки + лог)</button>',
         '</div>'].join('');
     document.body.appendChild(ui);
 
-    document.getElementById('v30-toggle').onclick = function () {
-        var b = document.getElementById('v30-body');
+    document.getElementById('v31-toggle').onclick = function () {
+        var b = document.getElementById('v31-body');
         var hidden = b.style.display === 'none';
         b.style.display = hidden ? 'block' : 'none';
         this.innerText = hidden ? '▾' : '▴';
     };
-    document.getElementById('v30-close').onclick = function () {
+    document.getElementById('v31-close').onclick = function () {
         ui.remove();
-        window.__pokerSyncV30 = false;
+        window.__pokerSyncV31 = false;
     };
-    document.getElementById('v30-clear').onclick = function () {
+    document.getElementById('v31-clear').onclick = function () {
         if (confirm('Очистить архив раздач?')) {
             handsArchive = [];
             localStorage.removeItem(STORAGE_KEY);
             renderUI();
         }
     };
-    document.getElementById('v30-export').onclick = function () {
+    document.getElementById('v31-export').onclick = function () {
         var liveTables = [];
         Object.keys(tables).forEach(function (k) {
             var c = tables[k];
+            if (Object.keys(c.seats).length === 0) return;
             var seats = [];
             Object.keys(c.seats).map(Number).sort(function (a, b) { return a - b; }).forEach(function (sn) {
                 var s = c.seats[sn];
@@ -641,7 +642,7 @@ javascript:(function(){
             });
             liveTables.push({
                 table_id: c.id, table_name: c.name, tournament_name: c.tournamentName,
-                level: c.level, hand: c.hand, board: c.board.join(' '),
+                level: c.handLevel || c.level, hand: c.hand, board: c.board.join(' '),
                 pot_display: displayPot(c), seats: seats,
                 last_sync_report: c.lastSyncReport
             });
@@ -657,7 +658,7 @@ javascript:(function(){
         var blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
         var a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'pokerdom_sync_v30_' + Date.now() + '.json';
+        a.download = 'pokerdom_sync_v31_' + Date.now() + '.json';
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
     };
 
@@ -674,15 +675,15 @@ javascript:(function(){
         rafPending = true;
         requestAnimationFrame(function () {
             rafPending = false;
-            var tEl = document.getElementById('v30-tables');
+            var tEl = document.getElementById('v31-tables');
             if (!tEl) return;
             var activeCtx = Object.keys(tables).map(function (k) { return tables[k]; })
                 .filter(function (c) { return Object.keys(c.seats).length > 0; });
-            document.getElementById('v30-tcount').innerText = activeCtx.length;
-            document.getElementById('v30-hcount').innerText = handsArchive.length;
+            document.getElementById('v31-tcount').innerText = activeCtx.length;
+            document.getElementById('v31-hcount').innerText = handsArchive.length;
             var totalFails = activeCtx.reduce(function (a, c) { return a + (c.syncFails || 0); }, 0);
-            document.getElementById('v30-fcount').innerText = totalFails;
-            var badge = document.getElementById('v30-syncbadge');
+            document.getElementById('v31-fcount').innerText = totalFails;
+            var badge = document.getElementById('v31-syncbadge');
             badge.textContent = totalFails ? 'DRIFT ' + totalFails : 'SYNC ✓';
             badge.style.color = totalFails ? '#f87171' : '#22c55e';
             badge.style.borderColor = totalFails ? '#f87171' : '#22c55e';
@@ -693,9 +694,14 @@ javascript:(function(){
             }
             var html = '';
             activeCtx.forEach(function (c) {
-                var bb = c.level.bb || 0;
-                var lvl = 'SB ' + fmtChips(c.level.sb) + ' / BB ' + fmtChips(bb) + (c.level.ante ? ' / ANTE ' + fmtChips(c.level.ante) : '');
-                if (c.nextLevel && c.nextLevel.bb) lvl += ' <span style="color:#64748b;">→ BB ' + fmtChips(c.nextLevel.bb) + '</span>';
+                var handBB = getActiveHandBB(c);
+                var activeLvl = (c.hand && c.handLevel && c.handLevel.bb) ? c.handLevel : c.level;
+                var lvl = 'SB ' + fmtChips(activeLvl.sb) + ' / BB ' + fmtChips(handBB) + (activeLvl.ante ? ' / ANTE ' + fmtChips(activeLvl.ante) : '');
+                if (c.level.bb && c.level.bb > handBB) {
+                    lvl += ' <span style="color:#f59e0b;">(Сл: ' + fmtChips(c.level.bb) + ')</span>';
+                } else if (c.nextLevel && c.nextLevel.bb) {
+                    lvl += ' <span style="color:#64748b;">→ BB ' + fmtChips(c.nextLevel.bb) + '</span>';
+                }
                 var pot = displayPot(c);
                 html += '<div style="background:#0b1220;border:1px solid #1e293b;border-radius:8px;padding:6px 8px;margin-bottom:6px;">';
                 html += '<div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1e293b;padding-bottom:3px;margin-bottom:4px;">';
@@ -703,7 +709,7 @@ javascript:(function(){
                 html += '<span style="color:#f59e0b;">' + lvl + '</span></div>';
                 html += '<div style="display:flex;justify-content:space-between;color:#94a3b8;font-size:9.5px;margin-bottom:3px;">';
                 html += '<span>Рука #' + (c.hand || '—') + ' · ' + c.street + ' · D: место ' + (c.dealer !== null ? c.dealer : '—') + '</span>';
-                html += '<span>БАНК <b style="color:#fbbf24;">' + fmtChips(pot) + '</b>' + (bb ? ' (' + Math.round(pot / bb * 10) / 10 + ' BB)' : '') + '</span></div>';
+                html += '<span>БАНК <b style="color:#fbbf24;">' + fmtChips(pot) + '</b>' + (handBB ? ' (' + (pot / handBB).toFixed(2) + ' BB)' : '') + '</span></div>';
                 if (c.board.length) {
                     html += '<div style="color:#a855f7;font-size:10px;margin-bottom:3px;"> Board: ' + c.board.join(' ') + '</div>';
                 }
@@ -711,15 +717,15 @@ javascript:(function(){
                 seatNums.forEach(function (sn) {
                     var s = c.seats[sn];
                     var dead = s.busted || s.vacated;
-                    var bbv = bb && s.stack !== null ? (s.stack / bb) : null;
-                    var bbStr = bbv !== null ? bbv.toFixed(1) + ' BB' : '—';
+                    var bbv = handBB && s.stack !== null ? (s.stack / handBB) : null;
+                    var bbStr = bbv !== null ? bbv.toFixed(2) + ' BB' : '—';
                     var col = dead ? '#475569' : (bbv !== null && bbv < 15 ? '#ef4444' : (bbv !== null && bbv < 30 ? '#f59e0b' : '#22c55e'));
                     var dot = dead ? '💀' : (c.activeSeats[sn] ? '🟢' : '⚪');
                     var dBtn = (c.dealer === sn) ? '<span style="color:#fbbf24;">[D]</span>' : '';
                     var pos = c.positions[sn] ? '<span style="color:#94a3b8;">(' + c.positions[sn] + ')</span>' : '';
                     var bet = '';
                     if (s.streetBet > 0) {
-                        bet = '<span style="color:#38bdf8;font-size:9.5px;">+' + fmtChips(s.streetBet) + (bb ? '(' + (s.streetBet / bb).toFixed(1) + 'BB)' : '') + '</span>';
+                        bet = '<span style="color:#38bdf8;font-size:9.5px;">+' + fmtChips(s.streetBet) + (handBB ? '(' + (s.streetBet / handBB).toFixed(2) + 'BB)' : '') + '</span>';
                     }
                     var cards = c.showdownCards[sn] && c.showdownCards[sn].cards
                         ? ' <span style="color:' + (c.showdownCards[sn].isMuck ? '#94a3b8' : '#a855f7') + ';font-weight:bold;">[' + c.showdownCards[sn].cards + ']</span>' : '';
@@ -771,8 +777,8 @@ javascript:(function(){
     }
 
     function hookWs(ws) {
-        if (!ws || ws.__v30Hooked) return;
-        ws.__v30Hooked = true;
+        if (!ws || ws.__v31Hooked) return;
+        ws.__v31Hooked = true;
         ws.addEventListener('message', function (e) {
             decodePayload(e.data).then(function (text) { handleTableXml(ws, text); }).catch(function () {});
         });
@@ -783,7 +789,6 @@ javascript:(function(){
                 renderUI();
             }
         });
-        // Принудительно запрашиваем снапшот стола, если подключились посреди игры
         try {
             if (ws.readyState === 1) {
                 ws.send('<GetTableDetails/>');
@@ -792,8 +797,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__v30WsProxy) {
-        window.__v30WsProxy = true;
+    if (OrigWS && !window.__v31WsProxy) {
+        window.__v31WsProxy = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function (target, args) {
                 var ws = Reflect.construct(target, args);
@@ -806,7 +811,7 @@ javascript:(function(){
         });
         var origSend = OrigWS.prototype.send;
         OrigWS.prototype.send = function () {
-            if (!this.__v30Hooked) hookWs(this);
+            if (!this.__v31Hooked) hookWs(this);
             try {
                 var arg = arguments[0];
                 if (typeof arg === 'string' && arg.charAt(0) === '<') {
@@ -826,14 +831,14 @@ javascript:(function(){
         };
     }
 
-    window.__pokerSyncV30API = {
+    window.__pokerSyncV31API = {
         version: SYNC_ENGINE_VERSION,
         tables: tables,
         archive: handsArchive,
         engineLog: engineLog,
-        export: function () { document.getElementById('v30-export').click(); }
+        export: function () { document.getElementById('v31-export').click(); }
     };
 
     renderUI();
-    console.log('%c✅ [SYNC HUD v30.0] Запущен. Автообнаружение столов активно.', 'color:#22d3ee;font-weight:bold;');
+    console.log('%c✅ [SYNC HUD v31.0] Запущен. Блайнды текущей руки заблокированы от преждевременного пересчета.', 'color:#22d3ee;font-weight:bold;');
 })();
