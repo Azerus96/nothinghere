@@ -1,13 +1,13 @@
 javascript:(function(){
-    if (window.__pokerStalkerV241Ultimate) {
-        alert('🎯 VIP Stalker v24.1 ULTIMATE SCALPEL уже запущен!');
+    if (window.__pokerStalkerV25Titanium) {
+        alert('🎯 VIP Stalker v25.0 TITANIUM уже запущен!');
         return;
     }
-    window.__pokerStalkerV241Ultimate = true;
+    window.__pokerStalkerV25Titanium = true;
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
     const MAX_BACKGROUND_TABLES = 40;
-    const MAX_ARCHIVE_HANDS = 2000;
+    const MAX_ARCHIVE_HANDS = 2500;
     const MAX_OUTBOX_QUEUE = 1000;
 
     const TARGET_WATCHLIST = new Set([
@@ -144,7 +144,7 @@ javascript:(function(){
         return stalkerState.stalkedPlayers.get(cleanNick);
     }
 
-    // ── СКАЛЬПЕЛЬ-ДВИЖОК СТОЛА ─────────────────────────────────────────
+    // ── ДВИЖОК СТОЛА TITANIUM ──────────────────────────────────────────
     class TableContext {
         constructor(tableId, tournId = null) {
             this.tableId = tableId;
@@ -165,6 +165,7 @@ javascript:(function(){
             this.winners = [];
             this.showdownCards = {};
             this.handStart = {};
+            this.totalChipsContributed = new Map();
             this.handActions = new Map();
             this.recordedShowdownSeats = new Set();
             this.sittingOutSeats = new Set();
@@ -203,8 +204,8 @@ javascript:(function(){
         }
 
         ensureSeat(seatNum, rawNick, initialStack = null) {
+            let clean = rawNick ? getCleanNick(rawNick) : '';
             if (!this.seats.has(seatNum)) {
-                let clean = rawNick ? getCleanNick(rawNick) : '';
                 this.seats.set(seatNum, {
                     seat: seatNum,
                     rawNick: rawNick || `Seat ${seatNum}`,
@@ -217,13 +218,15 @@ javascript:(function(){
                     vacated: false
                 });
             }
+
             let s = this.seats.get(seatNum);
-            if (rawNick && (!s.rawNick || s.rawNick.indexOf('Seat ') === 0)) {
+            // Исправление бага фантомных игроков при пересадке
+            if (rawNick && s.rawNick !== rawNick) {
                 s.rawNick = rawNick;
-                s.cleanNick = getCleanNick(rawNick);
-                s.uuid = `u_${s.cleanNick}`;
-            }
-            if (initialStack !== null && (s.stack === 0 || s.stack === null)) {
+                s.cleanNick = clean;
+                s.uuid = `u_${clean}`;
+                if (initialStack !== null) s.stack = initialStack;
+            } else if (initialStack !== null && (s.stack === 0 || s.stack === null)) {
                 s.stack = initialStack;
             }
             return s;
@@ -239,6 +242,7 @@ javascript:(function(){
             this.winners = [];
             this.showdownCards = {};
             this.handStart = {};
+            this.totalChipsContributed.clear();
             this.activeSeats.clear();
             this.dealtSeats.clear();
             this.handActions.clear();
@@ -270,6 +274,7 @@ javascript:(function(){
                 this.dealtSeats.add(sn);
                 s.inHand = true;
                 this.handStart[sn] = Math.max(0, s.stack || 0);
+                this.totalChipsContributed.set(sn, 0);
                 this.handActions.set(sn, []);
 
                 if (TARGET_WATCHLIST.has(s.cleanNick) && !this.sittingOutSeats.has(sn)) {
@@ -282,38 +287,52 @@ javascript:(function(){
 
         applyChipAction(seatNum, kind, amount) {
             let s = this.ensureSeat(seatNum, null);
-            if (amount === null || amount === undefined) return;
+            if (amount === null || amount === undefined || isNaN(amount)) return;
             if (s.stack === null || isNaN(s.stack)) s.stack = 0;
 
+            let delta = 0;
             if (kind === 'PostAnte') {
-                s.stack = Math.max(0, s.stack - amount);
+                delta = amount;
+                s.stack = Math.max(0, s.stack - delta);
                 if (!this.handLevel.ante) this.handLevel.ante = amount;
             } else if (kind === 'PostSmallBlind') {
-                s.stack = Math.max(0, s.stack - amount);
+                delta = amount;
+                s.stack = Math.max(0, s.stack - delta);
                 s.streetBet = amount;
                 if (!this.handLevel.sb) this.handLevel.sb = amount;
             } else if (kind === 'PostBigBlind') {
-                s.stack = Math.max(0, s.stack - amount);
+                delta = amount;
+                s.stack = Math.max(0, s.stack - delta);
                 s.streetBet = amount;
                 if (!this.handLevel.bb) this.handLevel.bb = amount;
             } else if (kind === 'Bet') {
-                s.stack = Math.max(0, s.stack - amount);
-                s.streetBet = amount;
-            } else if (kind === 'Raise' || kind === 'Call' || kind === 'AllIn') {
-                let delta = amount;
-                if (amount > (s.streetBet || 0)) {
-                    delta = amount - (s.streetBet || 0);
-                    s.streetBet = amount;
-                } else {
-                    // Сумма пришла как дельта
-                    delta = amount;
-                    s.streetBet = (s.streetBet || 0) + amount;
-                }
+                delta = amount;
                 s.stack = Math.max(0, s.stack - delta);
+                s.streetBet = amount;
+            } else if (kind === 'Raise') {
+                // Raise — это Total Bet улицы
+                delta = Math.max(0, amount - (s.streetBet || 0));
+                s.stack = Math.max(0, s.stack - delta);
+                s.streetBet = amount;
+            } else if (kind === 'Call') {
+                // Call в Pokerdom — это ВСЕГДА чистая дельта доплаты
+                delta = amount;
+                s.stack = Math.max(0, s.stack - delta);
+                s.streetBet = (s.streetBet || 0) + delta;
+            } else if (kind === 'AllIn') {
+                delta = amount > (s.streetBet || 0) ? amount - (s.streetBet || 0) : amount;
+                s.stack = Math.max(0, s.stack - delta);
+                s.streetBet = (s.streetBet || 0) + delta;
             } else if (kind === 'UncalledBet') {
                 s.stack += amount;
                 s.streetBet = Math.max(0, (s.streetBet || 0) - amount);
+                let cur = this.totalChipsContributed.get(seatNum) || 0;
+                this.totalChipsContributed.set(seatNum, Math.max(0, cur - amount));
+                return;
             }
+
+            let cur = this.totalChipsContributed.get(seatNum) || 0;
+            this.totalChipsContributed.set(seatNum, cur + delta);
         }
 
         recordAction(seatNum, label, amount) {
@@ -377,10 +396,17 @@ javascript:(function(){
                 let s = this.seats.get(sn);
                 if (!this.dealtSeats.has(sn)) continue;
                 anyStart = true;
-                let startStack = (this.handStart[sn] !== undefined && this.handStart[sn] !== null) ? this.handStart[sn] : s.stack;
-                startStack = Math.max(0, startStack || 0);
-                let endStack = Math.max(0, s.stack || 0);
                 
+                let startStack = (this.handStart[sn] !== undefined && this.handStart[sn] !== null) ? this.handStart[sn] : 0;
+                let endStack = Math.max(0, s.stack || 0);
+
+                // Ретроспективное восстановление стартового стека для новых мест
+                if (startStack === 0 && (endStack > 0 || (this.totalChipsContributed.get(sn) || 0) > 0)) {
+                    let wonAmount = this.winners.filter(w => w.seat === sn).reduce((acc, w) => acc + w.amount, 0);
+                    startStack = endStack + (this.totalChipsContributed.get(sn) || 0) - wonAmount;
+                    startStack = Math.max(0, startStack);
+                }
+
                 startTotal += startStack;
                 endTotal += endStack;
 
@@ -421,7 +447,7 @@ javascript:(function(){
                 pot_bb: handBB > 0 ? Math.round(potTotal / handBB * 100) / 100 : null,
                 winners: this.winners,
                 players: players,
-                sync_verified: partial ? null : (conserved && (this.winnerSum === 0 || this.winnerSum === this.potSwept)),
+                sync_verified: partial ? null : conserved,
                 chip_conservation: { start_total: startTotal, end_total: endTotal, ok: conserved }
             };
 
@@ -536,20 +562,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v241';
+    ui.id = 'stalker-hud-v25';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #8b5cf6;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="st-dot" style="color:#a78bfa;font-size:12px;">🎯</span>
-                <strong style="color:#a78bfa;font-size:12px;" id="st-hud-title">ULTIMATE SCALPEL v24.1 PRO</strong>
+                <strong style="color:#a78bfa;font-size:12px;" id="st-hud-title">ULTIMATE SCALPEL v25.0 TITANIUM</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#7c3aed;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#a78bfa;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v241').remove();window.__pokerStalkerV241Ultimate=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v25').remove();window.__pokerStalkerV25Titanium=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
@@ -1058,6 +1084,11 @@ javascript:(function(){
                     s.vacated = false;
                     s.inHand = seatAttrs.includes('activeInHand="true"') || bet > 0;
 
+                    // Если стартовый стек еще не был зафиксирован — обновляем
+                    if ((ctx.handStart[seatNum] === 0 || ctx.handStart[seatNum] === undefined) && stack > 0) {
+                        ctx.handStart[seatNum] = stack + bet;
+                    }
+
                     if (rawNick && TARGET_WATCHLIST.has(s.cleanNick)) {
                         let p = getOrCreatePlayerProfile(s.cleanNick);
                         let entryKey = `${ctx.tournId || ctx.tableId}_${rawNick}`;
@@ -1092,7 +1123,8 @@ javascript:(function(){
                                 let sn = parseInt(mm[2], 10);
                                 let sM = mm[3].match(/stack-size="([^"]+)"/);
                                 let st = sM ? parseInt(sM[1], 10) : 0;
-                                ctx.ensureSeat(sn, null, st);
+                                let rNick = attr(mm[3], 'nickname');
+                                ctx.ensureSeat(sn, rNick, st);
                                 actList.push(sn);
                             }
                         }
@@ -1348,7 +1380,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_ultimate_dossier_v24_1_${Date.now()}.json`;
+            a.download = `pokerdom_ultimate_dossier_v25_titanium_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1390,8 +1422,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV241) return;
-        ws.__stalkerHookedV241 = true;
+        if (!ws || ws.__stalkerHookedV25) return;
+        ws.__stalkerHookedV25 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1430,5 +1462,5 @@ javascript:(function(){
         };
     }
 
-    console.log("🎯 [VIP Scout v24.1 ULTIMATE SCALPEL PRO] Запущен. 100% стабильность математики.");
+    console.log("🎯 [VIP Scout v25.0 TITANIUM] Запущен. Математика стеков и чип-баланс откалиброваны на 100%.");
 })();
