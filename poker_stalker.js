@@ -15,7 +15,7 @@ javascript:(function(){
         "foldmi", "fedorav", "grenadinec", "nedenegradi", "legilemens", 
         "thestudent", "anarhisttt", "belarusftw", "sgeeeee", "master3anosov", 
         "kirov999", "donskikh", "bumblebee", "karanebesnaya", "anacreosha",
-        "saiyn_belek", "malyavka89"
+        "saiyn_belek", "molyavka89", "blancl664", "why__not", "cashmachine", "vorobyshek", "bar_suk74", "lev_altay", "kastarksn", "borsalino", "suitedjaxx69"
     ].map(n => n.toLowerCase()));
 
     const stalkerState = {
