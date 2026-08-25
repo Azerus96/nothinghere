@@ -1,12 +1,12 @@
 javascript:(function(){
-    if (window.__pokerStalkerV26ZeroLoss) {
-        alert('🎯 VIP Stalker v26.0 ZERO-LOSS TITANIUM уже запущен!');
+    if (window.__pokerStalkerV261Absolute) {
+        alert('🎯 VIP Stalker v26.1 ABSOLUTE уже запущен!');
         return;
     }
-    window.__pokerStalkerV26ZeroLoss = true;
+    window.__pokerStalkerV261Absolute = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v26.0 — ZERO-LOSS PURE-MATH TITANIUM ENGINE
+       ULTIMATE SCALPEL v26.1 — ABSOLUTE CHIP CONSERVATION ENGINE
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
@@ -258,7 +258,6 @@ javascript:(function(){
             this.playersOnFlop = 0;
             this.playersOnRiver = 0;
 
-            // Блокировка уровня блайндов строго на момент старта руки
             let currentBB = this.getActiveHandBB();
             this.handLevel = { 
                 sb: this.level.sb || Math.round(currentBB / 2), 
@@ -297,7 +296,7 @@ javascript:(function(){
             let delta = 0;
             if (kind === 'PostAnte') {
                 delta = amount;
-                s.stack -= delta; // Не используем Math.max(0), чтобы не стереть анте при UncalledBet
+                s.stack -= delta;
                 if (!this.handLevel.ante) this.handLevel.ante = amount;
             } else if (kind === 'PostSmallBlind' || kind === 'PostBigBlind' || kind === 'Bet') {
                 delta = amount;
@@ -306,19 +305,15 @@ javascript:(function(){
                 if (kind === 'PostSmallBlind' && !this.handLevel.sb) this.handLevel.sb = amount;
                 if (kind === 'PostBigBlind' && !this.handLevel.bb) this.handLevel.bb = amount;
             } else if (kind === 'Raise') {
+                // Raise — тотал ставки улицы
                 delta = Math.max(0, amount - (s.streetBet || 0));
                 s.stack -= delta;
                 s.streetBet = amount;
             } else if (kind === 'Call') {
-                // Универсальный резолвер дельты и тотала для Call
-                if ((s.streetBet || 0) > 0 && amount >= (s.streetBet || 0)) {
-                    delta = amount - (s.streetBet || 0);
-                    s.streetBet = amount;
-                } else {
-                    delta = amount;
-                    s.streetBet = (s.streetBet || 0) + delta;
-                }
+                // Call в Pokerdom — ВСЕГДА чистая дельта доплаты
+                delta = amount;
                 s.stack -= delta;
+                s.streetBet = (s.streetBet || 0) + delta;
             } else if (kind === 'AllIn') {
                 delta = (amount > (s.streetBet || 0)) ? (amount - (s.streetBet || 0)) : amount;
                 s.stack -= delta;
@@ -400,7 +395,7 @@ javascript:(function(){
                 let startStack = (this.handStart[sn] !== undefined && this.handStart[sn] !== null) ? this.handStart[sn] : 0;
                 let endStack = Math.max(0, s.stack || 0);
 
-                // Ретроспективное восстановление стартового стека для подключений в начале руки
+                // Ретроспективное восстановление стартового стека для неизвестных мест
                 if (startStack === 0 && (endStack > 0 || (this.totalChipsContributed.get(sn) || 0) > 0)) {
                     let wonAmount = this.winners.filter(w => w.seat === sn).reduce((acc, w) => acc + w.amount, 0);
                     startStack = Math.max(0, endStack + (this.totalChipsContributed.get(sn) || 0) - wonAmount);
@@ -559,22 +554,22 @@ javascript:(function(){
         }
     }
 
-    // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD (С RAF-РЕНДЕРИНГОМ) ──────────────────
+    // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v26';
+    ui.id = 'stalker-hud-v261';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="st-dot" style="color:#06b6d4;font-size:12px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;" id="st-hud-title">ULTIMATE SCALPEL v26.0 ZERO-LOSS</strong>
+                <strong style="color:#06b6d4;font-size:12px;" id="st-hud-title">ULTIMATE SCALPEL v26.1 ABSOLUTE</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v26').remove();window.__pokerStalkerV26ZeroLoss=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v261').remove();window.__pokerStalkerV261Absolute=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
@@ -1152,7 +1147,7 @@ javascript:(function(){
                     ctx.handOrigin = 'newhand';
                 }
 
-                // Обработка турнирных нокаутов и статусов
+                // Нокауты
                 let koM = xml.match(/<Knockout\s+[^>]*busted="(\d+)"/);
                 if (koM) {
                     let bSeat = parseInt(koM[1], 10);
@@ -1204,7 +1199,7 @@ javascript:(function(){
                         if (ctx.showdownCards[seatNum] && !ctx.showdownCards[seatNum].isMuck) ctx.showdownCards[seatNum].isMuck = true;
                     }
 
-                    // Статистика HUD
+                    // Сбор HUD-статистики
                     if (TARGET_WATCHLIST.has(s.cleanNick) && !ctx.sittingOutSeats.has(seatNum)) {
                         let p = getOrCreatePlayerProfile(s.cleanNick);
                         let isPreflop = (ctx.street === 'PREFLOP');
@@ -1246,7 +1241,7 @@ javascript:(function(){
                     }
                 }
 
-                // Банк
+                // Перенос фишек в банк
                 let pcM, pcRe = /<PotsChange>([\s\S]*?)<\/PotsChange>/g;
                 while ((pcM = pcRe.exec(xml)) !== null) {
                     let potM, potEntryRe = /<Pot\s+([^>]*)\/>/g;
@@ -1393,7 +1388,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_zeroloss_dossier_v26_${Date.now()}.json`;
+            a.download = `pokerdom_absolute_dossier_v26_1_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1435,8 +1430,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV26) return;
-        ws.__stalkerHookedV26 = true;
+        if (!ws || ws.__stalkerHookedV261) return;
+        ws.__stalkerHookedV261 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1457,8 +1452,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV26) {
-        window.__stalkerWsProxyV26 = true;
+    if (OrigWS && !window.__stalkerWsProxyV261) {
+        window.__stalkerWsProxyV261 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1481,5 +1476,5 @@ javascript:(function(){
         };
     }
 
-    console.log("%c🎯 [VIP Scout v26.0 ZERO-LOSS TITANIUM] Запущен. Достигнута 100% математическая точность фишек.", "color:#06b6d4;font-weight:bold;");
+    console.log("%c🎯 [VIP Scout v26.1 ABSOLUTE] Запущен. Точный расчет дельт по протоколу Pokerdom.", "color:#06b6d4;font-weight:bold;");
 })();
