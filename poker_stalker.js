@@ -1,12 +1,12 @@
 javascript:(function(){
-    if (window.__pokerStalkerV262PureDelta) {
-        alert('🎯 VIP Stalker v26.2 PURE-DELTA уже запущен!');
+    if (window.__pokerStalkerV263Perfection) {
+        alert('🎯 VIP Stalker v26.3 PERFECTION уже запущен!');
         return;
     }
-    window.__pokerStalkerV262PureDelta = true;
+    window.__pokerStalkerV263Perfection = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v26.2 — 100% PURE-DELTA MATHEMATICAL ENGINE
+       ULTIMATE SCALPEL v26.3 — ABSOLUTE ACCURACY & ZERO-FLICKER ENGINE
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
@@ -301,7 +301,7 @@ javascript:(function(){
                 return;
             }
 
-            // В Pokerdom ВСЕ действия (Ante, SB, BB, Bet, Raise, Call, AllIn) — это чистые дельты
+            // Прямое списание чистой дельты
             s.stack -= amount;
             s.streetBet = (s.streetBet || 0) + amount;
 
@@ -538,20 +538,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v262';
+    ui.id = 'stalker-hud-v263';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="st-dot" style="color:#06b6d4;font-size:12px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;" id="st-hud-title">ULTIMATE SCALPEL v26.2 PURE-DELTA</strong>
+                <strong style="color:#06b6d4;font-size:12px;" id="st-hud-title">ULTIMATE SCALPEL v26.3 PERFECTION</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v262').remove();window.__pokerStalkerV262PureDelta=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v263').remove();window.__pokerStalkerV263Perfection=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
@@ -1071,20 +1071,38 @@ javascript:(function(){
                         ctx.handStart[seatNum] = stack + bet;
                     }
 
+                    // Умная синхронизация без мерцания выбывших входов
                     if (rawNick && TARGET_WATCHLIST.has(s.cleanNick)) {
                         let p = getOrCreatePlayerProfile(s.cleanNick);
-                        let entryKey = `${ctx.tournId || ctx.tableId}_${rawNick}`;
+                        let tournId = ctx.tournId;
+                        
+                        // Ищем, есть ли уже активный мульти-вход в этом турнире
+                        let matchingKey = null;
+                        if (tournId) {
+                            for (let [k, e] of p.entries.entries()) {
+                                if (e.tournId === tournId && !e.isBusted && e.stack > 0) {
+                                    matchingKey = k;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        let entryKey = matchingKey || `${tournId || ctx.tableId}_${rawNick}`;
                         let entry = p.entries.get(entryKey) || {
                             rawNick: rawNick,
                             cleanNick: s.cleanNick,
-                            tableName: ctx.tournId && stalkerState.liveTournaments.has(ctx.tournId) ? stalkerState.liveTournaments.get(ctx.tournId).name : 'Table'
+                            tableName: tournId && stalkerState.liveTournaments.has(tournId) ? stalkerState.liveTournaments.get(tournId).name : 'Table'
                         };
-                        entry.stack = stack;
-                        entry.stackBB = ctx.getLiveStackBB(stack) || 0;
-                        entry.tournId = ctx.tournId;
-                        entry.isBusted = (stack === 0);
-                        p.entries.set(entryKey, entry);
-                        updateHUD();
+                        
+                        // Не перезаписываем статус «ВЫБЫЛ», если это подтвержденный выбывший вход
+                        if (!entry.isBusted || entry.place === 0) {
+                            entry.stack = stack;
+                            entry.stackBB = ctx.getLiveStackBB(stack) || 0;
+                            entry.tournId = tournId;
+                            entry.isBusted = (stack === 0);
+                            p.entries.set(entryKey, entry);
+                            updateHUD();
+                        }
                     }
                 }
             }
@@ -1129,7 +1147,6 @@ javascript:(function(){
                     ctx.handOrigin = 'newhand';
                 }
 
-                // Нокауты
                 let koM = xml.match(/<Knockout\s+[^>]*busted="(\d+)"/);
                 if (koM) {
                     let bSeat = parseInt(koM[1], 10);
@@ -1137,7 +1154,6 @@ javascript:(function(){
                     if (bs) bs.busted = true;
                 }
 
-                // Действия игроков с защитой от дублирования
                 let ACTION_RE = /<PlayerAction\s+seat="(\d+)"([^>]*)>([\s\S]*?)<\/PlayerAction>/g;
                 let am;
                 while ((am = ACTION_RE.exec(xml)) !== null) {
@@ -1181,7 +1197,6 @@ javascript:(function(){
                         if (ctx.showdownCards[seatNum] && !ctx.showdownCards[seatNum].isMuck) ctx.showdownCards[seatNum].isMuck = true;
                     }
 
-                    // Сбор HUD-статистики
                     if (TARGET_WATCHLIST.has(s.cleanNick) && !ctx.sittingOutSeats.has(seatNum)) {
                         let p = getOrCreatePlayerProfile(s.cleanNick);
                         let isPreflop = (ctx.street === 'PREFLOP');
@@ -1223,7 +1238,6 @@ javascript:(function(){
                     }
                 }
 
-                // Перенос фишек в банк
                 let pcM, pcRe = /<PotsChange>([\s\S]*?)<\/PotsChange>/g;
                 while ((pcM = pcRe.exec(xml)) !== null) {
                     let potM, potEntryRe = /<Pot\s+([^>]*)\/>/g;
@@ -1236,10 +1250,8 @@ javascript:(function(){
                     }
                 }
 
-                // Борд
                 ctx.updateBoardFromXml(xml);
 
-                // Победители
                 if (xml.includes('<Winner')) {
                     let wMatches = xml.matchAll(/<Winner\s+([^>]*?)>(.*?)<\/Winner>|<Winner\s+([^>]*?)\/>/gs);
                     for (let wm of wMatches) {
@@ -1260,7 +1272,6 @@ javascript:(function(){
                     }
                 }
 
-                // Шоудауны
                 if (xml.includes('<Show') || xml.includes('<Muck>')) {
                     let showMatches = xml.matchAll(/<PlayerAction\s+[^>]*seat="(\d+)"[^>]*><(?:Show|Muck)[^>]*><Cards>(.*?)<\/Cards>/g);
                     for (let sm of showMatches) {
@@ -1304,7 +1315,6 @@ javascript:(function(){
                     }
                 }
 
-                // Завершение раздачи
                 if (/<EndHand/.test(xml)) {
                     let finalizedHand = ctx.finalizeHand();
                     if (finalizedHand && !stalkerState.recordedHandNumbers.has(finalizedHand.hand_number)) {
@@ -1370,7 +1380,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_puredelta_dossier_v26_2_${Date.now()}.json`;
+            a.download = `pokerdom_perfection_dossier_v26_3_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1412,8 +1422,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV262) return;
-        ws.__stalkerHookedV262 = true;
+        if (!ws || ws.__stalkerHookedV263) return;
+        ws.__stalkerHookedV263 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1434,8 +1444,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV262) {
-        window.__stalkerWsProxyV262 = true;
+    if (OrigWS && !window.__stalkerWsProxyV263) {
+        window.__stalkerWsProxyV263 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1458,5 +1468,5 @@ javascript:(function(){
         };
     }
 
-    console.log("%c🎯 [VIP Scout v26.2 PURE-DELTA] Запущен. 100% точность математики фишек в любых стадиях (включая Heads-Up).", "color:#06b6d4;font-weight:bold;");
+    console.log("%c🎯 [VIP Scout v26.3 PERFECTION] Запущен. Чистые дельты + защита от мерцания входов.", "color:#06b6d4;font-weight:bold;");
 })();
