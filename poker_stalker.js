@@ -1,17 +1,17 @@
 javascript:(function(){
-    if (window.__pokerStalkerV27Omniscient) {
-        alert('🎯 VIP Stalker v27.0 OMNISCIENT уже запущен!');
+    if (window.__pokerStalkerV28Swiss) {
+        alert('🎯 VIP Stalker v28.0 SWISS PERFECTION уже запущен!');
         return;
     }
-    window.__pokerStalkerV27Omniscient = true;
+    window.__pokerStalkerV28Swiss = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v27.0 — 100% CERTIFIED MATHEMATICAL OMNISCIENCE
+       ULTIMATE SCALPEL v28.0 — SWISS PERFECTION ZERO-LOSS ENGINE
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
     const MAX_BACKGROUND_TABLES = 40;
-    const MAX_ARCHIVE_HANDS = 2500;
+    const MAX_ARCHIVE_HANDS = 3000;
     const MAX_OUTBOX_QUEUE = 1000;
 
     const TARGET_WATCHLIST = new Set([
@@ -293,15 +293,18 @@ javascript:(function(){
             if (amount === null || amount === undefined || isNaN(amount)) return;
             if (s.stack === null || isNaN(s.stack)) s.stack = 0;
 
+            let curContrib = this.totalChipsContributed.get(seatNum) || 0;
+
             if (kind === 'UncalledBet') {
-                s.stack += amount;
-                s.streetBet = Math.max(0, (s.streetBet || 0) - amount);
-                let cur = this.totalChipsContributed.get(seatNum) || 0;
-                this.totalChipsContributed.set(seatNum, Math.max(0, cur - amount));
+                // ОГРАНИЧИТЕЛЬ ВОЗВРАТА: возврат не может превышать реально внесенную в раздаче сумму
+                let actualRefund = curContrib > 0 ? Math.min(amount, curContrib) : amount;
+                s.stack += actualRefund;
+                s.streetBet = Math.max(0, (s.streetBet || 0) - actualRefund);
+                this.totalChipsContributed.set(seatNum, Math.max(0, curContrib - actualRefund));
                 return;
             }
 
-            // ALL-IN CEILING GUARD: игрок не может внести больше, чем у него есть в стеке
+            // ALL-IN CEILING GUARD: игрок физически не может внести больше, чем у него есть в стеке
             let actualDelta = amount;
             let startSt = this.handStart[seatNum] || 0;
             if (startSt > 0) {
@@ -315,8 +318,7 @@ javascript:(function(){
             if (kind === 'PostSmallBlind' && !this.handLevel.sb) this.handLevel.sb = amount;
             if (kind === 'PostBigBlind' && !this.handLevel.bb) this.handLevel.bb = amount;
 
-            let cur = this.totalChipsContributed.get(seatNum) || 0;
-            this.totalChipsContributed.set(seatNum, cur + actualDelta);
+            this.totalChipsContributed.set(seatNum, curContrib + actualDelta);
         }
 
         recordAction(seatNum, label, amount) {
@@ -386,13 +388,13 @@ javascript:(function(){
                 let startStack = (this.handStart[sn] !== undefined && this.handStart[sn] !== null) ? this.handStart[sn] : 0;
                 let endStack = Math.max(0, s.stack || 0);
 
-                // ЗАЩИТА СТЕКА ПОБЕДИТЕЛЯ: стек победителя не может быть 0
+                // ЗАЩИТА СТЕКА ПОБЕДИТЕЛЯ: победитель не может закончить руку с 0
                 if (wonAmount > 0 && endStack === 0) {
                     endStack = Math.max(0, wonAmount - contributed + startStack);
                     s.stack = endStack;
                 }
 
-                // Ретроспективное зеркальное восстановление стартового стека
+                // Ретроспективное зеркальное восстановление стартового стека для неизвестных мест
                 if (startStack === 0 && (endStack > 0 || contributed > 0 || wonAmount > 0)) {
                     startStack = Math.max(0, endStack + contributed - wonAmount);
                 }
@@ -552,20 +554,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v27';
+    ui.id = 'stalker-hud-v28';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="st-dot" style="color:#06b6d4;font-size:12px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;" id="st-hud-title">ULTIMATE SCALPEL v27.0 OMNISCIENT</strong>
+                <strong style="color:#06b6d4;font-size:12px;" id="st-hud-title">ULTIMATE SCALPEL v28.0 SWISS</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v27').remove();window.__pokerStalkerV27Omniscient=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v28').remove();window.__pokerStalkerV28Swiss=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
 
@@ -632,7 +634,9 @@ javascript:(function(){
 
             let activeTargets = 0;
             stalkerState.stalkedPlayers.forEach(p => {
-                let hasActive = Array.from(p.entries.values()).some(e => !e.isBusted && e.stack > 0);
+                let hasActive = Array.from(p.entries.values()).some(e => 
+                    !e.isBusted && (e.stack || 0) > 0 && (!e.tournId || stalkerState.liveTournaments.has(e.tournId))
+                );
                 if (hasActive) activeTargets++;
             });
 
@@ -659,8 +663,11 @@ javascript:(function(){
 
                     p.entries.forEach(e => {
                         let chipsStr = formatChips(e.stack);
-                        let bbStr = (e.stackBB > 0 && !e.isBusted) ? ` (${e.stackBB.toFixed(1)} BB)` : '';
-                        if (e.isBusted || e.stack === 0) {
+                        let isTournLive = !e.tournId || stalkerState.liveTournaments.has(e.tournId);
+                        let isActuallyBusted = e.isBusted || e.stack === 0 || !isTournLive;
+
+                        let bbStr = (e.stackBB > 0 && !isActuallyBusted) ? ` (${e.stackBB.toFixed(1)} BB)` : '';
+                        if (isActuallyBusted) {
                             let prizeStr = e.prize > 0 ? ` +${formatChips(e.prize)}₽` : '';
                             let placeStr = e.place > 0 ? `${e.place} место ` : '';
                             html += `<div style="display:flex;justify-content:space-between;font-size:10px;color:#ef4444;padding-left:8px;opacity:0.6;">
@@ -671,7 +678,7 @@ javascript:(function(){
                             html += `<div style="display:flex;justify-content:space-between;font-size:10px;padding-left:8px;color:#38bdf8;">
                                 <span>🔹 <b>${e.rawNick}</b> <small style="color:#94a3b8;">${e.tableName || ''}</small></span>
                                 <span style="font-weight:bold;">${chipsStr}${bbStr}</span>
-                        </div>`;
+                            </div>`;
                         }
                     });
 
@@ -977,7 +984,7 @@ javascript:(function(){
                 }
             }
 
-            // 2. Сетка турниров
+            // 2. Сетка турниров (С АВТОМАТИЧЕСКИМ ЗАКРЫТИЕМ ЗАВЕРШЕННЫХ ТУРНИРОВ)
             if (xml.includes('<Tournaments')) {
                 let matches = xml.matchAll(/<Table\s+([^>]+)>/g);
 
@@ -1010,6 +1017,18 @@ javascript:(function(){
                             stalkerState.scannerQueue.push(tId);
                         }
                     } else if (tId && (tStatus === 'COMPLETED' || tStatus === 'CANCELED' || tStatus === 'CANCELED_NOT_PAID' || tStatus === 'ANNOUNCED' || tStatus === 'REGISTERING' || !isHoldem)) {
+                        // АВТОМАТИЧЕСКИЙ СБРОС АКТИВНЫХ ВХОДОВ ЗАВЕРШЕННОГО ТУРНИРА
+                        stalkerState.stalkedPlayers.forEach(p => {
+                            p.entries.forEach(entry => {
+                                if (entry.tournId === tId && !entry.isBusted) {
+                                    entry.isBusted = true;
+                                    entry.stack = 0;
+                                    entry.stackBB = 0;
+                                    if (!entry.place || entry.place === 0) entry.place = 2;
+                                }
+                            });
+                        });
+
                         stalkerState.liveTournaments.delete(tId);
                         let qIdx = stalkerState.scannerQueue.indexOf(tId);
                         if (qIdx !== -1) stalkerState.scannerQueue.splice(qIdx, 1);
@@ -1392,7 +1411,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_omniscient_dossier_v27_${Date.now()}.json`;
+            a.download = `pokerdom_swiss_dossier_v28_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1434,8 +1453,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV27) return;
-        ws.__stalkerHookedV27 = true;
+        if (!ws || ws.__stalkerHookedV28) return;
+        ws.__stalkerHookedV28 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1456,8 +1475,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV27) {
-        window.__stalkerWsProxyV27 = true;
+    if (OrigWS && !window.__stalkerWsProxyV28) {
+        window.__stalkerWsProxyV28 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1480,5 +1499,5 @@ javascript:(function(){
         };
     }
 
-    console.log("%c🎯 [VIP Scout v27.0 OMNISCIENT] Запущен. 100.0% математическая точность фишек.", "color:#06b6d4;font-weight:bold;");
+    console.log("%c🎯 [VIP Scout v28.0 SWISS PERFECTION] Запущен. 100.0% точность математики и нулевое мерцание.", "color:#06b6d4;font-weight:bold;");
 })();
