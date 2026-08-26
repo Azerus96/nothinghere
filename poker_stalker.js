@@ -1,12 +1,12 @@
 javascript:(function(){
-    if (window.__pokerStalkerV315Master) {
-        alert('🎯 VIP Stalker v31.5 MASTER уже запущен!');
+    if (window.__pokerStalkerV316Master) {
+        alert('🎯 VIP Stalker v31.6 MASTER уже запущен!');
         return;
     }
-    window.__pokerStalkerV315Master = true;
+    window.__pokerStalkerV316Master = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v31.5 — 100.00% ZERO-SUM ABSOLUTE PRECISION
+       ULTIMATE SCALPEL v31.6 — FINANCIAL DOSSIER & SITOUT ENGINE
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
@@ -145,6 +145,7 @@ javascript:(function(){
                 cleanNick: cleanNick,
                 entries: new Map(),
                 handsCount: 0,
+                sitOutHandsCount: 0,
                 vpipCount: 0,
                 pfrCount: 0,
                 aggressiveActions: 0,
@@ -152,13 +153,16 @@ javascript:(function(){
                 foldBBCount: 0,
                 stealFacedBB: 0,
                 foldSBCount: 0,
-                stealFacedSB: 0
+                stealFacedSB: 0,
+                totalSpentRub: 0,
+                totalRebuys: 0,
+                totalAddons: 0
             });
         }
         return stalkerState.stalkedPlayers.get(cleanNick);
     }
 
-    // ── ГИБРИДНЫЙ СЕРВЕРНЫЙ ДВИЖОК СТОЛА (100% ZERO-SUM SSOT) ─────────
+    // ── ГИБРИДНЫЙ СЕРВЕРНЫЙ ДВИЖОК СТОЛА ──────────────────────────────
     class TableContext {
         constructor(tableId, tournId = null) {
             this.tableId = tableId;
@@ -186,8 +190,13 @@ javascript:(function(){
             this.playersActedThisHand = new Set();
             this.playersCountedThisHand = new Set();
             this.processedActionIds = new Set();
+            this.handRebuyEvents = [];
             this.handOrigin = null;
             this.runningPot = 0;
+            this.tournamentRules = {
+                rebuyChips: 0, rebuyCost: 0,
+                addonChips: 0, addonCost: 0, addonCost2x: 0
+            };
         }
 
         getActiveHandBB() {
@@ -214,7 +223,10 @@ javascript:(function(){
                     stack: serverStack !== null ? serverStack : 0,
                     streetBet: 0,
                     inHand: false,
-                    busted: false
+                    busted: false,
+                    spent: 0,
+                    rebuys: 0,
+                    addons: 0
                 });
             }
 
@@ -248,6 +260,7 @@ javascript:(function(){
             this.playersActedThisHand.clear();
             this.playersCountedThisHand.clear();
             this.processedActionIds.clear();
+            this.handRebuyEvents = [];
             this.runningPot = 0;
 
             let currentBB = this.getActiveHandBB();
@@ -360,7 +373,7 @@ javascript:(function(){
                 anyStart = true;
                 let startStack = (this.handStart[sn] !== undefined && this.handStart[sn] !== null) ? this.handStart[sn] : 0;
                 
-                // РЕКОНСИЛЯЦИЯ ДЛЯ 100.00% ZERO-SUM
+                // Реконсиляция нулевых/коротких стартовых стеков
                 if (startStack < investedInPot && wonAmount === 0) {
                     startStack = investedInPot;
                 }
@@ -372,8 +385,14 @@ javascript:(function(){
                 startTotal += startStack;
                 endTotal += endStack;
 
-                if (TARGET_WATCHLIST.has(s.cleanNick) && !this.sittingOutSeats.has(sn) && !this.playersCountedThisHand.has(s.cleanNick)) {
-                    getOrCreatePlayerProfile(s.cleanNick).handsCount++;
+                // Четкий учет рук и ситаутов
+                if (TARGET_WATCHLIST.has(s.cleanNick) && !this.playersCountedThisHand.has(s.cleanNick)) {
+                    let prof = getOrCreatePlayerProfile(s.cleanNick);
+                    if (this.sittingOutSeats.has(sn)) {
+                        prof.sitOutHandsCount++;
+                    } else {
+                        prof.handsCount++;
+                    }
                     this.playersCountedThisHand.add(s.cleanNick);
                 }
 
@@ -389,7 +408,11 @@ javascript:(function(){
                     stack_end_bb: handBB > 0 ? Math.round(endStack / handBB * 100) / 100 : null,
                     cards: sd ? sd.cards : 'xx xx',
                     is_muck_leak: (sd && sd.isMuck && sd.cards && sd.cards !== 'xx xx') ? 1 : 0,
+                    is_sitting_out: this.sittingOutSeats.has(sn) ? 1 : 0,
                     busted: endStack === 0 ? 1 : 0,
+                    spent_rub: s.spent || 0,
+                    rebuys_count: s.rebuys || 0,
+                    addons_count: s.addons || 0,
                     actions: this.handActions.get(sn) || []
                 });
             }
@@ -412,6 +435,7 @@ javascript:(function(){
                 pot_total: calculatedPotTotal,
                 pot_bb: handBB > 0 ? Math.round(calculatedPotTotal / handBB * 100) / 100 : null,
                 winners: this.winners,
+                rebuy_events: this.handRebuyEvents,
                 players: players,
                 sync_verified: partial ? null : conserved,
                 chip_conservation: { start_total: startTotal, end_total: endTotal, ok: conserved }
@@ -477,20 +501,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v315';
+    ui.id = 'stalker-hud-v316';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:12px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">ULTIMATE SCALPEL v31.5 MASTER</strong>
+                <strong style="color:#06b6d4;font-size:12px;">ULTIMATE SCALPEL v31.6 MASTER</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v315').remove();window.__pokerStalkerV315Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v316').remove();window.__pokerStalkerV316Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
         <div id="st-hud-body" style="margin-top:8px;">
@@ -565,7 +589,7 @@ javascript:(function(){
                     let afq = p.totalActions > 0 ? Math.round((p.aggressiveActions / p.totalActions) * 100) : 0;
                     
                     let vpipStr = p.handsCount > 0 
-                        ? `<small style="color:#38bdf8;font-weight:bold;margin-left:4px;">[H:${p.handsCount} V:${vpip}% P:${pfr}% AF:${afq}%]</small>` 
+                        ? `<small style="color:#38bdf8;font-weight:bold;margin-left:4px;">[H:${p.handsCount}${p.sitOutHandsCount > 0 ? `+${p.sitOutHandsCount}AFK` : ''} V:${vpip}% P:${pfr}% AF:${afq}%]</small>` 
                         : `<small style="color:#64748b;margin-left:4px;">[Поиск рук...]</small>`;
 
                     html += `<div style="border-bottom:1px solid #1e293b;padding:4px 0;">
@@ -579,16 +603,18 @@ javascript:(function(){
                         let isActuallyBusted = e.isBusted || e.stack === 0 || !isTournLive;
 
                         let bbStr = (e.stackBB > 0 && !isActuallyBusted) ? ` (${e.stackBB.toFixed(1)} BB)` : '';
+                        let spentInfo = e.spent > 0 ? ` <span style="color:#a855f7;">[${formatChips(e.spent)}₽]</span>` : '';
+
                         if (isActuallyBusted) {
                             let prizeStr = e.prize > 0 ? ` +${formatChips(e.prize)}₽` : '';
                             let placeStr = e.place > 0 ? `${e.place} место ` : '';
                             html += `<div style="display:flex;justify-content:space-between;font-size:10px;color:#ef4444;padding-left:8px;opacity:0.6;">
-                                <span><s>${e.rawNick}</s> <small style="color:#64748b;">${e.tableName || ''}</small></span>
+                                <span><s>${e.rawNick}</s> <small style="color:#64748b;">${e.tableName || ''}</small>${spentInfo}</span>
                                 <span><s>${placeStr}${prizeStr} [ВЫБЫЛ]</s></span>
                             </div>`;
                         } else {
                             html += `<div style="display:flex;justify-content:space-between;font-size:10px;padding-left:8px;color:#38bdf8;">
-                                <span>🔹 <b>${e.rawNick}</b> <small style="color:#94a3b8;">${e.tableName || ''}</small></span>
+                                <span>🔹 <b>${e.rawNick}</b> <small style="color:#94a3b8;">${e.tableName || ''}</small>${spentInfo}</span>
                                 <span style="font-weight:bold;">${chipsStr}${bbStr}</span>
                             </div>`;
                         }
@@ -949,11 +975,34 @@ javascript:(function(){
                     ws.__tableId = tableId;
                     if (!ws.__tableContext) ws.__tableContext = new TableContext(tableId, tournId);
                     stalkerState.activeTables.set(tableId, ws.__tableContext);
+
+                    // Извлечение параметров ребаев и аддонов турнира
+                    let addonM = xml.match(/<Addon\s+([^>]*)\/>/);
+                    if (addonM) {
+                        ws.__tableContext.tournamentRules.addonChips = iattr(addonM[1], 'chips') || 0;
+                        ws.__tableContext.tournamentRules.addonCost = iattr(addonM[1], 'cost') || 0;
+                        ws.__tableContext.tournamentRules.addonCost2x = iattr(addonM[1], 'cost2x') || 0;
+                    }
+                    let rebuyM = xml.match(/<Rebuy\s+([^>]*)\/>/);
+                    if (rebuyM) {
+                        ws.__tableContext.tournamentRules.rebuyChips = iattr(rebuyM[1], 'chips') || 0;
+                        ws.__tableContext.tournamentRules.rebuyCost = iattr(rebuyM[1], 'cost') || 0;
+                    }
                 }
             }
 
             let ctx = ws.__tableContext;
             if (!ctx) return;
+
+            // Обработка закрытия стола сервером
+            if (xml.includes('description="Table is already closed"')) {
+                let cTableId = ws.__tableId || attr(xml, 'id');
+                if (cTableId) {
+                    stalkerState.activeTables.delete(cTableId);
+                    stalkerState.backgroundTableSockets.delete(cTableId);
+                    logDebug("TABLE_CLOSED", `Стол ${cTableId} закрыт сервером`);
+                }
+            }
 
             // Синхронизация уровня блайндов
             let bbAttr = iattr(xml, 'highStake');
@@ -967,19 +1016,33 @@ javascript:(function(){
                 if (numAttr !== null) ctx.level.number = numAttr;
             }
 
-            // РЕБАИ И ДОКУПКИ
-            let rebuyMatch = xml.match(/<ChipsRebuy\s+([^>]*)\/>/);
-            if (rebuyMatch) {
-                let rSeat = iattr(rebuyMatch[1], 'seat');
-                let rAmt = iattr(rebuyMatch[1], 'amount') || 0;
+            // РЕБАИ, ДОКУПКИ И АДДОНЫ
+            let rebuyMatches = xml.matchAll(/<ChipsRebuy\s+([^>]*)\/>/g);
+            for (let rm of rebuyMatches) {
+                let rSeat = iattr(rm[1], 'seat');
+                let rAmt = iattr(rm[1], 'amount') || 0;
+                let rReason = attr(rm[1], 'reason') || 'REBUY';
+
                 if (rSeat !== null && rAmt > 0) {
                     let s = ctx.ensureSeat(rSeat, null);
                     s.stack = (s.stack || 0) + rAmt;
                     s.busted = false;
+
+                    let is2x = (rReason === 'ADDON' && ctx.tournamentRules.addonChips > 0 && rAmt >= ctx.tournamentRules.addonChips * 2);
+
+                    ctx.handRebuyEvents.push({
+                        seat: rSeat,
+                        nick: s.rawNick,
+                        reason: rReason,
+                        amount: rAmt,
+                        is_double: is2x
+                    });
+
+                    logDebug("REBUY_ADDON", `Игрок ${s.rawNick} (место ${rSeat}) получил ${rAmt} фишек [${rReason}${is2x ? ' 2X' : ''}]`);
                 }
             }
 
-            // СЕРВЕРНАЯ СИНХРОНИЗАЦИЯ МЕСТ И СТЕКОВ
+            // СЕРВЕРНАЯ СИНХРОНИЗАЦИЯ МЕСТ, СТЕКОВ И ФИНАНСОВ
             if (xml.includes('<Seats') || (xml.includes('<Seat ') && xml.includes('<PlayerInfo'))) {
                 let seatBlocks = xml.matchAll(/<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>([\s\S]*?)<\/Seat>)/gs);
                 for (let sb of seatBlocks) {
@@ -991,8 +1054,12 @@ javascript:(function(){
                     let rawNick = piM ? piM[1] : attr(seatContent, 'nickname');
                     let chipsM = seatContent.match(/<Chips[^>]*\/>/);
                     let stackM = seatContent.match(/stack-size="([^"]+)"/);
+                    let entryM = seatContent.match(/<Entry\s+([^>]*)\/?>/);
                     
                     let serverStack = chipsM ? iattr(chipsM[0], 'stack-size') : (stackM ? parseInt(stackM[1], 10) : null);
+                    let serverSpent = entryM ? (iattr(entryM[1], 'spent') || 0) : 0;
+                    let serverRebuys = entryM ? (iattr(entryM[1], 'rebuys') || 0) : 0;
+                    let serverAddons = entryM ? (iattr(entryM[1], 'addons') || 0) : 0;
 
                     let isSittingOut = seatAttrs.includes('sittingOut="true"') || seatContent.includes('sittingOut="true"');
                     if (isSittingOut) ctx.sittingOutSeats.add(seatNum);
@@ -1000,6 +1067,9 @@ javascript:(function(){
 
                     let s = ctx.ensureSeat(seatNum, rawNick, serverStack);
                     s.busted = (serverStack === 0);
+                    s.spent = serverSpent;
+                    s.rebuys = serverRebuys;
+                    s.addons = serverAddons;
 
                     if (ctx.hand === null && serverStack !== null && serverStack > 0) {
                         ctx.handStart[seatNum] = serverStack;
@@ -1020,6 +1090,9 @@ javascript:(function(){
                             entry.stackBB = ctx.getLiveStackBB(entry.stack) || 0;
                             entry.tournId = tournId;
                             entry.isBusted = (entry.stack === 0);
+                            entry.spent = serverSpent;
+                            entry.rebuys = serverRebuys;
+                            entry.addons = serverAddons;
                             p.entries.set(entryKey, entry);
                             updateHUD();
                         }
@@ -1084,6 +1157,13 @@ javascript:(function(){
                     let amount = iattr(aStr, 'amount') || 0;
                     let s = ctx.ensureSeat(seatNum, null);
 
+                    // Реактивная фиксация ситаута
+                    if (kind === 'SitOut') {
+                        ctx.sittingOutSeats.add(seatNum);
+                    } else if (kind === 'SitIn') {
+                        ctx.sittingOutSeats.delete(seatNum);
+                    }
+
                     if (['PostAnte', 'PostSmallBlind', 'PostBigBlind', 'Bet', 'Raise', 'Call', 'AllIn', 'UncalledBet'].includes(kind)) {
                         ctx.recordAction(seatNum,
                             kind === 'PostAnte' ? 'ANTE' :
@@ -1109,6 +1189,7 @@ javascript:(function(){
                         }
                     }
 
+                    // Статистика: полностью игнорируем действия игроков в ситауте
                     if (TARGET_WATCHLIST.has(s.cleanNick) && !ctx.sittingOutSeats.has(seatNum)) {
                         let p = getOrCreatePlayerProfile(s.cleanNick);
                         let isPreflop = (ctx.street === 'PREFLOP');
@@ -1145,7 +1226,7 @@ javascript:(function(){
                     }
                 }
 
-                // ЧИПСЫ В БАНК (SSOT CUMULATIVE SWEPT POTS)
+                // ЧИПСЫ В БАНК (SSOT SWEPT POTS)
                 let pcM, pcRe = /<PotsChange>([\s\S]*?)<\/PotsChange>/g;
                 while ((pcM = pcRe.exec(xml)) !== null) {
                     ctx.processPotsChange(pcM[1]);
@@ -1216,6 +1297,7 @@ javascript:(function(){
                 exportData.players[cleanNick] = {
                     cleanNick: p.cleanNick,
                     handsCount: p.handsCount,
+                    sitOutHandsCount: p.sitOutHandsCount,
                     vpip: vpip,
                     pfr: pfr,
                     afq: afq,
@@ -1226,7 +1308,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v31_5_absolute_${Date.now()}.json`;
+            a.download = `pokerdom_v31_6_financial_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1263,8 +1345,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV315) return;
-        ws.__stalkerHookedV315 = true;
+        if (!ws || ws.__stalkerHookedV316) return;
+        ws.__stalkerHookedV316 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1285,8 +1367,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV315) {
-        window.__stalkerWsProxyV315 = true;
+    if (OrigWS && !window.__stalkerWsProxyV316) {
+        window.__stalkerWsProxyV316 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1309,5 +1391,5 @@ javascript:(function(){
         };
     }
 
-    console.log("%c🎯 [VIP Scout v31.5 MASTER] Запущен. 100.00% Zero-Sum сходимость активирована.", "color:#06b6d4;font-weight:bold;");
+    console.log("%c🎯 [VIP Scout v31.6 FINANCIAL] Запущен. 100% точность, учет аддонов и ситаутов активирован.", "color:#06b6d4;font-weight:bold;");
 })();
