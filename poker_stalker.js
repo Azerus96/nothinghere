@@ -1,13 +1,9 @@
 javascript:(function(){
-    if (window.__pokerStalkerV312Master) {
-        alert('🎯 VIP Stalker v31.2 MASTER уже запущен!');
+    if (window.__pokerStalkerV313Master) {
+        alert('🎯 VIP Stalker v31.3 MASTER уже запущен!');
         return;
     }
-    window.__pokerStalkerV312Master = true;
-
-    /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v31.2 — ZERO-SUM PRECISION ENGINE
-       ══════════════════════════════════════════════════════════════════ */
+    window.__pokerStalkerV313Master = true;
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
     const MAX_BACKGROUND_TABLES = 40;
@@ -158,7 +154,7 @@ javascript:(function(){
         return stalkerState.stalkedPlayers.get(cleanNick);
     }
 
-    // ── ГИБРИДНЫЙ СЕРВЕРНЫЙ ДВИЖОК СТОЛА (ZERO-SUM SSOT) ───────────────
+    // ── ГИБРИДНЫЙ СЕРВЕРНЫЙ ДВИЖОК СТОЛА (ZERO-SUM PRECISION) ──────────
     class TableContext {
         constructor(tableId, tournId = null) {
             this.tableId = tableId;
@@ -174,7 +170,6 @@ javascript:(function(){
             this.activeSeats = new Set();
             this.dealtSeats = new Set();
             this.positions = {};
-            this.potSwept = 0;
             this.winnerSum = 0;
             this.winners = [];
             this.showdownCards = {};
@@ -235,7 +230,6 @@ javascript:(function(){
             this.dealer = dealerSeat || 0;
             this.board = [];
             this.street = 'PREFLOP';
-            this.potSwept = 0;
             this.winnerSum = 0;
             this.winners = [];
             this.showdownCards = {};
@@ -301,14 +295,17 @@ javascript:(function(){
             let m;
             while ((m = potEntryRe.exec(potsXml)) !== null) {
                 let seatNum = iattr(m[1], 'seat');
-                let change = iattr(m[1], 'change');
-                if (seatNum !== null && change !== null && change > 0) {
-                    this.potSwept += change;
-                    this.runningPot += change;
+                let cumulativeChange = iattr(m[1], 'change');
+                if (seatNum !== null && cumulativeChange !== null && cumulativeChange > 0) {
                     let cur = this.sweptInvestedPerSeat.get(seatNum) || 0;
-                    this.sweptInvestedPerSeat.set(seatNum, cur + change);
+                    if (cumulativeChange > cur) {
+                        this.sweptInvestedPerSeat.set(seatNum, cumulativeChange);
+                    }
                 }
             }
+            let currentPot = 0;
+            this.sweptInvestedPerSeat.forEach(amt => { currentPot += amt; });
+            this.runningPot = currentPot;
         }
 
         updateBoardFromXml(xml) {
@@ -346,6 +343,9 @@ javascript:(function(){
             let startTotal = 0, endTotal = 0, anyStart = false;
             let players = [];
 
+            let calculatedPotTotal = 0;
+            this.sweptInvestedPerSeat.forEach(amt => { calculatedPotTotal += amt; });
+
             let seatNums = Array.from(this.seats.keys()).sort((a, b) => a - b);
             for (let sn of seatNums) {
                 let s = this.seats.get(sn);
@@ -358,7 +358,7 @@ javascript:(function(){
                 anyStart = true;
                 let startStack = (this.handStart[sn] !== undefined && this.handStart[sn] !== null) ? this.handStart[sn] : 0;
                 
-                // Zero-Sum Exact Calculation
+                // 100% Zero-Sum Formula
                 let endStack = startStack - investedInPot + wonAmount;
                 if (endStack < 0) endStack = 0;
                 s.stack = endStack;
@@ -366,7 +366,6 @@ javascript:(function(){
                 startTotal += startStack;
                 endTotal += endStack;
 
-                // Single-count HUD stats strictly once per hand
                 if (TARGET_WATCHLIST.has(s.cleanNick) && !this.sittingOutSeats.has(sn) && !this.playersCountedThisHand.has(s.cleanNick)) {
                     getOrCreatePlayerProfile(s.cleanNick).handsCount++;
                     this.playersCountedThisHand.add(s.cleanNick);
@@ -392,7 +391,6 @@ javascript:(function(){
             if (!anyStart) return null;
             let partial = this.handOrigin === 'midhand-sync' || startTotal === 0;
             let conserved = partial ? null : (startTotal === endTotal);
-            let potTotal = this.potSwept;
 
             let handObj = {
                 hand_number: this.hand,
@@ -405,8 +403,8 @@ javascript:(function(){
                 level: this.handLevel,
                 dealer_seat: this.dealer,
                 board: this.board.join(' '),
-                pot_total: potTotal,
-                pot_bb: handBB > 0 ? Math.round(potTotal / handBB * 100) / 100 : null,
+                pot_total: calculatedPotTotal,
+                pot_bb: handBB > 0 ? Math.round(calculatedPotTotal / handBB * 100) / 100 : null,
                 winners: this.winners,
                 players: players,
                 sync_verified: partial ? null : conserved,
@@ -473,20 +471,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v312';
+    ui.id = 'stalker-hud-v313';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:12px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">ULTIMATE SCALPEL v31.2 MASTER</strong>
+                <strong style="color:#06b6d4;font-size:12px;">ULTIMATE SCALPEL v31.3 ZERO-SUM</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v312').remove();window.__pokerStalkerV312Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v313').remove();window.__pokerStalkerV313Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
         <div id="st-hud-body" style="margin-top:8px;">
@@ -650,7 +648,6 @@ javascript:(function(){
                 tableWs.send('<GetTableDetails/>');
                 tableWs.send('<JoinTable/>');
 
-                // Keep-Alive Heartbeat every 15 seconds
                 tableWs.__heartbeatTimer = setInterval(() => {
                     if (tableWs.readyState === WebSocket.OPEN) {
                         try { tableWs.send('<GetServerTime/>'); } catch(e) {}
@@ -679,7 +676,6 @@ javascript:(function(){
     }
     setInterval(manageBackgroundSpectatorPool, 2500);
 
-    // ── ФОНОВЫЙ КРАУЛЕР ТУРНИРОВ ─────────────────────────────────────
     function triggerLobbyTournamentRefresh() {
         let lobbyWs = stalkerState.sockets.lobby;
         if (lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
@@ -1148,7 +1144,7 @@ javascript:(function(){
                     }
                 }
 
-                // ЧИПСЫ В БАНК (SSOT SWEPT POTS)
+                // ЧИПСЫ В БАНК (SSOT CUMULATIVE SWEPT POTS)
                 let pcM, pcRe = /<PotsChange>([\s\S]*?)<\/PotsChange>/g;
                 while ((pcM = pcRe.exec(xml)) !== null) {
                     ctx.processPotsChange(pcM[1]);
@@ -1229,7 +1225,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v31_2_master_${Date.now()}.json`;
+            a.download = `pokerdom_v31_3_zerosum_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1266,8 +1262,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV312) return;
-        ws.__stalkerHookedV312 = true;
+        if (!ws || ws.__stalkerHookedV313) return;
+        ws.__stalkerHookedV313 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1288,8 +1284,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV312) {
-        window.__stalkerWsProxyV312 = true;
+    if (OrigWS && !window.__stalkerWsProxyV313) {
+        window.__stalkerWsProxyV313 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1312,5 +1308,5 @@ javascript:(function(){
         };
     }
 
-    console.log("%c🎯 [VIP Scout v31.2 MASTER] Запущен. 100% Zero-Sum точность активирована.", "color:#06b6d4;font-weight:bold;");
+    console.log("%c🎯 [VIP Scout v31.3 ZERO-SUM] Запущен. 100% точность баланса активирована.", "color:#06b6d4;font-weight:bold;");
 })();
