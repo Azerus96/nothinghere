@@ -1,12 +1,12 @@
 javascript:(function(){
-    if (window.__pokerStalkerV316Master) {
-        alert('🎯 VIP Stalker v31.6 MASTER уже запущен!');
+    if (window.__pokerStalkerV317Master) {
+        alert('🎯 VIP Stalker v31.7 MASTER уже запущен!');
         return;
     }
-    window.__pokerStalkerV316Master = true;
+    window.__pokerStalkerV317Master = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v31.6 — FINANCIAL DOSSIER & SITOUT ENGINE
+       ULTIMATE SCALPEL v31.7 — TIMING TELLS & ZERO-SUM PERFECTION
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
@@ -30,7 +30,7 @@ javascript:(function(){
 
     const stalkerState = {
         isCollapsed: false,
-        hfStatus: 'Инициализация...',
+        hfStatus: 'Локальный режим',
         userViewingTournId: null,
         userViewingTableId: null,
         socketCooldowns: new Map(),
@@ -153,10 +153,7 @@ javascript:(function(){
                 foldBBCount: 0,
                 stealFacedBB: 0,
                 foldSBCount: 0,
-                stealFacedSB: 0,
-                totalSpentRub: 0,
-                totalRebuys: 0,
-                totalAddons: 0
+                stealFacedSB: 0
             });
         }
         return stalkerState.stalkedPlayers.get(cleanNick);
@@ -191,6 +188,7 @@ javascript:(function(){
             this.playersCountedThisHand = new Set();
             this.processedActionIds = new Set();
             this.handRebuyEvents = [];
+            this.seatTimerStart = new Map();
             this.handOrigin = null;
             this.runningPot = 0;
             this.tournamentRules = {
@@ -261,6 +259,7 @@ javascript:(function(){
             this.playersCountedThisHand.clear();
             this.processedActionIds.clear();
             this.handRebuyEvents = [];
+            this.seatTimerStart.clear();
             this.runningPot = 0;
 
             let currentBB = this.getActiveHandBB();
@@ -300,10 +299,21 @@ javascript:(function(){
         recordAction(seatNum, label, amount) {
             let list = this.handActions.get(seatNum) || [];
             let str = `${this.street}_${label}`;
+            
+            // Расчет тайминга размышлений игрока (Time to act)
+            let thinkStr = '';
+            let timerStart = this.seatTimerStart.get(seatNum);
+            if (timerStart && !['ANTE', 'SB', 'BB'].includes(label)) {
+                let diffSec = ((Date.now() - timerStart) / 1000).toFixed(1);
+                if (diffSec >= 0 && diffSec < 60) thinkStr = `[${diffSec}s]`;
+            }
+
             if (amount && amount > 0) {
                 let potBefore = this.runningPot;
                 let potPct = potBefore > 0 ? Math.round(amount / potBefore * 100) : 0;
-                str += `:${amount}` + (potPct > 0 && potPct <= 500 ? `(${potPct}%pot)` : '');
+                str += `:${amount}` + (potPct > 0 && potPct <= 500 ? `(${potPct}%pot)` : '') + thinkStr;
+            } else {
+                str += thinkStr;
             }
             list.push(str);
             this.handActions.set(seatNum, list);
@@ -373,7 +383,7 @@ javascript:(function(){
                 anyStart = true;
                 let startStack = (this.handStart[sn] !== undefined && this.handStart[sn] !== null) ? this.handStart[sn] : 0;
                 
-                // Реконсиляция нулевых/коротких стартовых стеков
+                // Авто-реконсиляция стартового стека для 100% Zero-Sum
                 if (startStack < investedInPot && wonAmount === 0) {
                     startStack = investedInPot;
                 }
@@ -385,7 +395,6 @@ javascript:(function(){
                 startTotal += startStack;
                 endTotal += endStack;
 
-                // Четкий учет рук и ситаутов
                 if (TARGET_WATCHLIST.has(s.cleanNick) && !this.playersCountedThisHand.has(s.cleanNick)) {
                     let prof = getOrCreatePlayerProfile(s.cleanNick);
                     if (this.sittingOutSeats.has(sn)) {
@@ -501,20 +510,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v316';
+    ui.id = 'stalker-hud-v317';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:12px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">ULTIMATE SCALPEL v31.6 MASTER</strong>
+                <strong style="color:#06b6d4;font-size:12px;">ULTIMATE SCALPEL v31.7 MASTER</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v316').remove();window.__pokerStalkerV316Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v317').remove();window.__pokerStalkerV317Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
         <div id="st-hud-body" style="margin-top:8px;">
@@ -976,7 +985,6 @@ javascript:(function(){
                     if (!ws.__tableContext) ws.__tableContext = new TableContext(tableId, tournId);
                     stalkerState.activeTables.set(tableId, ws.__tableContext);
 
-                    // Извлечение параметров ребаев и аддонов турнира
                     let addonM = xml.match(/<Addon\s+([^>]*)\/>/);
                     if (addonM) {
                         ws.__tableContext.tournamentRules.addonChips = iattr(addonM[1], 'chips') || 0;
@@ -994,7 +1002,6 @@ javascript:(function(){
             let ctx = ws.__tableContext;
             if (!ctx) return;
 
-            // Обработка закрытия стола сервером
             if (xml.includes('description="Table is already closed"')) {
                 let cTableId = ws.__tableId || attr(xml, 'id');
                 if (cTableId) {
@@ -1004,7 +1011,6 @@ javascript:(function(){
                 }
             }
 
-            // Синхронизация уровня блайндов
             let bbAttr = iattr(xml, 'highStake');
             let sbAttr = iattr(xml, 'lowStake');
             let anteAttr = iattr(xml, 'ante');
@@ -1140,6 +1146,15 @@ javascript:(function(){
                     ctx.handOrigin = 'newhand';
                 }
 
+                // ПЕРЕХВАТ ТАЙМЕРА РАЗМЫШЛЕНИЯ ИГРОКА
+                let acM = xml.matchAll(/<ActiveChange\s+([^>]*)\/>/g);
+                for (let ac of acM) {
+                    let actSeat = iattr(ac[1], 'seat');
+                    if (actSeat !== null) {
+                        ctx.seatTimerStart.set(actSeat, Date.now());
+                    }
+                }
+
                 let ACTION_RE = /<PlayerAction\s+seat="(\d+)"([^>]*)>([\s\S]*?)<\/PlayerAction>/g;
                 let am;
                 while ((am = ACTION_RE.exec(xml)) !== null) {
@@ -1157,7 +1172,6 @@ javascript:(function(){
                     let amount = iattr(aStr, 'amount') || 0;
                     let s = ctx.ensureSeat(seatNum, null);
 
-                    // Реактивная фиксация ситаута
                     if (kind === 'SitOut') {
                         ctx.sittingOutSeats.add(seatNum);
                     } else if (kind === 'SitIn') {
@@ -1189,7 +1203,6 @@ javascript:(function(){
                         }
                     }
 
-                    // Статистика: полностью игнорируем действия игроков в ситауте
                     if (TARGET_WATCHLIST.has(s.cleanNick) && !ctx.sittingOutSeats.has(seatNum)) {
                         let p = getOrCreatePlayerProfile(s.cleanNick);
                         let isPreflop = (ctx.street === 'PREFLOP');
@@ -1234,6 +1247,7 @@ javascript:(function(){
 
                 ctx.updateBoardFromXml(xml);
 
+                // ПЕРЕХВАТ ПОБЕДИТЕЛЕЙ (С ПОДДЕРЖКОЙ POT-INDEX ДЛЯ SPLIT/SIDE POTS)
                 if (xml.includes('<Winner')) {
                     let wMatches = xml.matchAll(/<Winner\s+([^>]*?)>(.*?)<\/Winner>|<Winner\s+([^>]*?)\/>/gs);
                     for (let wm of wMatches) {
@@ -1241,13 +1255,16 @@ javascript:(function(){
                         let wInner = wm[2] || '';
                         let wSeat = iattr(wAttr, 'seat');
                         let wAmt = iattr(wAttr, 'amount') || 0;
+                        let wPot = iattr(wAttr, 'pot');
+                        let potIdx = wPot !== null ? wPot : ctx.winners.length;
                         let wComb = decodeHtml(attr(wAttr, 'combination') || '');
                         let wCards = Array.from(wInner.matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]).slice(0, 5).join(' ');
 
-                        let alreadyAdded = ctx.winners.some(w => w.seat === wSeat && w.amount === wAmt);
+                        // Дедупликация строго по связке (seat + potIndex)
+                        let alreadyAdded = ctx.winners.some(w => w.seat === wSeat && w.potIndex === potIdx);
                         if (!alreadyAdded && wSeat !== null && wAmt > 0) {
                             ctx.winnerSum += wAmt;
-                            ctx.winners.push({ seat: wSeat, amount: wAmt, combination: wComb, cards: wCards });
+                            ctx.winners.push({ seat: wSeat, amount: wAmt, potIndex: potIdx, combination: wComb, cards: wCards });
                         }
                     }
                 }
@@ -1308,7 +1325,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v31_6_financial_${Date.now()}.json`;
+            a.download = `pokerdom_v31_7_timing_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1345,8 +1362,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV316) return;
-        ws.__stalkerHookedV316 = true;
+        if (!ws || ws.__stalkerHookedV317) return;
+        ws.__stalkerHookedV317 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1367,8 +1384,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV316) {
-        window.__stalkerWsProxyV316 = true;
+    if (OrigWS && !window.__stalkerWsProxyV317) {
+        window.__stalkerWsProxyV317 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1391,5 +1408,5 @@ javascript:(function(){
         };
     }
 
-    console.log("%c🎯 [VIP Scout v31.6 FINANCIAL] Запущен. 100% точность, учет аддонов и ситаутов активирован.", "color:#06b6d4;font-weight:bold;");
+    console.log("%c🎯 [VIP Scout v31.7 TIMING] Запущен. 100% Zero-Sum + Тайминги размышлений активированы.", "color:#06b6d4;font-weight:bold;");
 })();
