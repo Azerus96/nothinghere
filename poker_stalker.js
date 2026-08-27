@@ -1,12 +1,12 @@
 javascript:(function(){
-    if (window.__pokerStalkerV318Master) {
-        alert('🎯 VIP Stalker v31.8 MASTER уже запущен!');
+    if (window.__pokerStalkerV319Master) {
+        alert('🎯 VIP Stalker v31.9 TITAN уже запущен!');
         return;
     }
-    window.__pokerStalkerV318Master = true;
+    window.__pokerStalkerV319Master = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v31.8 — CHAMPION & PKO BOUNTY ENGINE
+       ULTIMATE SCALPEL v31.9 — TITAN CHRONO & FINANCIAL ENGINE
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
@@ -34,6 +34,7 @@ javascript:(function(){
         userViewingTournId: null,
         userViewingTableId: null,
         socketCooldowns: new Map(),
+        tournamentNamesCache: new Map(), // Несгораемый реестр названий турниров
         outboxQueue: [],
         completedHandsArchive: [],
         recordedHandNumbers: new Set(),
@@ -182,6 +183,7 @@ javascript:(function(){
             this.handStart = {};
             this.sweptInvestedPerSeat = new Map();
             this.handActions = new Map();
+            this.timeline = []; // Глобальная хронологическая лента действий
             this.recordedShowdownSeats = new Set();
             this.sittingOutSeats = new Set();
             this.playersActedThisHand = new Set();
@@ -208,6 +210,16 @@ javascript:(function(){
         getLiveStackBB(chips) {
             let bb = this.getActiveHandBB();
             return (bb > 0 && chips !== null && chips !== undefined) ? Math.round((chips / bb) * 100) / 100 : null;
+        }
+
+        getTournamentName() {
+            if (this.tournId && stalkerState.tournamentNamesCache.has(this.tournId)) {
+                return stalkerState.tournamentNamesCache.get(this.tournId);
+            }
+            if (this.tournId && stalkerState.liveTournaments.has(this.tournId)) {
+                return stalkerState.liveTournaments.get(this.tournId).name;
+            }
+            return 'MTT';
         }
 
         ensureSeat(seatNum, rawNick, serverStack = null) {
@@ -254,6 +266,7 @@ javascript:(function(){
             this.activeSeats.clear();
             this.dealtSeats.clear();
             this.handActions.clear();
+            this.timeline = [];
             this.recordedShowdownSeats.clear();
             this.playersActedThisHand.clear();
             this.playersCountedThisHand.clear();
@@ -297,25 +310,42 @@ javascript:(function(){
         }
 
         recordAction(seatNum, label, amount) {
+            let s = this.ensureSeat(seatNum, null);
             let list = this.handActions.get(seatNum) || [];
             let str = `${this.street}_${label}`;
             
-            let thinkStr = '';
+            let thinkSec = null;
             let timerStart = this.seatTimerStart.get(seatNum);
             if (timerStart && !['ANTE', 'SB', 'BB', 'UNCALLEDBET'].includes(label)) {
-                let diffSec = ((Date.now() - timerStart) / 1000).toFixed(1);
-                if (diffSec >= 0 && diffSec < 60) thinkStr = `[${diffSec}s]`;
+                let diff = ((Date.now() - timerStart) / 1000).toFixed(1);
+                if (diff >= 0 && diff < 60) thinkSec = parseFloat(diff);
             }
 
+            let thinkStr = thinkSec !== null ? `[${thinkSec}s]` : '';
+            let potBefore = this.runningPot;
+            let potPct = (potBefore > 0 && amount > 0) ? Math.round(amount / potBefore * 100) : 0;
+
             if (amount && amount > 0) {
-                let potBefore = this.runningPot;
-                let potPct = potBefore > 0 ? Math.round(amount / potBefore * 100) : 0;
                 str += `:${amount}` + (potPct > 0 && potPct <= 500 ? `(${potPct}%pot)` : '') + thinkStr;
             } else {
                 str += thinkStr;
             }
             list.push(str);
             this.handActions.set(seatNum, list);
+
+            // Фиксация в глобальную хронологическую ленту
+            this.timeline.push({
+                street: this.street,
+                seat: seatNum,
+                nick: s.rawNick,
+                cleanNick: s.cleanNick,
+                position: this.positions[seatNum] || 'N/A',
+                action: label,
+                amount: amount || 0,
+                pot_before: potBefore,
+                pot_pct: (potPct > 0 && potPct <= 500) ? potPct : null,
+                time_sec: thinkSec
+            });
         }
 
         processPotsChange(potsXml) {
@@ -434,7 +464,7 @@ javascript:(function(){
                 table_id: this.tableId,
                 table_name: this.name,
                 tournament_id: this.tournId,
-                tournament_name: this.tournId && stalkerState.liveTournaments.has(this.tournId) ? stalkerState.liveTournaments.get(this.tournId).name : 'MTT',
+                tournament_name: this.getTournamentName(),
                 timestamp: new Date().toISOString(),
                 level: this.handLevel,
                 dealer_seat: this.dealer,
@@ -443,6 +473,7 @@ javascript:(function(){
                 pot_bb: handBB > 0 ? Math.round(calculatedPotTotal / handBB * 100) / 100 : null,
                 winners: this.winners,
                 rebuy_events: this.handRebuyEvents,
+                timeline: this.timeline, // 100% хронологическая лента раздачи
                 players: players,
                 sync_verified: partial ? null : conserved,
                 chip_conservation: { start_total: startTotal, end_total: endTotal, ok: conserved }
@@ -508,20 +539,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v318';
+    ui.id = 'stalker-hud-v319';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:12px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">ULTIMATE SCALPEL v31.8 CHAMPION</strong>
+                <strong style="color:#06b6d4;font-size:12px;">ULTIMATE SCALPEL v31.9 TITAN</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v318').remove();window.__pokerStalkerV318Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v319').remove();window.__pokerStalkerV319Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
         <div id="st-hud-body" style="margin-top:8px;">
@@ -622,12 +653,12 @@ javascript:(function(){
                             }
 
                             html += `<div style="display:flex;justify-content:space-between;font-size:10px;color:#ef4444;padding-left:8px;opacity:0.85;">
-                                <span><s>${e.rawNick}</s> <small style="color:#64748b;">${e.tableName || ''}</small>${spentInfo}</span>
+                                <span><s>${e.rawNick}</s> <small style="color:#64748b;">${e.tableName || 'MTT'}</small>${spentInfo}</span>
                                 <span>${placeBadge}${prizeStr} ${e.place === 1 ? '' : '[ВЫБЫЛ]'}</span>
                             </div>`;
                         } else {
                             html += `<div style="display:flex;justify-content:space-between;font-size:10px;padding-left:8px;color:#38bdf8;">
-                                <span>🔹 <b>${e.rawNick}</b> <small style="color:#94a3b8;">${e.tableName || ''}</small>${spentInfo}</span>
+                                <span>🔹 <b>${e.rawNick}</b> <small style="color:#94a3b8;">${e.tableName || 'MTT'}</small>${spentInfo}</span>
                                 <span style="font-weight:bold;">${chipsStr}${bbStr}</span>
                             </div>`;
                         }
@@ -786,6 +817,10 @@ javascript:(function(){
                 let playerBlocks = text.matchAll(/<Player\s+([^>]+)>/g);
                 let countInChunk = 0;
 
+                // Извлечение настоящего имени турнира из постоянного кэша
+                let cachedName = stalkerState.tournamentNamesCache.get(tournId);
+                let liveName = (tourn && tourn.name) ? tourn.name : null;
+
                 for (let pb of playerBlocks) {
                     countInChunk++;
                     let attrs = pb[1];
@@ -798,14 +833,12 @@ javascript:(function(){
                         let rank = iattr(attrs, 'rank') || 0;
                         let place = iattr(attrs, 'placeFrom') || iattr(attrs, 'place') || iattr(attrs, 'placeTo') || 0;
                         
-                        // ПОЛНЫЙ УЧЕТ ПРИЗОВЫХ + НОКАУТ-БАУНТИ
                         let regPrize = parseFloat(attr(attrs, 'prizeAmount') || '0');
                         let bountyPrize = parseFloat(attr(attrs, 'knockoutBounty') || '0');
                         let totalPrize = regPrize + bountyPrize;
 
                         let uuid = attr(attrs, 'uuid') || `target_${cleanNick}`;
                         
-                        // Если в турнире остался 1 человек или турнир завершен и placeFrom=1 -> 1-е МЕСТО!
                         if (place === 0 && remaining === 1) place = 1;
                         if (place === 0 && rank === 1 && remaining === 0) place = 1;
 
@@ -826,6 +859,10 @@ javascript:(function(){
                         let isNewEntry = !existingEntry;
                         let statusChanged = existingEntry && (existingEntry.isBusted !== isBusted);
 
+                        // Несгораемое имя турнира
+                        let prevName = existingEntry ? existingEntry.tableName : null;
+                        let finalTournName = liveName || cachedName || prevName || 'MTT';
+
                         p.entries.set(entryKey, {
                             rawNick: rawNick,
                             cleanNick: cleanNick,
@@ -836,7 +873,7 @@ javascript:(function(){
                             place: place,
                             prize: totalPrize,
                             isBusted: isBusted,
-                            tableName: tourn ? tourn.name : 'MTT',
+                            tableName: finalTournName,
                             tournId: tournId
                         });
 
@@ -846,7 +883,7 @@ javascript:(function(){
                                 name: cleanNick,
                                 raw_nick: rawNick,
                                 tournament_id: tournId,
-                                tournament_name: tourn ? tourn.name : 'MTT',
+                                tournament_name: finalTournName,
                                 chips: stack,
                                 stack_bb: Math.round(stackBB * 100) / 100,
                                 place: place,
@@ -872,6 +909,12 @@ javascript:(function(){
                 if (text.includes('<TournamentDetails') || text.includes('<Schedule')) {
                     let lvl = iattr(text, 'currentLevel');
                     if (lvl) currentLevel = lvl;
+
+                    // Кэширование настоящего названия турнира
+                    let tdName = attr(text, 'name');
+                    if (tdName) {
+                        stalkerState.tournamentNamesCache.set(tournId, decodeHtml(tdName));
+                    }
                 }
 
                 if (text.includes('<Schedule')) {
@@ -962,6 +1005,10 @@ javascript:(function(){
                     let tStatus = attr(attrs, 'status');
                     let tGame = attr(attrs, 'game') || '';
 
+                    if (tId && tName) {
+                        stalkerState.tournamentNamesCache.set(tId, decodeHtml(tName));
+                    }
+
                     let isHoldem = tGame.includes('TEXAS_HOLDEM') || tGame.includes('HOLDEM') || (!tGame.includes('OMAHA') && !tGame.includes('PINEAPPLE') && !tName.toLowerCase().includes('омаха') && !tName.toLowerCase().includes('ананас'));
                     let isLiveRunning = LIVE_STATUSES.has(tStatus);
 
@@ -975,7 +1022,6 @@ javascript:(function(){
                         }
                         if (!stalkerState.scannerQueue.includes(tId)) stalkerState.scannerQueue.push(tId);
                     } else if (tId && (tStatus === 'COMPLETED' || tStatus === 'CANCELED' || tStatus === 'CANCELED_NOT_PAID')) {
-                        // ФИНАЛЬНЫЙ СКАН ПЕРЕД УДАЛЕНИЕМ ТУРНИРА (ЧТОБЫ ЗАБРАТЬ 1 МЕСТО И БАУНТИ)
                         scanSingleTournamentBackground(tId).then(() => {
                             stalkerState.liveTournaments.delete(tId);
                             updateHUD();
@@ -993,6 +1039,11 @@ javascript:(function(){
             if (xml.includes('<TableDetails') || xml.includes('<TournamentTable')) {
                 let tableId = attr(xml, 'id') || attr(xml, 'tableId');
                 let tournId = attr(xml, 'tournamentId');
+                let tName = attr(xml, 'tournamentName') || attr(xml, 'name');
+                if (tournId && tName) {
+                    stalkerState.tournamentNamesCache.set(tournId, decodeHtml(tName));
+                }
+
                 if (tableId) {
                     ws.__tableId = tableId;
                     if (!ws.__tableContext) {
@@ -1103,7 +1154,7 @@ javascript:(function(){
                         let entry = p.entries.get(entryKey) || {
                             rawNick: rawNick,
                             cleanNick: s.cleanNick,
-                            tableName: tournId && stalkerState.liveTournaments.has(tournId) ? stalkerState.liveTournaments.get(tournId).name : 'Table'
+                            tableName: ctx.getTournamentName()
                         };
                         
                         if (!entry.isBusted || entry.place === 0) {
@@ -1114,6 +1165,7 @@ javascript:(function(){
                             entry.spent = serverSpent;
                             entry.rebuys = serverRebuys;
                             entry.addons = serverAddons;
+                            entry.tableName = ctx.getTournamentName();
                             p.entries.set(entryKey, entry);
                             updateHUD();
                         }
@@ -1253,7 +1305,6 @@ javascript:(function(){
                     }
                 }
 
-                // ЧИПСЫ В БАНК (SSOT SWEPT POTS)
                 let pcM, pcRe = /<PotsChange>([\s\S]*?)<\/PotsChange>/g;
                 while ((pcM = pcRe.exec(xml)) !== null) {
                     ctx.processPotsChange(pcM[1]);
@@ -1261,7 +1312,6 @@ javascript:(function(){
 
                 ctx.updateBoardFromXml(xml);
 
-                // ПЕРЕХВАТ ПОБЕДИТЕЛЕЙ (С ПОДДЕРЖКОЙ POT-INDEX)
                 if (xml.includes('<Winner')) {
                     let wMatches = xml.matchAll(/<Winner\s+([^>]*?)>(.*?)<\/Winner>|<Winner\s+([^>]*?)\/>/gs);
                     for (let wm of wMatches) {
@@ -1338,7 +1388,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v31_8_champion_${Date.now()}.json`;
+            a.download = `pokerdom_v31_9_titan_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1375,8 +1425,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV318) return;
-        ws.__stalkerHookedV318 = true;
+        if (!ws || ws.__stalkerHookedV319) return;
+        ws.__stalkerHookedV319 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1397,8 +1447,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV318) {
-        window.__stalkerWsProxyV318 = true;
+    if (OrigWS && !window.__stalkerWsProxyV319) {
+        window.__stalkerWsProxyV319 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1421,5 +1471,5 @@ javascript:(function(){
         };
     }
 
-    console.log("%c🏆 [VIP Scout v31.8 CHAMPION] Запущен. Учет 1-го места, PKO Баунти и защита доски активированы.", "color:#06b6d4;font-weight:bold;");
+    console.log("%c👑 [VIP Scout v31.9 TITAN] Запущен. Несгораемые имена, Хроно-таймлайн и PKO Баунти активны.", "color:#06b6d4;font-weight:bold;");
 })();
