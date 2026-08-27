@@ -1,310 +1,481 @@
 javascript:(function(){
-    if (window.__ofcStalkerV1Master) {
-        alert('🍍 OFC Pineapple Stalker v1.0 уже запущен!');
+    if (window.__ofcMasterTrackerV3) {
+        alert('🍍 OFC Pineapple Master Tracker v3.0 уже активен!');
         return;
     }
-    window.__ofcStalkerV1Master = true;
+    window.__ofcMasterTrackerV3 = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       OFC PINEAPPLE SCALPEL v1.0 — ORACLE & CFR DATA ENGINE
+       OFC PINEAPPLE MASTER TRACKER v3.0 — AI & CFR READY ENGINE
        ══════════════════════════════════════════════════════════════════ */
 
-    const ofcState = {
-        activeTables: new Map(),
-        completedHands: [],
-        chatLogs: [],
-        recordedHandNumbers: new Set()
+    const OFC_STORAGE = {
+        tables: new Map(),
+        hands: [],
+        handNumbers: new Set()
     };
 
-    function attr(str, name) {
-        if (!str || typeof str !== 'string') return null;
-        let m = str.match(new RegExp(`(?:\\b|\\s)${name}="([^"]*)"`, 'i'));
+    function getAttr(xml, attrName) {
+        if (!xml || typeof xml !== 'string') return null;
+        let m = xml.match(new RegExp(`(?:\\b|\\s)${attrName}="([^"]*)"`, 'i'));
         return m ? m[1] : null;
     }
 
-    function iattr(str, name) {
-        let v = attr(str, name);
-        if (!v) return null;
+    function getIntAttr(xml, attrName, defVal = null) {
+        let v = getAttr(xml, attrName);
+        if (v === null || v === undefined) return defVal;
         let n = parseInt(v, 10);
-        return isNaN(n) ? null : n;
+        return isNaN(n) ? defVal : n;
     }
 
-    class OFCTableContext {
-        constructor(tableId, tournId = null) {
+    function parseCards(xmlSubStr) {
+        if (!xmlSubStr) return [];
+        let cards = [];
+        let re = /<Card[^>]*>([^<]+)<\/Card>/gi;
+        let m;
+        while ((m = re.exec(xmlSubStr)) !== null) {
+            cards.push(m[1].trim());
+        }
+        return cards;
+    }
+
+    class TableSession {
+        constructor(tableId) {
             this.tableId = tableId;
-            this.tournId = tournId;
-            this.tableName = 'OFC Стол ' + (tableId ? String(tableId).substr(-4) : '');
-            this.pointScore = 100;
-            this.fantasyMode = 'NONE';
+            this.tableName = `Table #${tableId.slice(-4)}`;
+            this.tournamentName = 'OFC Tournament';
+            this.tournamentId = null;
+            this.gameType = 'OFC_PINEAPPLE_OH';
+            this.fantasyMode = 'UNLIMITED_PROGRESSIVE';
+            this.hasJokers = false;
+            this.currentPointScore = 100;
+            this.heroSeat = null;
             this.seats = new Map();
-            this.handNumber = null;
-            this.dealer = 0;
-            this.streets = new Map(); // seat -> array of streets
-            this.discards = new Map(); // seat -> array of dead cards
-            this.finalLayouts = new Map(); // seat -> { front: [], middle: [], back: [] }
-            this.royalties = new Map(); // seat -> { front: 0, middle: 0, back: 0 }
-            this.fouls = new Set();
-            this.winners = [];
-            this.showdowns = [];
+            this.activeHand = null;
         }
 
-        ensureSeat(seatNum, rawNick) {
-            if (!this.seats.has(seatNum)) {
-                this.seats.set(seatNum, {
-                    seat: seatNum,
-                    rawNick: rawNick || `Seat ${seatNum}`,
-                    cleanNick: (rawNick || `seat_${seatNum}`).toLowerCase().trim()
-                });
-            }
-            return this.seats.get(seatNum);
-        }
-
-        beginHand(handNum, dealerSeat, pointScore) {
-            this.handNumber = handNum;
-            this.dealer = dealerSeat;
-            this.pointScore = pointScore || this.pointScore;
-            this.streets.clear();
-            this.discards.clear();
-            this.finalLayouts.clear();
-            this.royalties.clear();
-            this.fouls.clear();
-            this.winners = [];
-            this.showdowns = [];
-
-            this.seats.forEach((s, sn) => {
-                this.streets.set(sn, []);
-                this.discards.set(sn, []);
-                this.finalLayouts.set(sn, { front: [], middle: [], back: [] });
-                this.royalties.set(sn, { front: 0, middle: 0, back: 0 });
+        updateSeat(seatId, nickname, uuid = null) {
+            this.seats.set(seatId, {
+                seat: seatId,
+                nickname: nickname || `Seat ${seatId}`,
+                uuid: uuid
             });
         }
 
-        recordPlacement(seatNum, streetNum, layoutXml) {
-            let discM = layoutXml.match(/<Discarded>(.*?)<\/Discarded>/);
-            if (discM) {
-                let dCards = Array.from(discM[1].matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]);
-                if (dCards.length) {
-                    let curD = this.discards.get(seatNum) || [];
-                    curD.push(...dCards);
-                    this.discards.set(seatNum, curD);
-                }
-            }
-
-            let lay = this.finalLayouts.get(seatNum) || { front: [], middle: [], back: [] };
-            ['FRONT', 'MIDDLE', 'BACK'].forEach(row => {
-                let rM = layoutXml.match(new RegExp(`<Hand\\s+name="${row}">([\\s\\S]*?)<\\/Hand>`, 'i'));
-                if (rM) {
-                    let rCards = Array.from(rM[1].matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]);
-                    lay[row.toLowerCase()] = rCards;
-                }
-            });
-            this.finalLayouts.set(seatNum, lay);
-        }
-
-        finalize() {
-            if (!this.handNumber) return null;
-
-            let players = [];
-            this.seats.forEach((s, sn) => {
-                let lay = this.finalLayouts.get(sn) || { front: [], middle: [], back: [] };
-                let win = this.winners.find(w => w.seat === sn) || { score: 0, amount: 0 };
-                let roy = this.royalties.get(sn) || { front: 0, middle: 0, back: 0 };
-
-                players.push({
-                    seat: sn,
-                    nick: s.rawNick,
-                    cleanNick: s.cleanNick,
-                    is_foul: this.fouls.has(sn),
-                    discarded_dead_cards: this.discards.get(sn) || [],
-                    final_board: lay,
-                    royalties: roy,
-                    score_points: win.score || 0,
-                    chips_delta: win.amount || 0
-                });
-            });
-
-            return {
-                hand_number: this.handNumber,
-                game_type: "OFC_PINEAPPLE",
-                fantasy_mode: this.fantasyMode,
-                point_score_rub: this.pointScore,
-                table_id: this.tableId,
-                table_name: this.tableName,
+        startHand(handNumber, dealerSeat, gameNum = 1, gamesCount = 1) {
+            let isFantasyRound = (gameNum > 1);
+            this.activeHand = {
+                hand_id: String(handNumber),
                 timestamp: new Date().toISOString(),
-                dealer_seat: this.dealer,
-                showdowns: this.showdowns,
-                players: players
+                tournament: {
+                    tournament_id: this.tournamentId,
+                    tournament_name: this.tournamentName,
+                    table_id: this.tableId,
+                    table_name: this.tableName,
+                    game_type: this.gameType,
+                    fantasy_mode: this.fantasyMode,
+                    has_jokers: this.hasJokers,
+                    point_score_rub: this.currentPointScore
+                },
+                context: {
+                    dealer_seat: dealerSeat,
+                    hero_seat: this.heroSeat,
+                    is_fantasy_round: isFantasyRound,
+                    game_round: gameNum,
+                    total_rounds: gamesCount,
+                    active_seats: Array.from(this.seats.keys())
+                },
+                players: {},
+                showdowns: [],
+                winners: []
             };
+
+            this.seats.forEach((player, seatId) => {
+                this.activeHand.players[seatId] = {
+                    seat: seatId,
+                    nickname: player.nickname,
+                    uuid: player.uuid,
+                    is_hero: (seatId === this.heroSeat),
+                    is_fantasy: isFantasyRound,
+                    fantasy_cards_count: 0,
+                    streets: [],
+                    discards: [],
+                    final_board: { front: [], middle: [], back: [] },
+                    combinations: { front: '', middle: '', back: '' },
+                    royalties: { front: 0, middle: 0, back: 0, total: 0 },
+                    is_foul: false,
+                    foul_reason: null,
+                    score_points: 0,
+                    chips_delta: 0,
+                    qualified_for_next_fantasy: false
+                };
+            });
+        }
+
+        ensurePlayer(seatId) {
+            if (!this.activeHand) return null;
+            if (!this.activeHand.players[seatId]) {
+                let p = this.seats.get(seatId) || { nickname: `Seat ${seatId}`, uuid: null };
+                this.activeHand.players[seatId] = {
+                    seat: seatId,
+                    nickname: p.nickname,
+                    uuid: p.uuid,
+                    is_hero: (seatId === this.heroSeat),
+                    is_fantasy: false,
+                    fantasy_cards_count: 0,
+                    streets: [],
+                    discards: [],
+                    final_board: { front: [], middle: [], back: [] },
+                    combinations: { front: '', middle: '', back: '' },
+                    royalties: { front: 0, middle: 0, back: 0, total: 0 },
+                    is_foul: false,
+                    foul_reason: null,
+                    score_points: 0,
+                    chips_delta: 0,
+                    qualified_for_next_fantasy: false
+                };
+            }
+            return this.activeHand.players[seatId];
+        }
+
+        recordDealing(streetNum, seatId, cards) {
+            let p = this.ensurePlayer(seatId);
+            if (!p) return;
+
+            if (cards.length > 5) {
+                p.is_fantasy = true;
+                p.fantasy_cards_count = cards.length;
+                this.activeHand.context.is_fantasy_round = true;
+            }
+
+            p.streets.push({
+                street: streetNum,
+                street_name: p.is_fantasy ? `fantasy_deal_${cards.length}_cards` : `street_${streetNum}`,
+                dealt_cards: cards,
+                placed: { front: [], middle: [], back: [] },
+                discarded: []
+            });
+        }
+
+        recordAction(seatId, bodyXml) {
+            let p = this.ensurePlayer(seatId);
+            if (!p) return;
+
+            let discM = bodyXml.match(/<Discarded>([\s\S]*?)<\/Discarded>/i);
+            let discards = discM ? parseCards(discM[1]) : [];
+            if (discards.length > 0) {
+                p.discards.push(...discards);
+            }
+
+            let placed = { front: [], middle: [], back: [] };
+            ['FRONT', 'MIDDLE', 'BACK'].forEach(row => {
+                let rowM = bodyXml.match(new RegExp(`<Hand\\s+name="${row}"[^>]*>([\\s\\S]*?)<\\/Hand>`, 'i'));
+                if (rowM) {
+                    placed[row.toLowerCase()] = parseCards(rowM[1]);
+                }
+            });
+
+            if (p.streets.length > 0) {
+                let curStreet = p.streets[p.streets.length - 1];
+                curStreet.placed = placed;
+                curStreet.discarded = discards;
+            }
+        }
+
+        recordCombination(seatId, cAttr, bodyXml) {
+            let p = this.ensurePlayer(seatId);
+            if (!p) return;
+
+            if (cAttr.includes('dead="true"')) {
+                p.is_foul = true;
+                p.foul_reason = 'Misplacement: Row strength hierarchy violation (Top <= Middle <= Bottom)';
+            }
+
+            let roySum = 0;
+            ['FRONT', 'MIDDLE', 'BACK'].forEach(row => {
+                let rowM = bodyXml.match(new RegExp(`<Hand\\s+name="${row}"(?:\s+royalty="(\\d+)")?(?:\s+strength="([^"]+)")?[^>]*>([\\s\\S]*?)<\\/Hand>`, 'i'));
+                if (rowM) {
+                    let cards = parseCards(rowM[3]);
+                    let rowKey = row.toLowerCase();
+                    if (cards.length > 0) {
+                        p.final_board[rowKey] = cards;
+                    }
+                    if (rowM[1]) {
+                        let r = parseInt(rowM[1], 10);
+                        p.royalties[rowKey] = r;
+                        roySum += r;
+                    }
+                    if (rowM[2]) {
+                        p.combinations[rowKey] = rowM[2];
+                    }
+                }
+            });
+            p.royalties.total = roySum;
+        }
+
+        finalizeHand() {
+            if (!this.activeHand || !this.activeHand.hand_id) return null;
+            let hand = this.activeHand;
+            hand.players = Object.values(hand.players);
+
+            if (!OFC_STORAGE.handNumbers.has(hand.hand_id)) {
+                OFC_STORAGE.handNumbers.add(hand.hand_id);
+                OFC_STORAGE.hands.push(hand);
+                updateHudUI();
+                console.log(`%c🍍 [OFC Master Tracker] Раздача #${hand.hand_id} успешно записана!`, 'color:#10b981;font-weight:bold;');
+            }
+            this.activeHand = null;
         }
     }
 
-    function parseOfcXml(xml, ws) {
+    function getOrCreateTable(tableId) {
+        if (!OFC_STORAGE.tables.has(tableId)) {
+            OFC_STORAGE.tables.set(tableId, new TableSession(tableId));
+        }
+        return OFC_STORAGE.tables.get(tableId);
+    }
+
+    function processMessage(xml) {
         if (!xml || typeof xml !== 'string' || !xml.startsWith('<')) return;
 
-        // Контекст турнира / стола
-        if (xml.includes('<TableDetails') || xml.includes('<TournamentTable')) {
-            let tableId = attr(xml, 'id') || attr(xml, 'tableId');
-            let tournId = attr(xml, 'tournamentId');
-            let tName = attr(xml, 'name') || attr(xml, 'tournamentName');
-            let pScore = iattr(xml, 'pointScore') || 100;
-            let fant = attr(xml, 'fantasy') || 'PROGRESSIVE';
-
+        /* 1. Обработка стола и турнира */
+        if (xml.includes('<TableDetails') || xml.includes('<TournamentTable') || xml.includes('<TournamentDetails')) {
+            let tableId = getAttr(xml, 'id') || getAttr(xml, 'tableId');
             if (tableId) {
-                let ctx = new OFCTableContext(tableId, tournId);
-                ctx.tableName = tName || ctx.tableName;
-                ctx.pointScore = pScore;
-                ctx.fantasyMode = fant;
-                ofcState.activeTables.set(tableId, ctx);
-                ws.__ofcTable = ctx;
+                let table = getOrCreateTable(tableId);
+                table.tournamentName = getAttr(xml, 'tournamentName') || getAttr(xml, 'name') || table.tournamentName;
+                table.tournamentId = getAttr(xml, 'tournamentId') || table.tournamentId;
+                table.tableName = getAttr(xml, 'name') || table.tableName;
+                table.gameType = getAttr(xml, 'game') || table.gameType;
+                table.hasJokers = table.gameType.includes('JOKER');
+                table.fantasyMode = getAttr(xml, 'fantasy') || table.fantasyMode;
+                table.currentPointScore = getIntAttr(xml, 'pointScore', table.currentPointScore);
+
+                let seatRe = /<Seat\s+[^>]*\bid="(\d+)"[^>]*>[\s\S]*?<PlayerInfo[^>]*\bnickname="([^"]+)"(?:[^>]*\buuid="([^"]+)")?/gi;
+                let sm;
+                while ((sm = seatRe.exec(xml)) !== null) {
+                    table.updateSeat(parseInt(sm[1], 10), sm[2], sm[3]);
+                }
             }
         }
 
-        let ctx = ws.__ofcTable;
-        if (!ctx) return;
+        /* 2. Обновление куша уровня */
+        let scoreMatch = xml.match(/(?:<CurrentLevel|<PlayerStackAdjusted|<Parameters|<HandInfo)\s+[^>]*\bpointScore="(\d+)"/i);
+        if (scoreMatch) {
+            let newScore = parseInt(scoreMatch[1], 10);
+            OFC_STORAGE.tables.forEach(t => {
+                t.currentPointScore = newScore;
+                if (t.activeHand) t.activeHand.tournament.point_score_rub = newScore;
+            });
+        }
 
-        // Синхронизация мест
-        if (xml.includes('<Seat ') && xml.includes('<PlayerInfo')) {
-            let seatMatches = xml.matchAll(/<Seat\s+[^>]*\bid="(\d+)"[^>]*>[\s\S]*?<PlayerInfo[^>]*nickname="([^"]+)"/g);
-            for (let sm of seatMatches) {
-                ctx.ensureSeat(parseInt(sm[1], 10), sm[2]);
+        /* 3. Определение Hero Seat */
+        let heroSeatMatch = xml.match(/<Seats\s+[^>]*\bme="(\d+)"/i);
+        if (heroSeatMatch) {
+            let hs = parseInt(heroSeatMatch[1], 10);
+            OFC_STORAGE.tables.forEach(t => { t.heroSeat = hs; });
+        }
+
+        /* 4. Смена/подсадка игроков */
+        let npRe = /<NewPlayer\s+[^>]*\bseat="(\d+)"[^>]*>[\s\S]*?<PlayerInfo[^>]*\bnickname="([^"]+)"(?:[^>]*\buuid="([^"]+)")?/gi;
+        let npm;
+        while ((npm = npRe.exec(xml)) !== null) {
+            let sn = parseInt(npm[1], 10);
+            let nick = npm[2];
+            let uuid = npm[3];
+            OFC_STORAGE.tables.forEach(t => t.updateSeat(sn, nick, uuid));
+        }
+
+        /* 5. Инициализация раздачи */
+        let nhM = xml.match(/<NewHand\s+([^>]*)\/>/i);
+        let gsM = xml.match(/<GameState\s+([^>]*)\bhand="(\d+)"/i);
+        if (nhM || gsM) {
+            let t = OFC_STORAGE.tables.values().next().value;
+            if (t) {
+                let hNum = nhM ? getAttr(nhM[1], 'number') : gsM[2];
+                let dealer = nhM ? getIntAttr(nhM[1], 'dealer', 0) : getIntAttr(xml, 'dealer', 0);
+                let gameNum = nhM ? getIntAttr(nhM[1], 'gameNumber', 1) : 1;
+                let gamesCount = nhM ? getIntAttr(nhM[1], 'gamesCount', 1) : 1;
+                t.startHand(hNum, dealer, gameNum, gamesCount);
             }
         }
 
-        // Старт новой раздачи
-        let nhM = xml.match(/<NewHand\s+([^>]*)\/>/);
-        if (nhM) {
-            let hNum = attr(nhM[1], 'number');
-            let dealer = iattr(nhM[1], 'dealer') || 0;
-            let pScore = iattr(nhM[1], 'pointScore') || ctx.pointScore;
-            ctx.beginHand(hNum, dealer, pScore);
-        }
+        let table = OFC_STORAGE.tables.values().next().value;
+        if (!table || !table.activeHand) return;
 
-        // Фиксация раскладки и сбросов карт игроком
-        let actMatches = xml.matchAll(/<PlayerAction\s+seat="(\d+)"[^>]*>([\s\S]*?)<\/PlayerAction>/g);
-        for (let am of actMatches) {
-            let seatNum = parseInt(am[1], 10);
-            let body = am[2];
-            if (body.includes('<LayOut')) {
-                ctx.recordPlacement(seatNum, 0, body);
+        /* 6. Раздача карт по улицам */
+        let dealRe = /<DealingCards(?:\s+street="(\d+)")?>([\s\S]*?)<\/DealingCards>/gi;
+        let dm;
+        while ((dm = dealRe.exec(xml)) !== null) {
+            let streetNum = dm[1] ? parseInt(dm[1], 10) : (table.activeHand.context.is_fantasy_round ? 0 : 1);
+            let dBody = dm[2];
+            let seatDealRe = /<Seat\s+id="(\d+)">\s*<Cards>([\s\S]*?)<\/Cards>\s*<\/Seat>/gi;
+            let sdm;
+            while ((sdm = seatDealRe.exec(dBody)) !== null) {
+                let sn = parseInt(sdm[1], 10);
+                let cards = parseCards(sdm[2]);
+                table.recordDealing(streetNum, sn, cards);
             }
         }
 
-        // Фиксация фолов и роялти
-        let combMatches = xml.matchAll(/<CombinationChange\s+([^>]*?)>([\s\S]*?)<\/CombinationChange>/g);
-        for (let cm of combMatches) {
+        /* 7. Действия игроков на доске */
+        let actRe = /<PlayerAction\s+seat="(\d+)"[^>]*>([\s\S]*?)<\/PlayerAction>/gi;
+        let am;
+        while ((am = actRe.exec(xml)) !== null) {
+            let sn = parseInt(am[1], 10);
+            let pBody = am[2];
+            if (pBody.includes('<LayOut')) {
+                table.recordAction(sn, pBody);
+            }
+        }
+
+        /* 8. Изменение комбинаций / Доска / Роялти */
+        let combRe = /<CombinationChange\s+([^>]*?)>([\s\S]*?)<\/CombinationChange>/gi;
+        let cm;
+        while ((cm = combRe.exec(xml)) !== null) {
             let cAttr = cm[1];
-            let seatNum = iattr(cAttr, 'seat');
-            if (cAttr.includes('dead="true"')) {
-                ctx.fouls.add(seatNum);
+            let cBody = cm[2];
+            let sn = getIntAttr(cAttr, 'seat');
+            if (sn !== null) {
+                table.recordCombination(sn, cAttr, cBody);
             }
-
-            let royObj = ctx.royalties.get(seatNum) || { front: 0, middle: 0, back: 0 };
-            let handMatches = cm[2].matchAll(/<Hand\s+name="(\w+)"\s+royalty="(\d+)"/g);
-            for (let hm of handMatches) {
-                let row = hm[1].toLowerCase();
-                royObj[row] = parseInt(hm[2], 10);
-            }
-            ctx.royalties.set(seatNum, royObj);
         }
 
-        // Перехват шоудаунов и скупов
-        let sdMatches = xml.matchAll(/<Showdown\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/Showdown>)/g);
-        for (let sm of sdMatches) {
-            let sAttr = sm[1];
-            ctx.showdowns.push({
-                first_seat: iattr(sAttr, 'firstSeat'),
-                second_seat: iattr(sAttr, 'secondSeat'),
-                points: iattr(sAttr, 'points'),
-                is_scoop: (iattr(sAttr, 'scoop') || 0) > 0,
-                cash_delta: iattr(sAttr, 'cash') || 0
+        /* 9. Сравнение комбинаций на шоудауне (Showdown) */
+        let sdRe = /<Showdown\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/Showdown>)/gi;
+        let sdm;
+        while ((sdm = sdRe.exec(xml)) !== null) {
+            let sAttr = sdm[1];
+            let sBody = sdm[2] || '';
+            let lineDetails = {};
+            ['FRONT', 'MIDDLE', 'BACK'].forEach(row => {
+                let lm = sBody.match(new RegExp(`<Hand\\s+name="${row}"(?:\s+points="([^"]+)")?(?:\s+royalty="([^"]+)")?`, 'i'));
+                if (lm) {
+                    lineDetails[row.toLowerCase()] = {
+                        points: lm[1] ? parseInt(lm[1], 10) : 0,
+                        royalty: lm[2] ? parseInt(lm[2], 10) : 0
+                    };
+                }
+            });
+            table.activeHand.showdowns.push({
+                winner_seat: getIntAttr(sAttr, 'firstSeat'),
+                loser_seat: getIntAttr(sAttr, 'secondSeat'),
+                points: getIntAttr(sAttr, 'points', 0),
+                is_scoop: getIntAttr(sAttr, 'scoop', 0) > 0,
+                cash_delta: getIntAttr(sAttr, 'cash', 0),
+                lines: lineDetails
             });
         }
 
-        // Итоги раздачи
-        let winMatches = xml.matchAll(/<Winner\s+([^>]*)\/>/g);
-        for (let wm of winMatches) {
+        /* 10. Победители и Фантазия */
+        let winRe = /<Winner\s+([^>]*)\/>/gi;
+        let wm;
+        while ((wm = winRe.exec(xml)) !== null) {
             let wAttr = wm[1];
-            ctx.winners.push({
-                seat: iattr(wAttr, 'seat'),
-                score: iattr(wAttr, 'score'),
-                amount: iattr(wAttr, 'amount')
+            let sn = getIntAttr(wAttr, 'seat');
+            let score = getIntAttr(wAttr, 'score', 0);
+            let amt = getIntAttr(wAttr, 'amount', 0);
+            let isFant = wAttr.includes('fantasy="true"');
+
+            let p = table.ensurePlayer(sn);
+            if (p) {
+                p.score_points = score;
+                p.chips_delta = amt;
+                p.qualified_for_next_fantasy = isFant;
+            }
+
+            table.activeHand.winners.push({
+                seat: sn,
+                score_points: score,
+                chips_delta: amt,
+                fantasy_qualified: isFant
             });
         }
 
-        // Завершение раздачи и архивация в JSON
+        /* 11. Финализация раздачи */
         if (xml.includes('<EndHand')) {
-            let finalized = ctx.finalize();
-            if (finalized && !ofcState.recordedHandNumbers.has(finalized.hand_number)) {
-                ofcState.recordedHandNumbers.add(finalized.hand_number);
-                ofcState.completedHands.push(finalized);
-                console.log("%c🍍 [OFC Hand Archived] #" + finalized.hand_number + " | " + finalized.table_name, "color:#10b981;font-weight:bold;");
-            }
-            ctx.handNumber = null;
-        }
-
-        // Фильтрация и перехват чата (без дилерского спама)
-        let chatM = xml.match(/<ChatMessage\s+([^>]*)\/>/);
-        if (chatM) {
-            let cAttr = chatM[1];
-            let type = attr(cAttr, 'type');
-            let sender = attr(cAttr, 'from');
-            let text = attr(cAttr, 'text');
-
-            if (type === 'USER' && sender && text && !/Dealer|Дилер|Система/i.test(sender)) {
-                ofcState.chatLogs.push({
-                    time: new Date().toLocaleTimeString(),
-                    table_name: ctx.tableName,
-                    sender: sender,
-                    message: text
-                });
-            }
+            table.finalizeHand();
         }
     }
 
-    // Перехват WebSocket
-    let OrigWS = window.WebSocket;
-    if (OrigWS && !window.__ofcWsHooked) {
-        window.__ofcWsHooked = true;
-        window.WebSocket = new Proxy(OrigWS, {
-            construct: function(target, args) {
-                let ws = Reflect.construct(target, args);
-                ws.addEventListener('message', async function(e) {
+    /* ══════════════════════════════════════════════════════════════════
+       WEBSOCKET PROXY INTERCEPTOR
+       ══════════════════════════════════════════════════════════════════ */
+    let RealWebSocket = window.WebSocket;
+    window.WebSocket = new Proxy(RealWebSocket, {
+        construct(target, args) {
+            let ws = Reflect.construct(target, args);
+            ws.addEventListener('message', function(e) {
+                try {
                     let text = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data);
-                    parseOfcXml(text, ws);
-                });
-                return ws;
-            }
-        });
+                    processMessage(text);
+                } catch(err) {
+                    console.error('[OFC Tracker Error]', err);
+                }
+            });
+            return ws;
+        }
+    });
+
+    /* ══════════════════════════════════════════════════════════════════
+       INTERACTIVE HUD UI OVERLAY
+       ══════════════════════════════════════════════════════════════════ */
+    let hud = document.createElement('div');
+    hud.id = 'ofc-master-hud';
+    hud.style.cssText = 'position:fixed;top:12px;right:12px;z-index:999999999;background:rgba(15,23,42,0.92);backdrop-filter:blur(8px);border:1px solid rgba(16,185,129,0.4);border-radius:12px;padding:12px 16px;box-shadow:0 12px 32px rgba(0,0,0,0.8);color:#f8fafc;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;min-width:240px;';
+    hud.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span style="font-weight:900;color:#10b981;font-size:13px;">🍍 OFC MASTER v3.0</span>
+            <span id="ofc-hud-hands" style="background:#047857;color:#ecfdf5;padding:2px 8px;border-radius:999px;font-weight:700;">0 рук</span>
+        </div>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">
+            <div>Куш: <b id="ofc-hud-kush" style="color:#38bdf8;">-- RUB</b></div>
+            <div>Статус: <b id="ofc-hud-status" style="color:#a78bfa;">Ожидание...</b></div>
+        </div>
+        <div style="display:flex;gap:6px;">
+            <button id="ofc-btn-dl" style="flex:1;background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">💾 JSON</button>
+            <button id="ofc-btn-copy" style="background:#334155;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">📋 Копия</button>
+        </div>
+    `;
+    document.body.appendChild(hud);
+
+    function updateHudUI() {
+        let handsBadge = document.getElementById('ofc-hud-hands');
+        let kushBadge = document.getElementById('ofc-hud-kush');
+        let statusBadge = document.getElementById('ofc-hud-status');
+        if (handsBadge) handsBadge.innerText = `${OFC_STORAGE.hands.length} рук`;
+        let t = OFC_STORAGE.tables.values().next().value;
+        if (t && kushBadge) kushBadge.innerText = `${t.currentPointScore} RUB`;
+        if (statusBadge) statusBadge.innerText = t && t.activeHand ? `Раздача #${t.activeHand.hand_id}` : 'Ожидание раздачи';
     }
 
-    // Создание плавающей кнопки экспорта
-    let btn = document.createElement('button');
-    btn.id = 'btn-ofc-export';
-    btn.innerText = '🍍 Экспорт OFC JSON (' + ofcState.completedHands.length + ')';
-    btn.style.cssText = 'position:fixed;bottom:12px;right:12px;z-index:999999999;background:linear-gradient(90deg,#06b6d4,#10b981);color:#000;font-weight:800;font-size:12px;padding:10px 16px;border:none;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.8);cursor:pointer;';
-    
-    btn.onclick = function() {
+    document.getElementById('ofc-btn-dl').onclick = function() {
         let dump = {
-            discipline: "OFC_PINEAPPLE",
-            timestamp: new Date().toISOString(),
-            total_hands: ofcState.completedHands.length,
-            recorded_hands: ofcState.completedHands,
-            chat_logs: ofcState.chatLogs
+            version: '3.0-OFC-AI-DATASET',
+            exported_at: new Date().toISOString(),
+            total_hands_count: OFC_STORAGE.hands.length,
+            hands: OFC_STORAGE.hands
         };
         let blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `pokerdom_ofc_pineapple_${Date.now()}.json`;
+        a.download = `pokerdom_ofc_dataset_${Date.now()}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
     };
-    document.body.appendChild(btn);
 
-    setInterval(() => {
-        let b = document.getElementById('btn-ofc-export');
-        if (b) b.innerText = `🍍 Экспорт OFC JSON (${ofcState.completedHands.length})`;
-    }, 2000);
+    document.getElementById('ofc-btn-copy').onclick = function() {
+        let dump = {
+            version: '3.0-OFC-AI-DATASET',
+            exported_at: new Date().toISOString(),
+            total_hands_count: OFC_STORAGE.hands.length,
+            hands: OFC_STORAGE.hands
+        };
+        navigator.clipboard.writeText(JSON.stringify(dump, null, 2)).then(() => {
+            alert('🍍 Датасет скопирован в буфер обмена!');
+        });
+    };
 
-    console.log("%c🍍 [OFC Scalpel v1.0] Запущен. Перехват раскладок, сбросов и роялти активирован.", "color:#10b981;font-weight:bold;");
+    console.log('%c🍍 [OFC Master Tracker v3.0] Активен. Полный захват раздач, фантазий, улиц и кушей запущен.', 'color:#10b981;font-weight:bold;font-size:13px;');
 })();
