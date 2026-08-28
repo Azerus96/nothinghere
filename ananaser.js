@@ -518,8 +518,8 @@ javascript:(function(){
             }
         }
 
-        // 12. Шоудауны
-        let sdMatches = xml.matchAll(/<Showdown\s+([^>]*?)(?:\\/>|>([\s\S]*?)<\/Showdown>)/gi);
+        // 12. Шоудауны (Исправлена регулярка)
+        let sdMatches = xml.matchAll(/<Showdown\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/Showdown>)/gi);
         for (let sdm of sdMatches) {
             let sAttr = sdm[1];
             let sBody = sdm[2] || '';
