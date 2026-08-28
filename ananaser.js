@@ -1,12 +1,12 @@
 javascript:(function(){
-    if (window.__ofcGodEngineV71) {
-        alert('🍍 OFC God Engine v7.1 уже запущен! Используйте панель управления.');
+    if (window.__ofcGodEngineV73) {
+        alert('🍍 OFC God Engine v7.3 уже запущен! Используйте панель управления.');
         return;
     }
-    window.__ofcGodEngineV71 = true;
+    window.__ofcGodEngineV73 = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       OFC PINEAPPLE GOD ENGINE v7.1 — STABLE OMNI-MINER
+       OFC PINEAPPLE GOD ENGINE v7.3 — SEAMLESS HANDOFF MINER
        ══════════════════════════════════════════════════════════════════ */
 
     const MAX_GHOST_TABLES = 30;
@@ -14,7 +14,7 @@ javascript:(function(){
     window.OFC_DB = window.OFC_DB || {
         tables: new Map(),
         ghostSockets: new Map(),
-        socketCooldowns: new Map(), // Защита от флаппинга (моргания)
+        socketCooldowns: new Map(),
         lobbySocket: null,
         hands: [],
         handIds: new Set(),
@@ -29,17 +29,17 @@ javascript:(function(){
     const DB = window.OFC_DB;
 
     try {
-        let saved = sessionStorage.getItem('ofc_hands_backup_v71');
+        let saved = sessionStorage.getItem('ofc_hands_backup_v73');
         if (saved) {
             let parsed = JSON.parse(saved);
             DB.hands = parsed;
             parsed.forEach(h => DB.handIds.add(h.hand_id));
-            console.log(`[OFC v7.1] Восстановлено ${DB.hands.length} рук из кэша.`);
+            console.log(`[OFC v7.3] Восстановлено ${DB.hands.length} рук из кэша.`);
         }
     } catch(e) {}
 
     function saveToStorage() {
-        try { sessionStorage.setItem('ofc_hands_backup_v71', JSON.stringify(DB.hands)); } catch(e) {}
+        try { sessionStorage.setItem('ofc_hands_backup_v73', JSON.stringify(DB.hands)); } catch(e) {}
     }
 
     function attr(xml, name) {
@@ -80,7 +80,7 @@ javascript:(function(){
             this.seats = new Map();
             this.hand = null;
             this.isOFC = true;
-            this.isOpen = true;
+            this.lastActiveTime = Date.now();
         }
 
         updatePlayer(seat, nick, uuid = null) {
@@ -93,7 +93,7 @@ javascript:(function(){
         }
 
         startHand(handId, dealer, gameNum = 1, gamesCount = 1) {
-            if (!this.isOpen || !this.isOFC) return;
+            if (!this.isOFC) return; // Убрана блокировка !this.isOpen
             let isFantasyRound = (gameNum > 1);
             let hasJokers = this.gameType.includes('JOKER') || (DB.selectedTournamentName && DB.selectedTournamentName.includes('Джокер'));
 
@@ -196,7 +196,7 @@ javascript:(function(){
                 DB.hands.push(h);
                 saveToStorage();
                 updateUI();
-                console.log(`%c🍍 [OFC v7.1] Раздача #${h.hand_id} сохранена!`, 'color:#10b981;font-weight:bold;');
+                console.log(`%c🍍 [OFC v7.3] Раздача #${h.hand_id} сохранена!`, 'color:#10b981;font-weight:bold;');
             }
             this.hand = null;
         }
@@ -207,7 +207,7 @@ javascript:(function(){
             DB.tables.set(tId, new TableSession(tId));
         }
         let t = DB.tables.get(tId);
-        t.isOpen = true;
+        t.lastActiveTime = Date.now();
         return t;
     }
 
@@ -248,10 +248,10 @@ javascript:(function(){
             }
         }
 
-        // ИСПРАВЛЕНИЕ БАГА 2: Закрываем стол ТОЛЬКО при явном сигнале закрытия, а не при любой ошибке
+        // Закрываем фоновый сокет только при явном сигнале закрытия стола
         if (xml.includes('description="Table is already closed"') || xml.includes('<CloseTable') || xml.includes('<LeaveTable')) {
             let cTableId = ws.__tableId || attr(xml, 'id') || attr(xml, 'tableId');
-            if (cTableId) closeTableSession(cTableId);
+            if (cTableId) closeGhostSocket(cTableId);
         }
 
         if (xml.includes('<TableDetails') || xml.includes('<TournamentTable')) {
@@ -264,7 +264,7 @@ javascript:(function(){
                 let gType = attr(xml, 'game') || '';
                 table.isOFC = gType.includes('OFC') || gType.includes('PINEAPPLE') || xml.includes('PINEAPPLE') || xml.includes('Ананас');
                 if (!table.isOFC) {
-                    closeTableSession(tId);
+                    closeGhostSocket(tId);
                     return;
                 }
 
@@ -284,7 +284,7 @@ javascript:(function(){
         }
 
         let table = getSessionForSocket(ws, xml);
-        if (!table || !table.isOFC || !table.isOpen) return;
+        if (!table || !table.isOFC) return;
 
         let scoreMatch = xml.match(/(?:<CurrentLevel|<PlayerStackAdjusted|<Parameters|<HandInfo)\s+[^>]*?\bpointScore="(\d+)"/i);
         if (scoreMatch) {
@@ -458,12 +458,11 @@ javascript:(function(){
         }
     }
 
-    /* ── ФОНОВЫЙ МАЙНЕР СТОЛОВ ТУРНИРА (ИСПРАВЛЕНО В v7.1) ─────────── */
+    /* ── ФОНОВЫЙ МАЙНЕР СТОЛОВ ТУРНИРА ─────────────────────────────── */
     function launchGhostSpectator(tableId) {
         if (!DB.wsUrl || !DB.sessionId || !DB.selectedTournamentId) return;
         if (DB.ghostSockets.has(tableId) || DB.ghostSockets.size >= MAX_GHOST_TABLES) return;
 
-        // ИСПРАВЛЕНИЕ БАГА 3: Кулдаун на реконнект (защита от флаппинга)
         let now = Date.now();
         let cd = DB.socketCooldowns.get(tableId) || 0;
         if (now < cd) return;
@@ -497,15 +496,14 @@ javascript:(function(){
                 if (gws.__state === 'WAITING_TABLE_DETAILS' && text.includes('<TableDetails')) {
                     gws.__state = 'SPECTATING';
                     gws.send(`<GetTableDetails id="${DB.selectedTournamentId}" type="SCHEDULED_TOURNAMENT"/>`);
-                    // ИСПРАВЛЕНИЕ БАГА 1: ВОЗВРАЩЕН <JoinTable/>
                     gws.send('<JoinTable/>');
                 }
 
                 parseMessage(text, gws);
             };
 
-            gws.onclose = function() { closeTableSession(tableId); };
-            gws.onerror = function() { closeTableSession(tableId); };
+            gws.onclose = function() { closeGhostSocket(tableId); };
+            gws.onerror = function() { closeGhostSocket(tableId); };
 
             updateUI();
         } catch(err) {
@@ -513,23 +511,20 @@ javascript:(function(){
         }
     }
 
-    function closeTableSession(tableId) {
+    // Функция закрывает ТОЛЬКО фоновый сокет, не убивая сессию стола!
+    function closeGhostSocket(tableId) {
         let ws = DB.ghostSockets.get(tableId);
         if (ws) {
             if (ws.__heartbeat) clearInterval(ws.__heartbeat);
             try { ws.close(); } catch(e) {}
             DB.ghostSockets.delete(tableId);
         }
-        if (DB.tables.has(tableId)) {
-            DB.tables.get(tableId).isOpen = false;
-        }
-        // Устанавливаем кулдаун 15 секунд, чтобы поллер не долбился в закрытый стол
         DB.socketCooldowns.set(tableId, Date.now() + 15000);
         updateUI();
     }
 
     function stopAllMining() {
-        DB.ghostSockets.forEach((ws, tId) => closeTableSession(tId));
+        DB.ghostSockets.forEach((ws, tId) => closeGhostSocket(tId));
         DB.selectedTournamentId = null;
         DB.selectedTournamentName = 'Остановлено';
         if (DB.lobbyPollTimer) clearInterval(DB.lobbyPollTimer);
@@ -591,7 +586,8 @@ javascript:(function(){
             });
 
             ws.addEventListener('close', function() {
-                if (ws.__tableId) closeTableSession(ws.__tableId);
+                // Если закрылся ручной сокет, мы НЕ убиваем фоновый майнер!
+                // Мы просто игнорируем это событие. Фоновый сокет продолжит работу.
             });
 
             return ws;
@@ -600,32 +596,31 @@ javascript:(function(){
 
     /* ── СВОРАЧИВАЕМЫЙ МОБИЛЬНЫЙ HUD UI ────────────────────────────── */
     let hud = document.createElement('div');
-    hud.id = 'ofc-god-hud-v71';
+    hud.id = 'ofc-god-hud-v73';
     hud.style.cssText = 'position:fixed;top:10px;right:10px;z-index:999999999;background:rgba(15,23,42,0.98);backdrop-filter:blur(12px);border:1px solid #10b981;border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,0.9);color:#f8fafc;font-family:monospace;font-size:11px;user-select:none;width:260px;';
 
     hud.innerHTML = `
         <div id="ofc-hud-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;gap:8px;background:linear-gradient(135deg,rgba(16,185,129,0.2),transparent);border-radius:12px 12px 0 0;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="ofc-hud-toggle-icon" style="color:#10b981;font-weight:900;font-size:13px;">▾</span>
-                <strong style="color:#10b981;font-size:12px;">🍍 OFC GOD v7.1</strong>
+                <strong style="color:#10b981;font-size:12px;">🍍 OFC SEAMLESS v7.3</strong>
             </div>
-            <span id="ofc-badge-hands-71" style="background:#059669;color:#fff;padding:2px 8px;border-radius:999px;font-weight:700;font-size:10px;">${DB.hands.length} рук</span>
+            <span id="ofc-badge-hands-73" style="background:#059669;color:#fff;padding:2px 8px;border-radius:999px;font-weight:700;font-size:10px;">${DB.hands.length} рук</span>
         </div>
         <div id="ofc-hud-body" style="padding:10px 14px 12px 14px;display:block;">
             <div style="font-size:10.5px;color:#94a3b8;margin-bottom:10px;line-height:1.6;">
-                <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Турнир: <b id="ofc-tourn-name-71" style="color:#fde047;">${DB.selectedTournamentName}</b></div>
+                <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Турнир: <b id="ofc-tourn-name-73" style="color:#fde047;">${DB.selectedTournamentName}</b></div>
                 <div style="display:flex;justify-content:space-between;margin-top:4px;">
-                    <span>Фоновых столов: <b id="ofc-badge-ghosts-71" style="color:#38bdf8;">0</b></span>
-                    <span>Активных OFC: <b id="ofc-badge-tables-71" style="color:#a78bfa;">0</b></span>
+                    <span>Фоновых столов: <b id="ofc-badge-ghosts-73" style="color:#38bdf8;">0</b></span>
                 </div>
             </div>
             <div style="display:flex;gap:6px;margin-bottom:6px;">
-                <button id="ofc-btn-save-71" style="flex:1;background:linear-gradient(135deg,#059669,#10b981);color:#000;border:none;padding:8px 10px;border-radius:6px;font-weight:800;cursor:pointer;">💾 Скачать JSON</button>
-                <button id="ofc-btn-clip-71" style="background:#334155;color:#fff;border:none;padding:8px 10px;border-radius:6px;font-weight:700;cursor:pointer;">📋 Копия</button>
+                <button id="ofc-btn-save-73" style="flex:1;background:linear-gradient(135deg,#059669,#10b981);color:#000;border:none;padding:8px 10px;border-radius:6px;font-weight:800;cursor:pointer;">💾 Скачать JSON</button>
+                <button id="ofc-btn-clip-73" style="background:#334155;color:#fff;border:none;padding:8px 10px;border-radius:6px;font-weight:700;cursor:pointer;">📋 Копия</button>
             </div>
             <div style="display:flex;gap:6px;">
-                <button id="ofc-btn-stop-71" style="flex:1;background:#b91c1c;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🛑 Стоп</button>
-                <button id="ofc-btn-clear-71" style="flex:1;background:#475569;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🗑 Очистить</button>
+                <button id="ofc-btn-stop-73" style="flex:1;background:#b91c1c;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🛑 Стоп</button>
+                <button id="ofc-btn-clear-73" style="flex:1;background:#475569;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🗑 Очистить</button>
             </div>
         </div>
     `;
@@ -640,25 +635,22 @@ javascript:(function(){
         icon.innerText = isCollapsed ? '▸' : '▾';
     };
 
-    document.getElementById('ofc-btn-stop-71').onclick = stopAllMining;
-    document.getElementById('ofc-btn-clear-71').onclick = clearDatabase;
+    document.getElementById('ofc-btn-stop-73').onclick = stopAllMining;
+    document.getElementById('ofc-btn-clear-73').onclick = clearDatabase;
 
     function updateUI() {
-        let bHands = document.getElementById('ofc-badge-hands-71');
-        let bGhosts = document.getElementById('ofc-badge-ghosts-71');
-        let bTables = document.getElementById('ofc-badge-tables-71');
-        let tName = document.getElementById('ofc-tourn-name-71');
+        let bHands = document.getElementById('ofc-badge-hands-73');
+        let bGhosts = document.getElementById('ofc-badge-ghosts-73');
+        let tName = document.getElementById('ofc-tourn-name-73');
         
-        let activeOFC = Array.from(DB.tables.values()).filter(t => t.isOpen && t.isOFC).length;
         if (bHands) bHands.innerText = `${DB.hands.length} рук`;
         if (bGhosts) bGhosts.innerText = `${DB.ghostSockets.size}`;
-        if (bTables) bTables.innerText = `${activeOFC}`;
         if (tName) tName.innerText = DB.selectedTournamentName;
     }
 
     function exportPayload() {
         return {
-            version: '7.1-OFC-STABLE-DATASET',
+            version: '7.3-OFC-SEAMLESS-DATASET',
             currency: 'TOURNAMENT_CHIPS',
             exported_at: new Date().toISOString(),
             tournament_id: DB.selectedTournamentId,
@@ -668,23 +660,23 @@ javascript:(function(){
         };
     }
 
-    document.getElementById('ofc-btn-save-71').onclick = function(e) {
+    document.getElementById('ofc-btn-save-73').onclick = function(e) {
         e.stopPropagation();
         let blob = new Blob([JSON.stringify(exportPayload(), null, 2)], { type: 'application/json' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `pokerdom_ofc_v71_${Date.now()}.json`;
+        a.download = `pokerdom_ofc_v73_${Date.now()}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
     };
 
-    document.getElementById('ofc-btn-clip-71').onclick = function(e) {
+    document.getElementById('ofc-btn-clip-73').onclick = function(e) {
         e.stopPropagation();
         navigator.clipboard.writeText(JSON.stringify(exportPayload(), null, 2)).then(() => {
             alert('🍍 Датасет скопирован в буфер обмена!');
         });
     };
 
-    console.log('%c🍍 [OFC God Engine v7.1] Запущен. Стабильный пул сокетов и защита от флаппинга активны.', 'color:#10b981;font-weight:bold;font-size:13px;');
+    console.log('%c🍍 [OFC God Engine v7.3] Запущен. Бесшовный Handoff сокетов активирован.', 'color:#10b981;font-weight:bold;font-size:13px;');
 })();
