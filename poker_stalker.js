@@ -1,12 +1,12 @@
 javascript:(function(){
-    if (window.__pokerStalkerV320Master) {
-        alert('🎯 VIP Stalker v32.0 PSYCHO & BOUNTY уже запущен!');
+    if (window.__pokerStalkerV330Master) {
+        alert('🎯 VIP Stalker v33.0 OMNI-MASTER уже запущен!');
         return;
     }
-    window.__pokerStalkerV320Master = true;
+    window.__pokerStalkerV330Master = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v32.0 — PSYCHO & BOUNTY EDITION (HOLDEM)
+       ULTIMATE SCALPEL v33.0 — OMNI-MASTER PRECISION ENGINE
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
@@ -39,7 +39,7 @@ javascript:(function(){
         outboxQueue: [],
         completedHandsArchive: [],
         recordedHandNumbers: new Set(),
-        chatLogs: [], // Архив чата и психологии
+        chatLogs: [],
         engineDebugLog: [],
         auth: { sessionId: null, wssUrl: null, clientVersion: "71.0.138" },
         sockets: { lobby: null, tables: new Map() },
@@ -185,8 +185,8 @@ javascript:(function(){
             this.handStart = {};
             this.sweptInvestedPerSeat = new Map();
             this.handActions = new Map();
-            this.timeline = []; 
-            this.knockoutBounties = []; // Движок нокаутов
+            this.timeline = [];
+            this.knockoutBounties = [];
             this.recordedShowdownSeats = new Set();
             this.sittingOutSeats = new Set();
             this.playersActedThisHand = new Set();
@@ -239,7 +239,8 @@ javascript:(function(){
                     busted: false,
                     spent: 0,
                     rebuys: 0,
-                    addons: 0
+                    addons: 0,
+                    headBounty: 0
                 });
             }
 
@@ -453,6 +454,7 @@ javascript:(function(){
                     spent_rub: s.spent || 0,
                     rebuys_count: s.rebuys || 0,
                     addons_count: s.addons || 0,
+                    head_bounty_rub: s.headBounty || 0,
                     actions: this.handActions.get(sn) || []
                 });
             }
@@ -543,20 +545,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v320';
+    ui.id = 'stalker-hud-v330';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:440px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:12px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">ULTIMATE SCALPEL v32.0 PSYCHO</strong>
+                <strong style="color:#06b6d4;font-size:12px;">ULTIMATE SCALPEL v33.0 MASTER</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v320').remove();window.__pokerStalkerV320Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v330').remove();window.__pokerStalkerV330Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
         <div id="st-hud-body" style="margin-top:8px;">
@@ -1127,7 +1129,7 @@ javascript:(function(){
                 }
             }
 
-            // СЕРВЕРНАЯ СИНХРОНИЗАЦИЯ МЕСТ, СТЕКОВ И ФИНАНСОВ
+            // СЕРВЕРНАЯ СИНХРОНИЗАЦИЯ МЕСТ, СТЕКОВ, ФИНАНСОВ И БАУНТИ
             if (xml.includes('<Seats') || (xml.includes('<Seat ') && xml.includes('<PlayerInfo'))) {
                 let seatBlocks = xml.matchAll(/<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>([\s\S]*?)<\/Seat>)/gs);
                 for (let sb of seatBlocks) {
@@ -1145,6 +1147,7 @@ javascript:(function(){
                     let serverSpent = entryM ? (iattr(entryM[1], 'spent') || 0) : 0;
                     let serverRebuys = entryM ? (iattr(entryM[1], 'rebuys') || 0) : 0;
                     let serverAddons = entryM ? (iattr(entryM[1], 'addons') || 0) : 0;
+                    let serverBounty = entryM ? (parseFloat(attr(entryM[1], 'knockoutBounty') || '0')) : 0;
 
                     let isSittingOut = seatAttrs.includes('sittingOut="true"') || seatContent.includes('sittingOut="true"');
                     if (isSittingOut) ctx.sittingOutSeats.add(seatNum);
@@ -1155,6 +1158,7 @@ javascript:(function(){
                     s.spent = serverSpent;
                     s.rebuys = serverRebuys;
                     s.addons = serverAddons;
+                    if (serverBounty > 0) s.headBounty = serverBounty;
 
                     if (ctx.hand === null && serverStack !== null && serverStack > 0) {
                         ctx.handStart[seatNum] = serverStack;
@@ -1326,25 +1330,71 @@ javascript:(function(){
 
                 ctx.updateBoardFromXml(xml);
 
-                // ПЕРЕХВАТ НОКАУТОВ (REAL-TIME BOUNTY ENGINE)
-                let koM = xml.match(/<Knockout\s+([^>]*)\/>/);
-                if (koM && ctx.hand) {
-                    let bustedSeat = iattr(koM[1], 'busted');
-                    let winnerSeat = iattr(koM[1], 'winner');
-                    let prize = iattr(koM[1], 'prize', 0);
-                    let bounty = iattr(koM[1], 'bounty', 0);
-                    
-                    let killer = ctx.seats.get(winnerSeat);
-                    let victim = ctx.seats.get(bustedSeat);
-                    
-                    ctx.knockoutBounties.push({
-                        killer_nick: killer ? killer.rawNick : `Seat ${winnerSeat}`,
-                        killer_seat: winnerSeat,
-                        victim_nick: victim ? victim.rawNick : `Seat ${bustedSeat}`,
-                        victim_seat: bustedSeat,
-                        cash_payout_rub: prize,
-                        bounty_growth_rub: bounty
-                    });
+                // ПЕРЕХВАТ НОКАУТОВ И НАЧИСЛЕНИЯ БАУНТИ (ДВОЙНОЙ УЧЕТ)
+                let koBlock = xml.match(/<KnockoutPayouts[\s\S]*?<\/KnockoutPayouts>/i) || xml.match(/<Knockout\s+([^>]*)\/>/i);
+                if (koBlock && ctx && ctx.hand) {
+                    let koM = xml.match(/<Knockout\s+([^>]*)\/>/);
+                    let payM = xml.match(/<KnockoutPayout\s+([^>]*)\/>/);
+                    let headBountyM = xml.match(/<KnockoutBounty\s+([^>]*)\/>/);
+
+                    if (koM) {
+                        let bustedSeat = iattr(koM[1], 'busted');
+                        let winnerSeat = iattr(koM[1], 'winners') !== null ? iattr(koM[1], 'winners') : iattr(koM[1], 'winner');
+
+                        if (winnerSeat === null && ctx.winners.length > 0) {
+                            winnerSeat = ctx.winners[0].seat;
+                        }
+
+                        let cashReward = payM ? parseFloat(attr(payM[1], 'amount') || '0') : 0;
+                        let bountyGrowth = payM ? parseFloat(attr(payM[1], 'selfBountyChange') || '0') : 0;
+                        let newHeadBounty = headBountyM ? parseFloat(attr(headBountyM[1], 'amount') || '0') : 0;
+
+                        let killer = ctx.seats.get(winnerSeat);
+                        let victim = ctx.seats.get(bustedSeat);
+
+                        if (killer && newHeadBounty > 0) {
+                            killer.headBounty = newHeadBounty;
+                        }
+
+                        ctx.knockoutBounties.push({
+                            killer_seat: winnerSeat,
+                            killer_nick: killer ? killer.rawNick : (winnerSeat !== null ? `Seat ${winnerSeat}` : 'Unknown'),
+                            killer_clean_nick: killer ? killer.cleanNick : (winnerSeat !== null ? `seat_${winnerSeat}` : 'unknown'),
+                            victim_seat: bustedSeat,
+                            victim_nick: victim ? victim.rawNick : (bustedSeat !== null ? `Seat ${bustedSeat}` : 'Unknown'),
+                            victim_clean_nick: victim ? victim.cleanNick : (bustedSeat !== null ? `seat_${bustedSeat}` : 'unknown'),
+                            cash_payout_rub: cashReward,
+                            bounty_growth_rub: bountyGrowth,
+                            killer_new_head_bounty_rub: newHeadBounty
+                        });
+
+                        logDebug("KNOCKOUT_AWARD", `💥 K.O.: ${killer ? killer.rawNick : winnerSeat} выбил ${victim ? victim.rawNick : bustedSeat} ➔ +${cashReward}₽ в кассу (Награда за голову: ${newHeadBounty}₽)`);
+                    }
+                }
+
+                // ПЕРЕХВАТ ВЫИГРЫША ИЗ ТУРНИРНОГО ЛОББИ (TOURNAMENT PLAYER RANKED)
+                let tprM = xml.match(/<TournamentPlayerRanked\s+([^>]*)\/>/);
+                if (tprM) {
+                    let rNick = attr(tprM[1], 'nickname');
+                    let rSeat = iattr(tprM[1], 'seat');
+                    let rPlace = iattr(tprM[1], 'placeFrom') || iattr(tprM[1], 'place') || iattr(tprM[1], 'placeTo') || 0;
+                    let cashP = parseFloat(attr(tprM[1], 'cashPayout') || '0');
+                    let koP = parseFloat(attr(tprM[1], 'knockoutBounty') || '0');
+                    let tId = attr(tprM[1], 'tournamentId');
+
+                    if (rNick && TARGET_WATCHLIST.has(getCleanNick(rNick))) {
+                        let p = getOrCreatePlayerProfile(getCleanNick(rNick));
+                        let entryKey = `${tId || 'mtt'}_${rNick}`;
+                        let entry = p.entries.get(entryKey) || { rawNick: rNick, cleanNick: getCleanNick(rNick) };
+
+                        entry.place = rPlace;
+                        entry.regular_prize = cashP;
+                        entry.bounty_prize = koP;
+                        entry.prize = cashP + koP;
+                        entry.isBusted = true;
+                        p.entries.set(entryKey, entry);
+                        updateHUD();
+                    }
                 }
 
                 // ПЕРЕХВАТ ПОБЕДИТЕЛЕЙ (С ПОДДЕРЖКОЙ POT-INDEX)
@@ -1488,7 +1538,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v32_0_psycho_${Date.now()}.json`;
+            a.download = `pokerdom_v33_0_omni_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1525,8 +1575,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV320) return;
-        ws.__stalkerHookedV320 = true;
+        if (!ws || ws.__stalkerHookedV330) return;
+        ws.__stalkerHookedV330 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1547,8 +1597,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV320) {
-        window.__stalkerWsProxyV320 = true;
+    if (OrigWS && !window.__stalkerWsProxyV330) {
+        window.__stalkerWsProxyV330 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1571,5 +1621,5 @@ javascript:(function(){
         };
     }
 
-    console.log("%c🎯 [VIP Scout v32.0 PSYCHO] Запущен. Чат, Эмодзи и Нокауты активированы.", "color:#06b6d4;font-weight:bold;");
+    console.log("%c👑 [VIP Scout v33.0 OMNI-MASTER] Запущен. Двойной учет баунти, точный маппинг мест и чат активны.", "color:#06b6d4;font-weight:bold;font-size:13px;");
 })();
