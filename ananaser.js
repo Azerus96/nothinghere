@@ -1,25 +1,29 @@
 javascript:(function(){
-    if (window.__ofcGodEngineV40) {
-        alert('🍍 OFC God Engine v4.0 (Ghost Miner & Collapsible HUD) уже активен!');
+    if (window.__ofcTitanEngineV52) {
+        alert('🍍 OFC Titan Engine v5.2 уже активен!');
         return;
     }
-    window.__ofcGodEngineV40 = true;
+    window.__ofcTitanEngineV52 = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       OFC PINEAPPLE GOD ENGINE v4.0 — TOURNAMENT GHOST SCANNER
+       OFC PINEAPPLE TITAN ENGINE v5.2 — ULTIMATE TOURNAMENT MINER
        ══════════════════════════════════════════════════════════════════ */
 
+    const MAX_GHOST_TABLES = 30;
+
     const OFC_DB = {
-        activeSockets: new Map(),
-        tables: new Map(),
+        tables: new Map(),           // tableId -> TableSession
+        ghostSockets: new Map(),     // tableId -> WebSocket
+        lobbySocket: null,
         hands: [],
         handIds: new Set(),
-        tournamentId: null,
+        selectedTournamentId: null,
+        selectedTournamentName: 'Не выбран (откройте лобби турнира)',
         sessionId: null,
         deviceToken: null,
         wsUrl: null,
         autoScanEnabled: true,
-        ghostSockets: new Map()
+        lobbyPollTimer: null
     };
 
     function attr(xml, name) {
@@ -46,12 +50,13 @@ javascript:(function(){
         return res;
     }
 
+    /* ── СЕССИЯ СТОЛА ──────────────────────────────────────────────── */
     class TableSession {
         constructor(tableId) {
             this.tableId = tableId;
-            this.tableName = 'Table';
-            this.tournamentName = 'OFC Pineapple';
-            this.tournamentId = null;
+            this.tableName = 'Стол #' + String(tableId).slice(-4);
+            this.tournamentName = OFC_DB.selectedTournamentName || 'OFC Pineapple';
+            this.tournamentId = OFC_DB.selectedTournamentId || null;
             this.gameType = 'OFC_PINEAPPLE_OH';
             this.fantasyMode = 'UNLIMITED_PROGRESSIVE';
             this.pointScoreChips = 100;
@@ -74,8 +79,10 @@ javascript:(function(){
         }
 
         startHand(handId, dealer, gameNum = 1, gamesCount = 1) {
-            if (!this.isOFC || !this.isOpen) return;
-            let isFantasy = (gameNum > 1);
+            if (!this.isOpen || !this.isOFC) return;
+            let isFantasyRound = (gameNum > 1);
+            let hasJokers = this.gameType.includes('JOKER') || (OFC_DB.selectedTournamentName && OFC_DB.selectedTournamentName.includes('Джокер'));
+
             this.hand = {
                 hand_id: String(handId),
                 timestamp: new Date().toISOString(),
@@ -86,13 +93,13 @@ javascript:(function(){
                     table_name: this.tableName,
                     game_type: this.gameType,
                     fantasy_mode: this.fantasyMode,
-                    has_jokers: this.gameType.includes('JOKER'),
+                    has_jokers: hasJokers,
                     point_score_chips: this.pointScoreChips
                 },
                 context: {
                     dealer_seat: dealer,
                     hero_seat: this.heroSeat,
-                    is_fantasy_round: isFantasy,
+                    is_fantasy_round: isFantasyRound,
                     game_round: gameNum,
                     total_rounds: gamesCount,
                     active_seats: Array.from(this.seats.keys())
@@ -166,6 +173,7 @@ javascript:(function(){
                 return;
             }
 
+            /* Авто-калибровка куша по математике шоудауна */
             let firstValid = h.showdowns.find(s => s.points > 0 && s.chips_delta > 0);
             if (firstValid) {
                 let actualKush = Math.round(firstValid.chips_delta / firstValid.points);
@@ -178,7 +186,7 @@ javascript:(function(){
                 OFC_DB.handIds.add(h.hand_id);
                 OFC_DB.hands.push(h);
                 updateUI();
-                console.log(`%c🍍 [OFC Miner v4.0] Раздача #${h.hand_id} сохранена (${h.tournament.table_name})!`, 'color:#10b981;font-weight:bold;');
+                console.log(`%c🍍 [OFC Engine v5.2] Раздача #${h.hand_id} сохранена (${h.tournament.table_name})!`, 'color:#10b981;font-weight:bold;');
             }
             this.hand = null;
         }
@@ -207,20 +215,45 @@ javascript:(function(){
         return null;
     }
 
+    /* ── ГЛАВНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ ──────────────────────────────── */
     function parseMessage(xml, ws) {
         if (!xml || typeof xml !== 'string' || !xml.startsWith('<')) return;
 
-        /* Перехват реквизитов авторизации для фонового майнера */
+        /* Перехват авторизационных токенов */
         if (xml.includes('sessionId=')) OFC_DB.sessionId = attr(xml, 'sessionId') || OFC_DB.sessionId;
         if (xml.includes('deviceToken=')) OFC_DB.deviceToken = attr(xml, 'deviceToken') || OFC_DB.deviceToken;
-        if (xml.includes('tournamentId=')) OFC_DB.tournamentId = attr(xml, 'tournamentId') || OFC_DB.tournamentId;
 
-        /* Обнаружение закрытия стола */
-        if (xml.includes('<CloseTable') || xml.includes('<LeaveTable')) {
-            let tId = attr(xml, 'id') || attr(xml, 'tableId');
-            if (ws.__ofcSession) ws.__ofcSession.isOpen = false;
-            if (tId && OFC_DB.tables.has(tId)) OFC_DB.tables.get(tId).isOpen = false;
-            updateUI();
+        /* Отслеживание турнирного лобби */
+        if (xml.includes('<TournamentDetails') || xml.includes('<ScheduledTournament')) {
+            let tId = attr(xml, 'id');
+            let tName = attr(xml, 'name');
+            let gType = attr(xml, 'game') || '';
+            if (tId && (gType.includes('OFC') || gType.includes('PINEAPPLE') || xml.includes('PINEAPPLE') || xml.includes('Ананас'))) {
+                OFC_DB.selectedTournamentId = tId;
+                if (tName) OFC_DB.selectedTournamentName = tName;
+                OFC_DB.lobbySocket = ws;
+                startLobbyPoller();
+                updateUI();
+            }
+        }
+
+        /* Обнаружение столов турнира */
+        if (xml.includes('<Tables')) {
+            let tMatches = xml.matchAll(/<Table\s+[^>]*?\bid="(f54-[^"]+)"/gi);
+            for (let tm of tMatches) {
+                let foundTableId = tm[1];
+                if (!OFC_DB.ghostSockets.has(foundTableId)) {
+                    launchGhostSpectator(foundTableId);
+                }
+            }
+        }
+
+        /* Закрытие стола */
+        if (xml.includes('description="Table is already closed"') || xml.includes('<CloseTable') || xml.includes('<LeaveTable')) {
+            let cTableId = ws.__tableId || attr(xml, 'id') || attr(xml, 'tableId');
+            if (cTableId) {
+                closeTableSession(cTableId);
+            }
         }
 
         /* 1. Детали стола */
@@ -229,12 +262,14 @@ javascript:(function(){
             if (tId && tId.startsWith('f54-')) {
                 let table = getOrCreateTable(tId);
                 ws.__ofcSession = table;
+                ws.__tableId = tId;
+
                 let gType = attr(xml, 'game') || '';
-                table.isOFC = gType.includes('OFC') || gType.includes('PINEAPPLE');
+                table.isOFC = gType.includes('OFC') || gType.includes('PINEAPPLE') || xml.includes('PINEAPPLE') || xml.includes('Ананас');
                 if (!table.isOFC) return;
 
-                table.tournamentName = attr(xml, 'tournamentName') || attr(xml, 'name') || table.tournamentName;
-                table.tournamentId = attr(xml, 'tournamentId') || table.tournamentId;
+                table.tournamentName = attr(xml, 'tournamentName') || attr(xml, 'name') || OFC_DB.selectedTournamentName || table.tournamentName;
+                table.tournamentId = attr(xml, 'tournamentId') || OFC_DB.selectedTournamentId || table.tournamentId;
                 table.tableName = attr(xml, 'name') || table.tableName;
                 table.gameType = gType || table.gameType;
                 table.fantasyMode = attr(xml, 'fantasy') || table.fantasyMode;
@@ -245,17 +280,6 @@ javascript:(function(){
                     table.updatePlayer(parseInt(sm[1], 10), sm[2], sm[3]);
                 }
                 updateUI();
-            }
-        }
-
-        /* Сканирование новых столов турнира из лобби */
-        if (xml.includes('<Tables') && OFC_DB.autoScanEnabled) {
-            let tMatches = xml.matchAll(/<Table\s+[^>]*?\bid="(f54-[^"]+)"/gi);
-            for (let tm of tMatches) {
-                let foundTableId = tm[1];
-                if (!OFC_DB.tables.has(foundTableId) || !OFC_DB.tables.get(foundTableId).isOpen) {
-                    launchGhostSpectator(foundTableId);
-                }
             }
         }
 
@@ -279,7 +303,7 @@ javascript:(function(){
             if (table.hand) table.hand.context.hero_seat = table.heroSeat;
         }
 
-        /* 4. Ники игроков */
+        /* 4. Захват никнеймов игроков */
         let npMatches = xml.matchAll(/(?:<NewPlayer|<PlayerInfo|<Player)\s+[^>]*?\bseat="(\d+)"[^>]*?\bnickname="([^"]+)"(?:[^>]*?\buuid="([^"]+)")?/gi);
         for (let npm of npMatches) {
             table.updatePlayer(parseInt(npm[1], 10), npm[2], npm[3]);
@@ -298,7 +322,7 @@ javascript:(function(){
 
         if (!table.hand) return;
 
-        /* 6. Сдача карт */
+        /* 6. Сдача карт (Street 1: 5 карт; Streets 2-5: 3 карты; Fantasy: 14-17 карт) */
         let dealMatches = xml.matchAll(/<DealingCards(?:\s+[^>]*?\bstreet="(\d+)")?[^>]*?>([\s\S]*?)<\/DealingCards>/gi);
         for (let dm of dealMatches) {
             let stNum = dm[1] ? parseInt(dm[1], 10) : 1;
@@ -324,7 +348,7 @@ javascript:(function(){
             }
         }
 
-        /* 7. Выставление карт и сбросы */
+        /* 7. Выставление карт на доску и сбросы (2 на доску, 1 в сброс; в Фантазии: 13 на доску, 1-4 в сброс) */
         let paMatches = xml.matchAll(/<PlayerAction\s+[^>]*?\bseat="(\d+)"[^>]*?>([\s\S]*?)<\/PlayerAction>/gi);
         for (let pam of paMatches) {
             let sn = parseInt(pam[1], 10);
@@ -338,7 +362,21 @@ javascript:(function(){
                 let placed = { front: [], middle: [], back: [] };
                 ['FRONT', 'MIDDLE', 'BACK'].forEach(row => {
                     let rM = body.match(new RegExp(`<Hand\\s+[^>]*?\\bname="${row}"[^>]*?>([\\s\\S]*?)<\\/Hand>`, 'i'));
-                    if (rM) placed[row.toLowerCase()] = parseCards(rM[1]);
+                    if (rM) {
+                        let cList = parseCards(rM[1]);
+                        let rowKey = row.toLowerCase();
+                        placed[rowKey] = cList;
+
+                        if (p.is_fantasy) {
+                            p.final_board[rowKey] = cList;
+                        } else {
+                            cList.forEach(c => {
+                                if (!p.final_board[rowKey].includes(c)) {
+                                    p.final_board[rowKey].push(c);
+                                }
+                            });
+                        }
+                    }
                 });
 
                 if (p.streets.length > 0) {
@@ -349,7 +387,7 @@ javascript:(function(){
             }
         }
 
-        /* 8. Комбинации, Роялти, Джокеры и Доска */
+        /* 8. Комбинации, Роялти, Джокеры и Фолы */
         let ccMatches = xml.matchAll(/<CombinationChange\s+([^>]*?)>([\s\S]*?)<\/CombinationChange>/gi);
         for (let ccm of ccMatches) {
             let cAttr = ccm[1];
@@ -380,7 +418,7 @@ javascript:(function(){
             }
         }
 
-        /* 9. Шоудаун */
+        /* 9. Шоудаун и построчные результаты */
         let sdMatches = xml.matchAll(/<Showdown\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/Showdown>)/gi);
         for (let sdm of sdMatches) {
             let sAttr = sdm[1];
@@ -396,11 +434,12 @@ javascript:(function(){
                     };
                 }
             });
+
             table.hand.showdowns.push({
                 winner_seat: iattr(sAttr, 'firstSeat'),
                 loser_seat: iattr(sAttr, 'secondSeat'),
                 points: iattr(sAttr, 'points', 0),
-                is_scoop: iattr(sAttr, 'scoop', 0) > 0,
+                is_scoop: (iattr(sAttr, 'scoop', 0) || 0) > 0,
                 chips_delta: iattr(sAttr, 'cash', 0),
                 lines: lineDetails
             });
@@ -436,18 +475,29 @@ javascript:(function(){
         }
     }
 
-    /* ══════════════════════════════════════════════════════════════════
-       TOURNAMENT GHOST SPECTATOR (ФОНОВЫЙ МАЙНЕР ВСЕХ СТОЛОВ)
-       ══════════════════════════════════════════════════════════════════ */
+    /* ── ФОНОВЫЙ МАЙНЕР СТОЛОВ ТУРНИРА (GHOST SPECTATOR) ───────────── */
     function launchGhostSpectator(tableId) {
         if (!OFC_DB.wsUrl || !OFC_DB.sessionId || OFC_DB.ghostSockets.has(tableId)) return;
+        if (OFC_DB.ghostSockets.size >= MAX_GHOST_TABLES) return;
+
         try {
+            let table = getOrCreateTable(tableId);
             let gws = new NativeWebSocket(OFC_DB.wsUrl);
+            gws.__tableId = tableId;
+            gws.__ofcSession = table;
             OFC_DB.ghostSockets.set(tableId, gws);
 
             gws.onopen = function() {
-                let enterMsg = `<EnterTable sessionId="${OFC_DB.sessionId}" tableId="${tableId}" tournamentId="${OFC_DB.tournamentId || ''}" client="html5mobile" clientFace="pokerdom" deviceToken="${OFC_DB.deviceToken || ''}"/>`;
+                let enterMsg = `<EnterTable sessionId="${OFC_DB.sessionId}" tableId="${tableId}" tournamentId="${OFC_DB.selectedTournamentId || ''}" client="html5mobile" clientFace="pokerdom" deviceToken="${OFC_DB.deviceToken || ''}"/>`;
                 gws.send(enterMsg);
+                gws.send('<GetTableDetails/>');
+                gws.send('<JoinTable/>');
+
+                gws.__heartbeat = setInterval(() => {
+                    if (gws.readyState === WebSocket.OPEN) {
+                        try { gws.send('<GetServerTime/>'); } catch(e) {}
+                    }
+                }, 15000);
             };
 
             gws.onmessage = function(e) {
@@ -456,18 +506,49 @@ javascript:(function(){
             };
 
             gws.onclose = function() {
-                OFC_DB.ghostSockets.delete(tableId);
-                if (OFC_DB.tables.has(tableId)) OFC_DB.tables.get(tableId).isOpen = false;
-                updateUI();
+                closeTableSession(tableId);
             };
+
+            gws.onerror = function() {
+                closeTableSession(tableId);
+            };
+
+            updateUI();
         } catch(err) {
-            console.error('[Ghost Spectator Error]', err);
+            console.error('[Ghost Launch Error]', err);
         }
     }
 
-    /* ══════════════════════════════════════════════════════════════════
-       WEBSOCKET PROXY INTERCEPTOR
-       ══════════════════════════════════════════════════════════════════ */
+    function closeTableSession(tableId) {
+        let ws = OFC_DB.ghostSockets.get(tableId);
+        if (ws) {
+            if (ws.__heartbeat) clearInterval(ws.__heartbeat);
+            try { ws.close(); } catch(e) {}
+            OFC_DB.ghostSockets.delete(tableId);
+        }
+        if (OFC_DB.tables.has(tableId)) {
+            OFC_DB.tables.get(tableId).isOpen = false;
+        }
+        updateUI();
+    }
+
+    /* ── АВТО-ОПРОС ЛОББИ ТУРНИРА ──────────────────────────────────── */
+    function startLobbyPoller() {
+        if (OFC_DB.lobbyPollTimer) clearInterval(OFC_DB.lobbyPollTimer);
+        
+        function poll() {
+            if (OFC_DB.lobbySocket && OFC_DB.lobbySocket.readyState === WebSocket.OPEN) {
+                try {
+                    OFC_DB.lobbySocket.send('<GetTables count="50"/>');
+                } catch(e) {}
+            }
+        }
+        
+        poll();
+        OFC_DB.lobbyPollTimer = setInterval(poll, 6000);
+    }
+
+    /* ── WEBSOCKET PROXY ───────────────────────────────────────────── */
     let NativeWebSocket = window.WebSocket;
     window.WebSocket = new Proxy(NativeWebSocket, {
         construct(target, args) {
@@ -479,14 +560,13 @@ javascript:(function(){
                     let text = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data);
                     parseMessage(text, ws);
                 } catch(err) {
-                    console.error('[OFC Engine Error]', err);
+                    console.error('[OFC Proxy Error]', err);
                 }
             });
 
             ws.addEventListener('close', function() {
-                if (ws.__ofcSession) {
-                    ws.__ofcSession.isOpen = false;
-                    updateUI();
+                if (ws.__tableId) {
+                    closeTableSession(ws.__tableId);
                 }
             });
 
@@ -494,30 +574,31 @@ javascript:(function(){
         }
     });
 
-    /* ══════════════════════════════════════════════════════════════════
-       COLLAPSIBLE MOBILE HUD UI (С КНОПКОЙ СВОРАЧИВАНИЯ ▾/▸)
-       ══════════════════════════════════════════════════════════════════ */
+    /* ── СВОРАЧИВАЕМЫЙ МОБИЛЬНЫЙ HUD UI ────────────────────────────── */
     let hud = document.createElement('div');
-    hud.id = 'ofc-god-hud-v40';
-    hud.style.cssText = 'position:fixed;top:10px;right:10px;z-index:999999999;background:rgba(15,23,42,0.95);backdrop-filter:blur(10px);border:1px solid rgba(16,185,129,0.5);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.85);color:#f8fafc;font-family:ui-monospace,monospace;font-size:12px;user-select:none;transition:all 0.25s ease;';
+    hud.id = 'ofc-god-hud-v52';
+    hud.style.cssText = 'position:fixed;top:10px;right:10px;z-index:999999999;background:rgba(15,23,42,0.98);backdrop-filter:blur(12px);border:1px solid #10b981;border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,0.9);color:#f8fafc;font-family:monospace;font-size:11px;user-select:none;max-width:340px;';
 
     hud.innerHTML = `
-        <div id="ofc-hud-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;gap:8px;">
+        <div id="ofc-hud-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;gap:8px;background:linear-gradient(135deg,rgba(16,185,129,0.2),transparent);border-radius:12px 12px 0 0;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="ofc-hud-toggle-icon" style="color:#10b981;font-weight:900;font-size:13px;">▾</span>
-                <span style="font-weight:900;color:#10b981;font-size:12px;">🍍 OFC MINER v4.0</span>
+                <strong style="color:#10b981;font-size:12px;">🍍 OFC TITAN v5.2</strong>
             </div>
-            <span id="ofc-badge-hands-40" style="background:#047857;color:#ecfdf5;padding:2px 8px;border-radius:999px;font-weight:700;font-size:11px;">0 рук</span>
+            <span id="ofc-badge-hands-52" style="background:#059669;color:#fff;padding:2px 8px;border-radius:999px;font-weight:700;font-size:10px;">0 рук</span>
         </div>
-        <div id="ofc-hud-body" style="padding:0 14px 12px 14px;display:block;">
-            <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;line-height:1.6;">
-                <div>Активных столов: <b id="ofc-badge-tables-40" style="color:#38bdf8;">0</b></div>
-                <div>Фоновых майнеров: <b id="ofc-badge-ghosts-40" style="color:#f59e0b;">0</b></div>
-                <div>Статус: <b id="ofc-badge-status-40" style="color:#a78bfa;">Авто-сканер активен</b></div>
+        <div id="ofc-hud-body" style="padding:10px 14px 12px 14px;display:block;">
+            <div style="font-size:10.5px;color:#94a3b8;margin-bottom:10px;line-height:1.6;">
+                <div>Турнир: <b id="ofc-tourn-name-52" style="color:#fde047;">Не выбран</b></div>
+                <div style="display:flex;justify-content:space-between;">
+                    <span>Фоновых столов: <b id="ofc-badge-ghosts-52" style="color:#38bdf8;">0</b></span>
+                    <span>Активных OFC: <b id="ofc-badge-tables-52" style="color:#a78bfa;">0</b></span>
+                </div>
             </div>
             <div style="display:flex;gap:6px;">
-                <button id="ofc-btn-save-40" style="flex:1;background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:7px 10px;border-radius:6px;font-weight:700;cursor:pointer;">💾 JSON</button>
-                <button id="ofc-btn-clip-40" style="background:#334155;color:#fff;border:none;padding:7px 10px;border-radius:6px;font-weight:700;cursor:pointer;">📋 Копия</button>
+                <button id="ofc-btn-save-52" style="flex:1;background:linear-gradient(135deg,#059669,#10b981);color:#000;border:none;padding:8px 10px;border-radius:6px;font-weight:800;cursor:pointer;">💾 Скачать JSON</button>
+                <button id="ofc-btn-scan-52" style="background:#0891b2;color:#fff;border:none;padding:8px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🔄 Скан</button>
+                <button onclick="document.getElementById('ofc-god-hud-v52').remove();window.__ofcTitanEngineV52=false;" style="background:transparent;border:1px solid #475569;color:#94a3b8;padding:0 8px;border-radius:6px;cursor:pointer;">✕</button>
             </div>
         </div>
     `;
@@ -528,55 +609,49 @@ javascript:(function(){
         isCollapsed = !isCollapsed;
         let body = document.getElementById('ofc-hud-body');
         let icon = document.getElementById('ofc-hud-toggle-icon');
-        if (isCollapsed) {
-            body.style.display = 'none';
-            icon.innerText = '▸';
-            hud.style.borderRadius = '999px';
-        } else {
-            body.style.display = 'block';
-            icon.innerText = '▾';
-            hud.style.borderRadius = '12px';
+        body.style.display = isCollapsed ? 'none' : 'block';
+        icon.innerText = isCollapsed ? '▸' : '▾';
+    };
+
+    document.getElementById('ofc-btn-scan-52').onclick = function(e) {
+        e.stopPropagation();
+        if (OFC_DB.lobbySocket && OFC_DB.lobbySocket.readyState === WebSocket.OPEN) {
+            OFC_DB.lobbySocket.send('<GetTables count="50"/>');
         }
     };
 
     function updateUI() {
-        let bHands = document.getElementById('ofc-badge-hands-40');
-        let bTables = document.getElementById('ofc-badge-tables-40');
-        let bGhosts = document.getElementById('ofc-badge-ghosts-40');
+        let bHands = document.getElementById('ofc-badge-hands-52');
+        let bGhosts = document.getElementById('ofc-badge-ghosts-52');
+        let bTables = document.getElementById('ofc-badge-tables-52');
+        let tName = document.getElementById('ofc-tourn-name-52');
         
-        let activeOFC = Array.from(OFC_DB.tables.values()).filter(t => t.isOFC && t.isOpen).length;
+        let activeOFC = Array.from(OFC_DB.tables.values()).filter(t => t.isOpen && t.isOFC).length;
         if (bHands) bHands.innerText = `${OFC_DB.hands.length} рук`;
-        if (bTables) bTables.innerText = `${activeOFC}`;
         if (bGhosts) bGhosts.innerText = `${OFC_DB.ghostSockets.size}`;
+        if (bTables) bTables.innerText = `${activeOFC}`;
+        if (tName) tName.innerText = OFC_DB.selectedTournamentName;
     }
 
-    function exportPayload() {
-        return {
-            version: '4.0-OFC-TOURNAMENT-DATASET',
+    document.getElementById('ofc-btn-save-52').onclick = function(e) {
+        e.stopPropagation();
+        let dump = {
+            version: '5.2-OFC-OMNI-DATASET',
             currency: 'TOURNAMENT_CHIPS',
             exported_at: new Date().toISOString(),
+            tournament_id: OFC_DB.selectedTournamentId,
+            tournament_name: OFC_DB.selectedTournamentName,
             total_hands_count: OFC_DB.hands.length,
             hands: OFC_DB.hands
         };
-    }
-
-    document.getElementById('ofc-btn-save-40').onclick = function(e) {
-        e.stopPropagation();
-        let blob = new Blob([JSON.stringify(exportPayload(), null, 2)], { type: 'application/json' });
+        let blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `pokerdom_ofc_miner_v4_${Date.now()}.json`;
+        a.download = `pokerdom_ofc_titan_v52_${Date.now()}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
     };
 
-    document.getElementById('ofc-btn-clip-40').onclick = function(e) {
-        e.stopPropagation();
-        navigator.clipboard.writeText(JSON.stringify(exportPayload(), null, 2)).then(() => {
-            alert('🍍 Полный турнирный датасет v4.0 скопирован в буфер обмена!');
-        });
-    };
-
-    console.log('%c🍍 [OFC God Engine v4.0] Активирован. Фоновый авто-майнер и сворачиваемый HUD запущены.', 'color:#10b981;font-weight:bold;font-size:13px;');
+    console.log('%c🍍 [OFC Titan Engine v5.2] Активирован. Точная пошаговая сборка 13 карт и сбросов запущена.', 'color:#10b981;font-weight:bold;font-size:13px;');
 })();
