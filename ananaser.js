@@ -1,12 +1,12 @@
 javascript:(function(){
-    if (window.__ofcEngineV33) {
-        alert('🍍 OFC Engine v3.3 (Multi-Table Isolation) уже активен!');
+    if (window.__ofcEngineV34) {
+        alert('🍍 OFC Master Engine v3.4 уже запущен!');
         return;
     }
-    window.__ofcEngineV33 = true;
+    window.__ofcEngineV34 = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       OFC PINEAPPLE MASTER ENGINE v3.3 — MULTI-TABLE ISOLATED
+       OFC PINEAPPLE MASTER ENGINE v3.4 — PRODUCTION RELEASE
        ══════════════════════════════════════════════════════════════════ */
 
     const OFC_DB = {
@@ -148,7 +148,6 @@ javascript:(function(){
             }
             let h = this.hand;
 
-            /* Фильтрация фантомных не-OFC раздач (проверка наличия досок или шоудаунов) */
             let hasValidOFCData = h.showdowns.length > 0 || Object.values(h.players).some(p => 
                 p.final_board.front.length > 0 || p.final_board.middle.length > 0 || p.final_board.back.length > 0 || p.is_foul
             );
@@ -173,7 +172,7 @@ javascript:(function(){
                 OFC_DB.handIds.add(h.hand_id);
                 OFC_DB.hands.push(h);
                 updateUI();
-                console.log(`%c🍍 [OFC Engine v3.3] Раздача #${h.hand_id} сохранена (Стол: ${h.tournament.table_name})!`, 'color:#10b981;font-weight:bold;');
+                console.log(`%c🍍 [OFC Engine v3.4] Раздача #${h.hand_id} сохранена (Куш: ${h.tournament.point_score_chips} фишек)!`, 'color:#10b981;font-weight:bold;');
             }
             this.hand = null;
         }
@@ -198,7 +197,7 @@ javascript:(function(){
 
         let table = getSessionForSocket(ws, xml);
 
-        /* 1. Обработка деталей стола */
+        /* 1. Детали стола и турнира */
         if (xml.includes('<TableDetails') || xml.includes('<TournamentTable')) {
             let tId = attr(xml, 'id') || attr(xml, 'tableId');
             if (tId) {
@@ -240,8 +239,8 @@ javascript:(function(){
             if (table.hand) table.hand.context.hero_seat = table.heroSeat;
         }
 
-        /* 4. Подсадка игроков */
-        let npMatches = xml.matchAll(/<NewPlayer\s+[^>]*?\bseat="(\d+)"[^>]*?>[\s\S]*?<PlayerInfo\s+[^>]*?\bnickname="([^"]+)"(?:[^>]*?\buuid="([^"]+)")?/gi);
+        /* 4. Захват ников из любых пакетов */
+        let npMatches = xml.matchAll(/(?:<NewPlayer|<PlayerInfo|<Player)\s+[^>]*?\bseat="(\d+)"[^>]*?\bnickname="([^"]+)"(?:[^>]*?\buuid="([^"]+)")?/gi);
         for (let npm of npMatches) {
             table.updatePlayer(parseInt(npm[1], 10), npm[2], npm[3]);
         }
@@ -285,7 +284,7 @@ javascript:(function(){
             }
         }
 
-        /* 7. Выставление карт */
+        /* 7. Выставление карт и сбросы */
         let paMatches = xml.matchAll(/<PlayerAction\s+[^>]*?\bseat="(\d+)"[^>]*?>([\s\S]*?)<\/PlayerAction>/gi);
         for (let pam of paMatches) {
             let sn = parseInt(pam[1], 10);
@@ -310,7 +309,7 @@ javascript:(function(){
             }
         }
 
-        /* 8. Комбинации, Роялти и Фолы */
+        /* 8. Комбинации, Роялти и Доска */
         let ccMatches = xml.matchAll(/<CombinationChange\s+([^>]*?)>([\s\S]*?)<\/CombinationChange>/gi);
         for (let ccm of ccMatches) {
             let cAttr = ccm[1];
@@ -341,7 +340,7 @@ javascript:(function(){
             }
         }
 
-        /* 9. Шоудаун */
+        /* 9. Шоудаун и построчные результаты */
         let sdMatches = xml.matchAll(/<Showdown\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/Showdown>)/gi);
         for (let sdm of sdMatches) {
             let sAttr = sdm[1];
@@ -367,7 +366,7 @@ javascript:(function(){
             });
         }
 
-        /* 10. Победители */
+        /* 10. Победители и Фантазия */
         let winMatches = xml.matchAll(/<Winner\s+([^>]*?)\/>/gi);
         for (let wm of winMatches) {
             let wAttr = wm[1];
@@ -391,13 +390,13 @@ javascript:(function(){
             });
         }
 
-        /* 11. Завершение раздачи */
+        /* 11. Финализация раздачи */
         if (xml.includes('<EndHand')) {
             table.finalize();
         }
     }
 
-    /* WebSocket Hook с привязкой сессии */
+    /* WebSocket Proxy с изоляцией сессий стола */
     let NativeWebSocket = window.WebSocket;
     window.WebSocket = new Proxy(NativeWebSocket, {
         construct(target, args) {
@@ -407,43 +406,43 @@ javascript:(function(){
                     let text = typeof e.data === 'string' ? e.data : new TextDecoder().decode(e.data);
                     parseMessage(text, ws);
                 } catch(err) {
-                    console.error('[OFC v3.3 Error]', err);
+                    console.error('[OFC Engine Error]', err);
                 }
             });
             return ws;
         }
     });
 
-    /* HUD UI */
+    /* Floating HUD UI */
     let hud = document.createElement('div');
-    hud.id = 'ofc-hud-v33';
+    hud.id = 'ofc-hud-v34';
     hud.style.cssText = 'position:fixed;top:12px;right:12px;z-index:999999999;background:rgba(15,23,42,0.95);backdrop-filter:blur(10px);border:1px solid rgba(16,185,129,0.5);border-radius:12px;padding:12px 16px;box-shadow:0 12px 32px rgba(0,0,0,0.85);color:#f8fafc;font-family:ui-monospace,monospace;font-size:12px;min-width:250px;';
     hud.innerHTML = `
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-            <span style="font-weight:900;color:#10b981;font-size:13px;">🍍 OFC ENGINE v3.3</span>
-            <span id="ofc-badge-hands-33" style="background:#047857;color:#ecfdf5;padding:2px 8px;border-radius:999px;font-weight:700;">0 рук</span>
+            <span style="font-weight:900;color:#10b981;font-size:13px;">🍍 OFC ENGINE v3.4</span>
+            <span id="ofc-badge-hands-34" style="background:#047857;color:#ecfdf5;padding:2px 8px;border-radius:999px;font-weight:700;">0 рук</span>
         </div>
         <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">
-            <div>OFC Столы: <b id="ofc-badge-tables-33" style="color:#38bdf8;">0</b></div>
-            <div>Статус: <b id="ofc-badge-status-33" style="color:#a78bfa;">Изоляция активна</b></div>
+            <div>OFC Столов: <b id="ofc-badge-tables-34" style="color:#38bdf8;">0</b></div>
+            <div>Статус: <b id="ofc-badge-status-34" style="color:#a78bfa;">Изоляция активна</b></div>
         </div>
         <div style="display:flex;gap:6px;">
-            <button id="ofc-btn-save-33" style="flex:1;background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">💾 Скачать JSON</button>
-            <button id="ofc-btn-clip-33" style="background:#334155;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">📋 Копия</button>
+            <button id="ofc-btn-save-34" style="flex:1;background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">💾 Скачать JSON</button>
+            <button id="ofc-btn-clip-34" style="background:#334155;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">📋 Копия</button>
         </div>
     `;
     document.body.appendChild(hud);
 
     function updateUI() {
-        let bHands = document.getElementById('ofc-badge-hands-33');
-        let bTables = document.getElementById('ofc-badge-tables-33');
+        let bHands = document.getElementById('ofc-badge-hands-34');
+        let bTables = document.getElementById('ofc-badge-tables-34');
         if (bHands) bHands.innerText = `${OFC_DB.hands.length} рук`;
         if (bTables) bTables.innerText = `${Array.from(OFC_DB.tables.values()).filter(t => t.isOFC).length}`;
     }
 
     function exportPayload() {
         return {
-            version: '3.3-OFC-AI-DATASET',
+            version: '3.4-OFC-AI-DATASET',
             currency: 'TOURNAMENT_CHIPS',
             exported_at: new Date().toISOString(),
             total_hands_count: OFC_DB.hands.length,
@@ -451,21 +450,21 @@ javascript:(function(){
         };
     }
 
-    document.getElementById('ofc-btn-save-33').onclick = function() {
+    document.getElementById('ofc-btn-save-34').onclick = function() {
         let blob = new Blob([JSON.stringify(exportPayload(), null, 2)], { type: 'application/json' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `pokerdom_ofc_clean_${Date.now()}.json`;
+        a.download = `pokerdom_ofc_v34_${Date.now()}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
     };
 
-    document.getElementById('ofc-btn-clip-33').onclick = function() {
+    document.getElementById('ofc-btn-clip-34').onclick = function() {
         navigator.clipboard.writeText(JSON.stringify(exportPayload(), null, 2)).then(() => {
-            alert('🍍 Чистый OFC датасет скопирован в буфер обмена!');
+            alert('🍍 Чистый OFC датасет v3.4 скопирован в буфер обмена!');
         });
     };
 
-    console.log('%c🍍 [OFC Engine v3.3] Запущен с защитой от кросс-столового загрязнения.', 'color:#10b981;font-weight:bold;font-size:13px;');
+    console.log('%c🍍 [OFC Engine v3.4] Готов к работе. Полная изоляция мультитейблинга активна.', 'color:#10b981;font-weight:bold;font-size:13px;');
 })();
