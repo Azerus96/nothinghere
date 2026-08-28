@@ -1,15 +1,13 @@
 javascript:(function(){
-    if (window.__ofcGodEngineV73) {
-        alert('🍍 OFC God Engine v7.3 уже запущен! Используйте панель управления.');
+    if (window.__ofcGodEngineV74) {
+        alert('🍍 OFC God Engine v7.4 (Unlimited Tables) уже запущен! Используйте панель управления.');
         return;
     }
-    window.__ofcGodEngineV73 = true;
+    window.__ofcGodEngineV74 = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       OFC PINEAPPLE GOD ENGINE v7.3 — SEAMLESS HANDOFF MINER
+       OFC PINEAPPLE GOD ENGINE v7.4 — FULL UNLIMITED MINER & ACCURATE LOGGER
        ══════════════════════════════════════════════════════════════════ */
-
-    const MAX_GHOST_TABLES = 30;
 
     window.OFC_DB = window.OFC_DB || {
         tables: new Map(),
@@ -20,6 +18,7 @@ javascript:(function(){
         handIds: new Set(),
         selectedTournamentId: null,
         selectedTournamentName: 'Не выбран',
+        heroNickname: 'Taisiya888', // Ваш ник для автоматического распознавания Hero
         sessionId: null,
         deviceToken: null,
         wsUrl: null,
@@ -29,17 +28,17 @@ javascript:(function(){
     const DB = window.OFC_DB;
 
     try {
-        let saved = sessionStorage.getItem('ofc_hands_backup_v73');
+        let saved = sessionStorage.getItem('ofc_hands_backup_v74') || sessionStorage.getItem('ofc_hands_backup_v73');
         if (saved) {
             let parsed = JSON.parse(saved);
             DB.hands = parsed;
             parsed.forEach(h => DB.handIds.add(h.hand_id));
-            console.log(`[OFC v7.3] Восстановлено ${DB.hands.length} рук из кэша.`);
+            console.log(`[OFC v7.4] Восстановлено ${DB.hands.length} рук из кэша.`);
         }
     } catch(e) {}
 
     function saveToStorage() {
-        try { sessionStorage.setItem('ofc_hands_backup_v73', JSON.stringify(DB.hands)); } catch(e) {}
+        try { sessionStorage.setItem('ofc_hands_backup_v74', JSON.stringify(DB.hands)); } catch(e) {}
     }
 
     function attr(xml, name) {
@@ -74,7 +73,7 @@ javascript:(function(){
             this.tournamentName = DB.selectedTournamentName || 'OFC Pineapple';
             this.tournamentId = DB.selectedTournamentId || null;
             this.gameType = 'OFC_PINEAPPLE_OH';
-            this.fantasyMode = 'UNLIMITED_PROGRESSIVE';
+            this.fantasyMode = 'ULTIMATE_UNLIMITED';
             this.pointScoreChips = 100;
             this.heroSeat = null;
             this.seats = new Map();
@@ -84,16 +83,34 @@ javascript:(function(){
         }
 
         updatePlayer(seat, nick, uuid = null) {
-            if (nick && !nick.startsWith('Seat ')) {
-                this.seats.set(seat, { seat, nickname: nick, uuid });
-                if (this.hand && this.hand.players[seat]) {
-                    this.hand.players[seat].nickname = nick;
+            if (!nick || typeof nick !== 'string') return;
+            let cleanNick = nick.trim();
+            if (cleanNick.startsWith('Seat ') && this.seats.has(seat) && !this.seats.get(seat).nickname.startsWith('Seat ')) {
+                return; // Не затираем реальный ник заглушкой
+            }
+
+            this.seats.set(seat, { seat, nickname: cleanNick, uuid });
+
+            // Автоматическое определение Hero по нику или по heroSeat
+            let isHeroNick = DB.heroNickname && cleanNick.toLowerCase() === DB.heroNickname.toLowerCase();
+            if (isHeroNick) {
+                this.heroSeat = seat;
+            }
+
+            if (this.hand && this.hand.players) {
+                let p = this.hand.players[seat];
+                if (p) {
+                    p.nickname = cleanNick;
+                    if (isHeroNick || this.heroSeat === seat) {
+                        p.is_hero = true;
+                        this.hand.context.hero_seat = seat;
+                    }
                 }
             }
         }
 
         startHand(handId, dealer, gameNum = 1, gamesCount = 1) {
-            if (!this.isOFC) return; // Убрана блокировка !this.isOpen
+            if (!this.isOFC) return;
             let isFantasyRound = (gameNum > 1);
             let hasJokers = this.gameType.includes('JOKER') || (DB.selectedTournamentName && DB.selectedTournamentName.includes('Джокер'));
 
@@ -124,10 +141,13 @@ javascript:(function(){
             };
 
             this.seats.forEach((p, s) => {
+                let isHero = (s === this.heroSeat) || (DB.heroNickname && p.nickname && p.nickname.toLowerCase() === DB.heroNickname.toLowerCase());
+                if (isHero) this.heroSeat = s;
+
                 this.hand.players[s] = {
                     seat: s,
                     nickname: p.nickname || `Seat ${s}`,
-                    is_hero: (s === this.heroSeat),
+                    is_hero: isHero,
                     is_fantasy: false,
                     fantasy_cards_count: 0,
                     streets: [],
@@ -141,16 +161,23 @@ javascript:(function(){
                     qualified_for_next_fantasy: false
                 };
             });
+
+            if (this.heroSeat !== null) {
+                this.hand.context.hero_seat = this.heroSeat;
+            }
         }
 
         getPlayer(seat) {
             if (!this.hand) return null;
             if (!this.hand.players[seat]) {
                 let p = this.seats.get(seat) || { nickname: `Seat ${seat}` };
+                let isHero = (seat === this.heroSeat) || (DB.heroNickname && p.nickname && p.nickname.toLowerCase() === DB.heroNickname.toLowerCase());
+                if (isHero) this.heroSeat = seat;
+
                 this.hand.players[seat] = {
                     seat: seat,
                     nickname: p.nickname,
-                    is_hero: (seat === this.heroSeat),
+                    is_hero: isHero,
                     is_fantasy: false,
                     fantasy_cards_count: 0,
                     streets: [],
@@ -183,10 +210,8 @@ javascript:(function(){
                 return;
             }
 
-            let firstValid = h.showdowns.find(s => s.points > 0 && s.chips_delta > 0);
-            if (firstValid) {
-                let actualKush = Math.round(firstValid.chips_delta / firstValid.points);
-                if (actualKush > 0) h.tournament.point_score_chips = actualKush;
+            if (this.pointScoreChips && this.pointScoreChips > 0) {
+                h.tournament.point_score_chips = this.pointScoreChips;
             }
 
             h.players = Object.values(h.players);
@@ -196,7 +221,7 @@ javascript:(function(){
                 DB.hands.push(h);
                 saveToStorage();
                 updateUI();
-                console.log(`%c🍍 [OFC v7.3] Раздача #${h.hand_id} сохранена!`, 'color:#10b981;font-weight:bold;');
+                console.log(`%c🍍 [OFC v7.4] Раздача #${h.hand_id} (${h.tournament.table_name}) сохранена!`, 'color:#10b981;font-weight:bold;');
             }
             this.hand = null;
         }
@@ -213,7 +238,7 @@ javascript:(function(){
 
     function getSessionForSocket(ws, xml) {
         if (ws.__ofcSession) return ws.__ofcSession;
-        let tId = attr(xml, 'id') || attr(xml, 'tableId');
+        let tId = attr(xml, 'id') || attr(xml, 'tableId') || ws.__tableId;
         if (tId && tId.startsWith('f54-')) {
             ws.__ofcSession = getOrCreateTable(tId);
             return ws.__ofcSession;
@@ -225,6 +250,7 @@ javascript:(function(){
     function parseMessage(xml, ws) {
         if (!xml || typeof xml !== 'string' || !xml.startsWith('<')) return;
 
+        // 1. Турнир и лобби
         if (xml.includes('<TournamentDetails') || xml.includes('<ScheduledTournament')) {
             let tId = attr(xml, 'id');
             let tName = attr(xml, 'name');
@@ -238,6 +264,7 @@ javascript:(function(){
             }
         }
 
+        // 2. Захват ВСЕХ столов турнира БЕЗ ЛИМИТА
         if (xml.includes('<Tables') && DB.selectedTournamentId) {
             let tMatches = xml.matchAll(/<Table\s+[^>]*?\bid="(f54-[^"]+)"/gi);
             for (let tm of tMatches) {
@@ -248,12 +275,13 @@ javascript:(function(){
             }
         }
 
-        // Закрываем фоновый сокет только при явном сигнале закрытия стола
+        // 3. Закрытие стола
         if (xml.includes('description="Table is already closed"') || xml.includes('<CloseTable') || xml.includes('<LeaveTable')) {
             let cTableId = ws.__tableId || attr(xml, 'id') || attr(xml, 'tableId');
             if (cTableId) closeGhostSocket(cTableId);
         }
 
+        // 4. Детали стола и надежная рассадка игроков
         if (xml.includes('<TableDetails') || xml.includes('<TournamentTable')) {
             let tId = attr(xml, 'id') || attr(xml, 'tableId');
             if (tId && tId.startsWith('f54-')) {
@@ -275,9 +303,16 @@ javascript:(function(){
                 table.fantasyMode = attr(xml, 'fantasy') || table.fantasyMode;
                 table.pointScoreChips = iattr(xml, 'pointScore', table.pointScoreChips);
 
-                let seatMatches = xml.matchAll(/<Seat\s+[^>]*?\bid="(\d+)"[^>]*?>[\s\S]*?<PlayerInfo\s+[^>]*?\bnickname="([^"]+)"/gi);
-                for (let sm of seatMatches) {
-                    table.updatePlayer(parseInt(sm[1], 10), sm[2]);
+                // Корректный парсинг каждого Seat без перехлеста через границы тегов
+                let seatBlocks = xml.matchAll(/<Seat\s+[^>]*?\bid="(\d+)"[^>]*?>([\s\S]*?)<\/Seat>/gi);
+                for (let sb of seatBlocks) {
+                    let sId = parseInt(sb[1], 10);
+                    let sBody = sb[2];
+                    let nickM = sBody.match(/\bnickname="([^"]+)"/i) || sBody.match(/\bname="([^"]+)"/i);
+                    let uuidM = sBody.match(/\buuid="([^"]+)"/i);
+                    if (nickM) {
+                        table.updatePlayer(sId, nickM[1], uuidM ? uuidM[1] : null);
+                    }
                 }
                 updateUI();
             }
@@ -286,6 +321,7 @@ javascript:(function(){
         let table = getSessionForSocket(ws, xml);
         if (!table || !table.isOFC) return;
 
+        // 5. Стоимость куша
         let scoreMatch = xml.match(/(?:<CurrentLevel|<PlayerStackAdjusted|<Parameters|<HandInfo)\s+[^>]*?\bpointScore="(\d+)"/i);
         if (scoreMatch) {
             let ps = parseInt(scoreMatch[1], 10);
@@ -295,29 +331,44 @@ javascript:(function(){
             }
         }
 
-        let meMatch = xml.match(/<Seats\s+[^>]*?\bme="(\d+)"/i);
+        // 6. Определение Hero
+        let meMatch = xml.match(/<Seats\s+[^>]*?\bme="(\d+)"/i) || xml.match(/<Seat\s+[^>]*?\bme="true"[^>]*?\bid="(\d+)"/i);
         if (meMatch) {
             table.heroSeat = parseInt(meMatch[1], 10);
-            if (table.hand) table.hand.context.hero_seat = table.heroSeat;
+            if (table.hand) {
+                table.hand.context.hero_seat = table.heroSeat;
+                if (table.hand.players[table.heroSeat]) {
+                    table.hand.players[table.heroSeat].is_hero = true;
+                }
+            }
         }
 
-        let npMatches = xml.matchAll(/(?:<NewPlayer|<PlayerInfo|<Player)\s+[^>]*?\bseat="(\d+)"[^>]*?\bnickname="([^"]+)"/gi);
-        for (let npm of npMatches) {
-            table.updatePlayer(parseInt(npm[1], 10), npm[2]);
+        // 7. Обновление игроков по отдельным сообщениям
+        let directPlayers = xml.matchAll(/<(?:NewPlayer|PlayerInfo|Player|PlayerState|User)\s+[^>]*?(?:\bseat="(\d+)"|\bid="(\d+)")[^>]*?\bnickname="([^"]+)"/gi);
+        for (let dp of directPlayers) {
+            let sId = parseInt(dp[1] || dp[2], 10);
+            let nick = dp[3];
+            if (!isNaN(sId) && nick) {
+                table.updatePlayer(sId, nick);
+            }
         }
 
+        // 8. Новая раздача (с защитой от повторного стирания при GameState)
         let nhM = xml.match(/<NewHand\s+([^>]*?)\/>/i);
         let gsM = xml.match(/<GameState\s+([^>]*?)\bhand="(\d+)"/i);
         if (nhM || gsM) {
             let hId = nhM ? attr(nhM[1], 'number') : gsM[2];
-            let dealer = nhM ? iattr(nhM[1], 'dealer', 0) : iattr(xml, 'dealer', 0);
-            let gNum = nhM ? iattr(nhM[1], 'gameNumber', 1) : 1;
-            let gCnt = nhM ? iattr(nhM[1], 'gamesCount', 1) : 1;
-            table.startHand(hId, dealer, gNum, gCnt);
+            if (hId && (!table.hand || table.hand.hand_id !== String(hId))) {
+                let dealer = nhM ? iattr(nhM[1], 'dealer', 0) : iattr(xml, 'dealer', 0);
+                let gNum = nhM ? iattr(nhM[1], 'gameNumber', 1) : 1;
+                let gCnt = nhM ? iattr(nhM[1], 'gamesCount', 1) : 1;
+                table.startHand(hId, dealer, gNum, gCnt);
+            }
         }
 
         if (!table.hand) return;
 
+        // 9. Раздача карт по улицам
         let dealMatches = xml.matchAll(/<DealingCards(?:\s+[^>]*?\bstreet="(\d+)")?[^>]*?>([\s\S]*?)<\/DealingCards>/gi);
         for (let dm of dealMatches) {
             let stNum = dm[1] ? parseInt(dm[1], 10) : 1;
@@ -332,17 +383,21 @@ javascript:(function(){
                         p.fantasy_cards_count = cards.length;
                         stNum = 0;
                     }
-                    p.streets.push({
-                        street: stNum,
-                        street_name: p.is_fantasy ? `fantasy_deal_${cards.length}_cards` : `street_${stNum}`,
-                        dealt_cards: cards,
-                        placed: { front: [], middle: [], back: [] },
-                        discarded: []
-                    });
+                    let exists = p.streets.some(s => s.street === stNum);
+                    if (!exists) {
+                        p.streets.push({
+                            street: stNum,
+                            street_name: p.is_fantasy ? `fantasy_deal_${cards.length}_cards` : `street_${stNum}`,
+                            dealt_cards: cards,
+                            placed: { front: [], middle: [], back: [] },
+                            discarded: []
+                        });
+                    }
                 }
             }
         }
 
+        // 10. Раскладка карт игроками (с фиксом сдвига и защитой от 13 карт на 5-й улице)
         let paMatches = xml.matchAll(/<PlayerAction\s+[^>]*?\bseat="(\d+)"[^>]*?>([\s\S]*?)<\/PlayerAction>/gi);
         for (let pam of paMatches) {
             let sn = parseInt(pam[1], 10);
@@ -353,32 +408,43 @@ javascript:(function(){
                 let discards = discM ? parseCards(discM[1]) : [];
                 if (discards.length > 0) p.discards.push(...discards);
 
-                let placed = { front: [], middle: [], back: [] };
+                let placedDelta = { front: [], middle: [], back: [] };
+                let newCardsCount = 0;
+
                 ['FRONT', 'MIDDLE', 'BACK'].forEach(row => {
                     let rM = body.match(new RegExp(`<Hand\\s+[^>]*?\\bname="${row}"[^>]*?>([\\s\\S]*?)<\\/Hand>`, 'i'));
                     if (rM) {
                         let cList = parseCards(rM[1]);
                         let rowKey = row.toLowerCase();
-                        placed[rowKey] = cList;
 
                         if (p.is_fantasy) {
+                            placedDelta[rowKey] = cList;
                             p.final_board[rowKey] = cList;
                         } else {
-                            cList.forEach(c => {
-                                if (!p.final_board[rowKey].includes(c)) p.final_board[rowKey].push(c);
-                            });
+                            let newCards = cList.filter(c => !p.final_board[rowKey].includes(c));
+                            placedDelta[rowKey] = newCards;
+                            newCardsCount += newCards.length;
+                            newCards.forEach(c => p.final_board[rowKey].push(c));
                         }
                     }
                 });
 
                 if (p.streets.length > 0) {
-                    let latest = p.streets[p.streets.length - 1];
-                    latest.placed = placed;
-                    latest.discarded = discards;
+                    if (p.is_fantasy) {
+                        p.streets[0].placed = placedDelta;
+                        p.streets[0].discarded = discards;
+                    } else if (newCardsCount > 0 && newCardsCount <= 5) {
+                        let target = p.streets.find(st => st.placed.front.length === 0 && st.placed.middle.length === 0 && st.placed.back.length === 0) || p.streets[p.streets.length - 1];
+                        if (target) {
+                            target.placed = placedDelta;
+                            target.discarded = discards;
+                        }
+                    }
                 }
             }
         }
 
+        // 11. Изменение комбинаций и фолы
         let ccMatches = xml.matchAll(/<CombinationChange\s+([^>]*?)>([\s\S]*?)<\/CombinationChange>/gi);
         for (let ccm of ccMatches) {
             let cAttr = ccm[1];
@@ -405,6 +471,7 @@ javascript:(function(){
             }
         }
 
+        // 12. Шоудауны
         let sdMatches = xml.matchAll(/<Showdown\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/Showdown>)/gi);
         for (let sdm of sdMatches) {
             let sAttr = sdm[1];
@@ -430,6 +497,7 @@ javascript:(function(){
             });
         }
 
+        // 13. Победители и распределение очков
         let winMatches = xml.matchAll(/<Winner\s+([^>]*?)\/>/gi);
         for (let wm of winMatches) {
             let wAttr = wm[1];
@@ -453,15 +521,16 @@ javascript:(function(){
             });
         }
 
+        // 14. Завершение раздачи
         if (xml.includes('<EndHand')) {
             table.finalize();
         }
     }
 
-    /* ── ФОНОВЫЙ МАЙНЕР СТОЛОВ ТУРНИРА ─────────────────────────────── */
+    /* ── ФОНОВЫЙ МАЙНЕР ВСЕХ СТОЛОВ ТУРНИРА (БЕЗ ЛИМИТА) ─────────────── */
     function launchGhostSpectator(tableId) {
         if (!DB.wsUrl || !DB.sessionId || !DB.selectedTournamentId) return;
-        if (DB.ghostSockets.has(tableId) || DB.ghostSockets.size >= MAX_GHOST_TABLES) return;
+        if (DB.ghostSockets.has(tableId)) return; // БЕЗ ЛИМИТА НА КОЛИЧЕСТВО СТОЛОВ
 
         let now = Date.now();
         let cd = DB.socketCooldowns.get(tableId) || 0;
@@ -511,7 +580,6 @@ javascript:(function(){
         }
     }
 
-    // Функция закрывает ТОЛЬКО фоновый сокет, не убивая сессию стола!
     function closeGhostSocket(tableId) {
         let ws = DB.ghostSockets.get(tableId);
         if (ws) {
@@ -529,7 +597,7 @@ javascript:(function(){
         DB.selectedTournamentName = 'Остановлено';
         if (DB.lobbyPollTimer) clearInterval(DB.lobbyPollTimer);
         updateUI();
-        alert('🛑 Майнинг остановлен. Все фоновые столы закрыты. Вы можете перейти в другой турнир.');
+        alert('🛑 Майнинг остановлен. Все фоновые столы закрыты.');
     }
 
     function clearDatabase() {
@@ -541,16 +609,16 @@ javascript:(function(){
         }
     }
 
-    /* ── АВТО-ОПРОС ЛОББИ ТУРНИРА ──────────────────────────────────── */
+    /* ── АВТО-ОПРОС ЛОББИ ТУРНИРА (ДО 500 СТОЛОВ) ──────────────────── */
     function startLobbyPoller() {
         if (DB.lobbyPollTimer) clearInterval(DB.lobbyPollTimer);
         function poll() {
             if (DB.lobbySocket && DB.lobbySocket.readyState === WebSocket.OPEN && DB.selectedTournamentId) {
-                try { DB.lobbySocket.send('<GetTables count="50"/>'); } catch(e) {}
+                try { DB.lobbySocket.send('<GetTables count="500"/>'); } catch(e) {}
             }
         }
         poll();
-        DB.lobbyPollTimer = setInterval(poll, 6000);
+        DB.lobbyPollTimer = setInterval(poll, 5000);
     }
 
     /* ── WEBSOCKET PROXY ───────────────────────────────────────────── */
@@ -585,42 +653,38 @@ javascript:(function(){
                 }
             });
 
-            ws.addEventListener('close', function() {
-                // Если закрылся ручной сокет, мы НЕ убиваем фоновый майнер!
-                // Мы просто игнорируем это событие. Фоновый сокет продолжит работу.
-            });
-
             return ws;
         }
     });
 
     /* ── СВОРАЧИВАЕМЫЙ МОБИЛЬНЫЙ HUD UI ────────────────────────────── */
     let hud = document.createElement('div');
-    hud.id = 'ofc-god-hud-v73';
-    hud.style.cssText = 'position:fixed;top:10px;right:10px;z-index:999999999;background:rgba(15,23,42,0.98);backdrop-filter:blur(12px);border:1px solid #10b981;border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,0.9);color:#f8fafc;font-family:monospace;font-size:11px;user-select:none;width:260px;';
+    hud.id = 'ofc-god-hud-v74';
+    hud.style.cssText = 'position:fixed;top:10px;right:10px;z-index:999999999;background:rgba(15,23,42,0.98);backdrop-filter:blur(12px);border:1px solid #10b981;border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,0.9);color:#f8fafc;font-family:monospace;font-size:11px;user-select:none;width:270px;';
 
     hud.innerHTML = `
         <div id="ofc-hud-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;gap:8px;background:linear-gradient(135deg,rgba(16,185,129,0.2),transparent);border-radius:12px 12px 0 0;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="ofc-hud-toggle-icon" style="color:#10b981;font-weight:900;font-size:13px;">▾</span>
-                <strong style="color:#10b981;font-size:12px;">🍍 OFC SEAMLESS v7.3</strong>
+                <strong style="color:#10b981;font-size:12px;">🍍 OFC MINER v7.4</strong>
             </div>
-            <span id="ofc-badge-hands-73" style="background:#059669;color:#fff;padding:2px 8px;border-radius:999px;font-weight:700;font-size:10px;">${DB.hands.length} рук</span>
+            <span id="ofc-badge-hands-74" style="background:#059669;color:#fff;padding:2px 8px;border-radius:999px;font-weight:700;font-size:10px;">${DB.hands.length} рук</span>
         </div>
         <div id="ofc-hud-body" style="padding:10px 14px 12px 14px;display:block;">
             <div style="font-size:10.5px;color:#94a3b8;margin-bottom:10px;line-height:1.6;">
-                <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Турнир: <b id="ofc-tourn-name-73" style="color:#fde047;">${DB.selectedTournamentName}</b></div>
+                <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Турнир: <b id="ofc-tourn-name-74" style="color:#fde047;">${DB.selectedTournamentName}</b></div>
                 <div style="display:flex;justify-content:space-between;margin-top:4px;">
-                    <span>Фоновых столов: <b id="ofc-badge-ghosts-73" style="color:#38bdf8;">0</b></span>
+                    <span>Hero: <b style="color:#a855f7;">${DB.heroNickname}</b></span>
+                    <span>Столов: <b id="ofc-badge-ghosts-74" style="color:#38bdf8;">0</b></span>
                 </div>
             </div>
             <div style="display:flex;gap:6px;margin-bottom:6px;">
-                <button id="ofc-btn-save-73" style="flex:1;background:linear-gradient(135deg,#059669,#10b981);color:#000;border:none;padding:8px 10px;border-radius:6px;font-weight:800;cursor:pointer;">💾 Скачать JSON</button>
-                <button id="ofc-btn-clip-73" style="background:#334155;color:#fff;border:none;padding:8px 10px;border-radius:6px;font-weight:700;cursor:pointer;">📋 Копия</button>
+                <button id="ofc-btn-save-74" style="flex:1;background:linear-gradient(135deg,#059669,#10b981);color:#000;border:none;padding:8px 10px;border-radius:6px;font-weight:800;cursor:pointer;">💾 Скачать JSON</button>
+                <button id="ofc-btn-clip-74" style="background:#334155;color:#fff;border:none;padding:8px 10px;border-radius:6px;font-weight:700;cursor:pointer;">📋 Копия</button>
             </div>
             <div style="display:flex;gap:6px;">
-                <button id="ofc-btn-stop-73" style="flex:1;background:#b91c1c;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🛑 Стоп</button>
-                <button id="ofc-btn-clear-73" style="flex:1;background:#475569;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🗑 Очистить</button>
+                <button id="ofc-btn-stop-74" style="flex:1;background:#b91c1c;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🛑 Стоп</button>
+                <button id="ofc-btn-clear-74" style="flex:1;background:#475569;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🗑 Очистить</button>
             </div>
         </div>
     `;
@@ -635,13 +699,13 @@ javascript:(function(){
         icon.innerText = isCollapsed ? '▸' : '▾';
     };
 
-    document.getElementById('ofc-btn-stop-73').onclick = stopAllMining;
-    document.getElementById('ofc-btn-clear-73').onclick = clearDatabase;
+    document.getElementById('ofc-btn-stop-74').onclick = stopAllMining;
+    document.getElementById('ofc-btn-clear-74').onclick = clearDatabase;
 
     function updateUI() {
-        let bHands = document.getElementById('ofc-badge-hands-73');
-        let bGhosts = document.getElementById('ofc-badge-ghosts-73');
-        let tName = document.getElementById('ofc-tourn-name-73');
+        let bHands = document.getElementById('ofc-badge-hands-74');
+        let bGhosts = document.getElementById('ofc-badge-ghosts-74');
+        let tName = document.getElementById('ofc-tourn-name-74');
         
         if (bHands) bHands.innerText = `${DB.hands.length} рук`;
         if (bGhosts) bGhosts.innerText = `${DB.ghostSockets.size}`;
@@ -650,7 +714,7 @@ javascript:(function(){
 
     function exportPayload() {
         return {
-            version: '7.3-OFC-SEAMLESS-DATASET',
+            version: '7.4-OFC-SEAMLESS-DATASET',
             currency: 'TOURNAMENT_CHIPS',
             exported_at: new Date().toISOString(),
             tournament_id: DB.selectedTournamentId,
@@ -660,23 +724,23 @@ javascript:(function(){
         };
     }
 
-    document.getElementById('ofc-btn-save-73').onclick = function(e) {
+    document.getElementById('ofc-btn-save-74').onclick = function(e) {
         e.stopPropagation();
         let blob = new Blob([JSON.stringify(exportPayload(), null, 2)], { type: 'application/json' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `pokerdom_ofc_v73_${Date.now()}.json`;
+        a.download = `pokerdom_ofc_v74_${Date.now()}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
     };
 
-    document.getElementById('ofc-btn-clip-73').onclick = function(e) {
+    document.getElementById('ofc-btn-clip-74').onclick = function(e) {
         e.stopPropagation();
         navigator.clipboard.writeText(JSON.stringify(exportPayload(), null, 2)).then(() => {
             alert('🍍 Датасет скопирован в буфер обмена!');
         });
     };
 
-    console.log('%c🍍 [OFC God Engine v7.3] Запущен. Бесшовный Handoff сокетов активирован.', 'color:#10b981;font-weight:bold;font-size:13px;');
+    console.log('%c🍍 [OFC God Engine v7.4] Запущен. Безлимитный майнинг активирован для Hero: ' + DB.heroNickname, 'color:#10b981;font-weight:bold;font-size:13px;');
 })();
