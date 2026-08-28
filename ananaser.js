@@ -1,14 +1,17 @@
 javascript:(function(){
-    if (window.__ofcGodEngineV80) {
-        alert('🍍 OFC God Engine v8.0 (Dual-Core Architecture) уже запущен!');
+    if (window.__ofcGodEngineV81) {
+        alert('🍍 OFC God Engine v8.1 (Rock-Solid Multi-Table & Dual-Core) уже запущен!');
         return;
     }
-    window.__ofcGodEngineV80 = true;
+    window.__ofcGodEngineV81 = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       OFC PINEAPPLE GOD ENGINE v8.0 — DUAL-CORE INDEPENDENT ARCHITECTURE
-       Core 1: Hero Interactive Interceptor (100% Private Cards & Discards)
-       Core 2: Ghost Spectator Miner (Background Parallel Table Scraper)
+       OFC PINEAPPLE GOD ENGINE v8.1 — ROCK-SOLID DUAL-CORE ARCHITECTURE
+       • Core 1: Hero Interactive Interceptor (100% Private Cards & Discards)
+       • Core 2: Ghost Spectator Miner (Stable 70+ Background Tables, Zero Flapping)
+       • Fix 1: Fixed CombinationChange Regex & Restored Combinations/Royalties
+       • Fix 2: Eliminated Table Flickering (Lobby Socket Isolation & Safe Reconciliation)
+       • Fix 3: Clean Final Boards (Excluded 'xx' Masks from Final Showdowns)
        ══════════════════════════════════════════════════════════════════ */
 
     window.OFC_DB = window.OFC_DB || {
@@ -31,17 +34,17 @@ javascript:(function(){
     const DB = window.OFC_DB;
 
     try {
-        let saved = sessionStorage.getItem('ofc_hands_backup_v80') || sessionStorage.getItem('ofc_hands_backup_v75');
+        let saved = sessionStorage.getItem('ofc_hands_backup_v81') || sessionStorage.getItem('ofc_hands_backup_v80') || sessionStorage.getItem('ofc_hands_backup_v75');
         if (saved) {
             let parsed = JSON.parse(saved);
             DB.hands = parsed;
             parsed.forEach(h => DB.handIds.add(h.hand_id));
-            console.log(`[OFC v8.0] Восстановлено ${DB.hands.length} рук из кэша.`);
+            console.log(`[OFC v8.1] Восстановлено ${DB.hands.length} рук из кэша.`);
         }
     } catch(e) {}
 
     function saveToStorage() {
-        try { sessionStorage.setItem('ofc_hands_backup_v80', JSON.stringify(DB.hands)); } catch(e) {}
+        try { sessionStorage.setItem('ofc_hands_backup_v81', JSON.stringify(DB.hands)); } catch(e) {}
     }
 
     function attr(xml, name) {
@@ -241,7 +244,7 @@ javascript:(function(){
                 saveToStorage();
                 updateUI();
                 let tag = this.isHeroTable ? '⭐ [HERO HAND]' : '👁 [SPECTATOR]';
-                console.log(`%c🍍 [OFC v8.0] ${tag} Раздача #${h.hand_id} (${h.tournament.table_name}) сохранена!`, this.isHeroTable ? 'color:#a855f7;font-weight:bold;' : 'color:#10b981;');
+                console.log(`%c🍍 [OFC v8.1] ${tag} Раздача #${h.hand_id} (${h.tournament.table_name}) сохранена!`, this.isHeroTable ? 'color:#a855f7;font-weight:bold;' : 'color:#10b981;');
             }
             this.hand = null;
         }
@@ -284,23 +287,28 @@ javascript:(function(){
             }
         }
 
-        // 2. ДВУХСТОРОННЯЯ СИНХРОНИЗАЦИЯ (Исключаем Hero-стол из призраков!)
+        // 2. ДВУХСТОРОННЯЯ СИНХРОНИЗАЦИЯ БЕЗ МЕРЦАНИЯ (Safe Reconciliation)
         if (xml.includes('<Tables') && DB.selectedTournamentId) {
             let tMatches = Array.from(xml.matchAll(/<Table\s+[^>]*?\bid="(f54-[^"]+)"/gi));
             let currentTableIds = new Set(tMatches.map(m => m[1]));
 
-            for (let tId of currentTableIds) {
-                if (!DB.heroTables.has(tId) && !DB.ghostSockets.has(tId)) {
-                    launchGhostSpectator(tId);
+            // Выполняем синхронизацию только если пришел непустой список столов!
+            if (currentTableIds.size > 0) {
+                // А. Подключаем новые столы
+                for (let tId of currentTableIds) {
+                    if (!DB.heroTables.has(tId) && !DB.ghostSockets.has(tId)) {
+                        launchGhostSpectator(tId);
+                    }
                 }
-            }
 
-            for (let existingTableId of Array.from(DB.ghostSockets.keys())) {
-                if (!currentTableIds.has(existingTableId) || DB.heroTables.has(existingTableId)) {
-                    closeGhostSocket(existingTableId);
+                // Б. Закрываем расформированные столы
+                for (let existingTableId of Array.from(DB.ghostSockets.keys())) {
+                    if (!currentTableIds.has(existingTableId) || DB.heroTables.has(existingTableId)) {
+                        closeGhostSocket(existingTableId);
+                    }
                 }
+                updateUI();
             }
-            updateUI();
         }
 
         // 3. Закрытие отдельного стола / выход Hero
@@ -408,7 +416,7 @@ javascript:(function(){
 
         if (!table.hand) return;
 
-        // 9. Раздача карт по улицам (С СОХРАНЕНИЕМ ВСЕХ РЕАЛЬНЫХ КАРТ ДЛЯ HERO)
+        // 9. Раздача карт по улицам
         let dealMatches = xml.matchAll(/<DealingCards(?:\s+[^>]*?\bstreet="(\d+)")?[^>]*?>([\s\S]*?)<\/DealingCards>/gi);
         for (let dm of dealMatches) {
             let stNum = dm[1] ? parseInt(dm[1], 10) : 1;
@@ -433,7 +441,6 @@ javascript:(function(){
                             discarded: []
                         });
                     } else {
-                        // Обновляем реальными картами, если до этого была маска 'xx'
                         let hasRealCards = cards.some(c => c !== 'xx');
                         let hadOnlyMasked = existingStreet.dealt_cards.every(c => c === 'xx');
                         if (hasRealCards && hadOnlyMasked) {
@@ -444,7 +451,7 @@ javascript:(function(){
             }
         }
 
-        // 10. Раскладка карт и сбросы Hero (Discards)
+        // 10. Раскладка карт и сбросы
         let paMatches = xml.matchAll(/<PlayerAction\s+[^>]*?\bseat="(\d+)"[^>]*?>([\s\S]*?)<\/PlayerAction>/gi);
         for (let pam of paMatches) {
             let sn = parseInt(pam[1], 10);
@@ -466,12 +473,17 @@ javascript:(function(){
 
                         if (p.is_fantasy) {
                             placedDelta[rowKey] = cList;
-                            p.final_board[rowKey] = cList;
+                            if (cList.some(c => c !== 'xx')) {
+                                p.final_board[rowKey] = cList;
+                            }
                         } else {
-                            let newCards = cList.filter(c => !p.final_board[rowKey].includes(c));
-                            placedDelta[rowKey] = newCards;
-                            newCardsCount += newCards.length;
-                            newCards.forEach(c => p.final_board[rowKey].push(c));
+                            placedDelta[rowKey] = cList;
+                            newCardsCount += cList.length;
+                            // Добавляем в final_board ТОЛЬКО реальные карты (никогда не добавляем 'xx'!)
+                            let realCards = cList.filter(c => c !== 'xx');
+                            realCards.forEach(c => {
+                                if (!p.final_board[rowKey].includes(c)) p.final_board[rowKey].push(c);
+                            });
                         }
                     }
                 });
@@ -491,7 +503,7 @@ javascript:(function(){
             }
         }
 
-        // 11. Комбинации и фолы
+        // 11. ИСПРАВЛЕННЫЙ ПАРСИНГ CombinationChange (Комбинации, Роялти и Чистый Final Board)
         let ccMatches = xml.matchAll(/<CombinationChange\s+([^>]*?)>([\s\S]*?)<\/CombinationChange>/gi);
         for (let ccm of ccMatches) {
             let cAttr = ccm[1];
@@ -502,12 +514,15 @@ javascript:(function(){
                 if (cAttr.includes('dead="true"')) p.is_foul = true;
 
                 ['FRONT', 'MIDDLE', 'BACK'].forEach(row => {
-                    let rowM = cBody.match(new RegExp(`<Hand\\s+[^>]*?\\bname="${row}"[^>]*?>([\\s\\S]*?)<\\/Hand>`, 'i'));
+                    // Точный захват: Group 1 = атрибуты (<Hand ...>), Group 2 = тело с картами
+                    let rowM = cBody.match(new RegExp(`<Hand\\s+([^>]*?\\bname="${row}"[^>]*?)>([\\s\\S]*?)<\\/Hand>`, 'i'));
                     if (rowM) {
                         let hAttr = rowM[1];
                         let cards = parseCards(rowM[2]);
                         let rowKey = row.toLowerCase();
-                        if (cards.length > 0) p.final_board[rowKey] = cards;
+                        if (cards.length > 0 && cards.some(c => c !== 'xx')) {
+                            p.final_board[rowKey] = cards;
+                        }
                         
                         p.royalties[rowKey] = iattr(hAttr, 'royalty', 0);
                         let str = attr(hAttr, 'strength');
@@ -518,7 +533,7 @@ javascript:(function(){
             }
         }
 
-        // 12. Шоудауны (Исправлена регулярка)
+        // 12. Шоудауны
         let sdMatches = xml.matchAll(/<Showdown\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/Showdown>)/gi);
         for (let sdm of sdMatches) {
             let sAttr = sdm[1];
@@ -587,7 +602,7 @@ javascript:(function(){
             let table = getOrCreateTable(tableId);
             let gws = new NativeWebSocket(DB.wsUrl);
             gws.__tableId = tableId;
-            gws.__isGhostSocket = true; // Метка призрака
+            gws.__isGhostSocket = true;
             gws.__ofcSession = table;
             gws.__state = 'CONNECTING';
             
@@ -640,7 +655,7 @@ javascript:(function(){
             try { ws.close(); } catch(e) {}
             DB.ghostSockets.delete(tableId);
         }
-        DB.socketCooldowns.set(tableId, Date.now() + 5000);
+        DB.socketCooldowns.set(tableId, Date.now() + 3000);
         updateUI();
     }
 
@@ -662,24 +677,15 @@ javascript:(function(){
         }
     }
 
-    /* ── САМОВОССТАНАВЛИВАЮЩИЙСЯ ОПРОС ЛОББИ ────────────────────────── */
+    /* ── САМОВОССТАНАВЛИВАЮЩИЙСЯ ОПРОС ЛОББИ (ТОЛЬКО ЧЕРЕЗ LOBBY SOCKET) ── */
     function startLobbyPoller() {
         if (DB.lobbyPollTimer) clearInterval(DB.lobbyPollTimer);
         function poll() {
             if (!DB.selectedTournamentId) return;
 
-            let activeWs = (DB.lobbySocket && DB.lobbySocket.readyState === WebSocket.OPEN) ? DB.lobbySocket : null;
-            if (!activeWs) {
-                for (let ws of DB.ghostSockets.values()) {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        activeWs = ws;
-                        break;
-                    }
-                }
-            }
-
-            if (activeWs) {
-                try { activeWs.send('<GetTables count="500"/>'); } catch(e) {}
+            // Опрашиваем лобби ТОЛЬКО через основной сокет лобби!
+            if (DB.lobbySocket && DB.lobbySocket.readyState === WebSocket.OPEN) {
+                try { DB.lobbySocket.send('<GetTables count="500"/>'); } catch(e) {}
             }
         }
         poll();
@@ -728,32 +734,32 @@ javascript:(function(){
 
     /* ── СВОРАЧИВАЕМЫЙ МОБИЛЬНЫЙ HUD UI ────────────────────────────── */
     let hud = document.createElement('div');
-    hud.id = 'ofc-god-hud-v80';
+    hud.id = 'ofc-god-hud-v81';
     hud.style.cssText = 'position:fixed;top:10px;right:10px;z-index:999999999;background:rgba(15,23,42,0.98);backdrop-filter:blur(12px);border:1px solid #a855f7;border-radius:12px;box-shadow:0 12px 36px rgba(0,0,0,0.9);color:#f8fafc;font-family:monospace;font-size:11px;user-select:none;width:280px;';
 
     hud.innerHTML = `
         <div id="ofc-hud-header" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;gap:8px;background:linear-gradient(135deg,rgba(168,85,247,0.25),transparent);border-radius:12px 12px 0 0;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span id="ofc-hud-toggle-icon" style="color:#a855f7;font-weight:900;font-size:13px;">▾</span>
-                <strong style="color:#a855f7;font-size:12px;">🍍 OFC DUAL-CORE v8.0</strong>
+                <strong style="color:#a855f7;font-size:12px;">🍍 OFC DUAL-CORE v8.1</strong>
             </div>
-            <span id="ofc-badge-hands-80" style="background:#7c3aed;color:#fff;padding:2px 8px;border-radius:999px;font-weight:700;font-size:10px;">${DB.hands.length} рук</span>
+            <span id="ofc-badge-hands-81" style="background:#7c3aed;color:#fff;padding:2px 8px;border-radius:999px;font-weight:700;font-size:10px;">${DB.hands.length} рук</span>
         </div>
         <div id="ofc-hud-body" style="padding:10px 14px 12px 14px;display:block;">
             <div style="font-size:10.5px;color:#94a3b8;margin-bottom:10px;line-height:1.6;">
-                <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Турнир: <b id="ofc-tourn-name-80" style="color:#fde047;">${DB.selectedTournamentName}</b></div>
+                <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Турнир: <b id="ofc-tourn-name-81" style="color:#fde047;">${DB.selectedTournamentName}</b></div>
                 <div style="display:flex;justify-content:space-between;margin-top:4px;">
                     <span>Hero: <b style="color:#c084fc;">${DB.heroNickname}</b></span>
-                    <span>Фон столов: <b id="ofc-badge-ghosts-80" style="color:#38bdf8;">0</b></span>
+                    <span>Фон столов: <b id="ofc-badge-ghosts-81" style="color:#38bdf8;">0</b></span>
                 </div>
             </div>
             <div style="display:flex;gap:6px;margin-bottom:6px;">
-                <button id="ofc-btn-save-80" style="flex:1;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;border:none;padding:8px 10px;border-radius:6px;font-weight:800;cursor:pointer;">💾 Скачать JSON</button>
-                <button id="ofc-btn-clip-80" style="background:#334155;color:#fff;border:none;padding:8px 10px;border-radius:6px;font-weight:700;cursor:pointer;">📋 Копия</button>
+                <button id="ofc-btn-save-81" style="flex:1;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;border:none;padding:8px 10px;border-radius:6px;font-weight:800;cursor:pointer;">💾 Скачать JSON</button>
+                <button id="ofc-btn-clip-81" style="background:#334155;color:#fff;border:none;padding:8px 10px;border-radius:6px;font-weight:700;cursor:pointer;">📋 Копия</button>
             </div>
             <div style="display:flex;gap:6px;">
-                <button id="ofc-btn-stop-80" style="flex:1;background:#b91c1c;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🛑 Стоп</button>
-                <button id="ofc-btn-clear-80" style="flex:1;background:#475569;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🗑 Очистить</button>
+                <button id="ofc-btn-stop-81" style="flex:1;background:#b91c1c;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🛑 Стоп</button>
+                <button id="ofc-btn-clear-81" style="flex:1;background:#475569;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:700;cursor:pointer;">🗑 Очистить</button>
             </div>
         </div>
     `;
@@ -768,13 +774,13 @@ javascript:(function(){
         icon.innerText = isCollapsed ? '▸' : '▾';
     };
 
-    document.getElementById('ofc-btn-stop-80').onclick = stopAllMining;
-    document.getElementById('ofc-btn-clear-80').onclick = clearDatabase;
+    document.getElementById('ofc-btn-stop-81').onclick = stopAllMining;
+    document.getElementById('ofc-btn-clear-81').onclick = clearDatabase;
 
     function updateUI() {
-        let bHands = document.getElementById('ofc-badge-hands-80');
-        let bGhosts = document.getElementById('ofc-badge-ghosts-80');
-        let tName = document.getElementById('ofc-tourn-name-80');
+        let bHands = document.getElementById('ofc-badge-hands-81');
+        let bGhosts = document.getElementById('ofc-badge-ghosts-81');
+        let tName = document.getElementById('ofc-tourn-name-81');
         
         if (bHands) bHands.innerText = `${DB.hands.length} рук`;
         if (bGhosts) bGhosts.innerText = `${DB.ghostSockets.size}`;
@@ -783,7 +789,7 @@ javascript:(function(){
 
     function exportPayload() {
         return {
-            version: '8.0-OFC-DUAL-CORE-DATASET',
+            version: '8.1-OFC-DUAL-CORE-DATASET',
             currency: 'TOURNAMENT_CHIPS',
             exported_at: new Date().toISOString(),
             tournament_id: DB.selectedTournamentId,
@@ -794,23 +800,23 @@ javascript:(function(){
         };
     }
 
-    document.getElementById('ofc-btn-save-80').onclick = function(e) {
+    document.getElementById('ofc-btn-save-81').onclick = function(e) {
         e.stopPropagation();
         let blob = new Blob([JSON.stringify(exportPayload(), null, 2)], { type: 'application/json' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `pokerdom_ofc_v80_${Date.now()}.json`;
+        a.download = `pokerdom_ofc_v81_${Date.now()}.json`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
     };
 
-    document.getElementById('ofc-btn-clip-80').onclick = function(e) {
+    document.getElementById('ofc-btn-clip-81').onclick = function(e) {
         e.stopPropagation();
         navigator.clipboard.writeText(JSON.stringify(exportPayload(), null, 2)).then(() => {
             alert('🍍 Датасет скопирован в буфер обмена!');
         });
     };
 
-    console.log('%c🍍 [OFC God Engine v8.0] Запущен. Dual-Core архитектура активна для Hero: ' + DB.heroNickname, 'color:#a855f7;font-weight:bold;font-size:13px;');
+    console.log('%c🍍 [OFC God Engine v8.1] Запущен. Стабильный Dual-Core майнинг активен для Hero: ' + DB.heroNickname, 'color:#a855f7;font-weight:bold;font-size:13px;');
 })();
