@@ -1,24 +1,25 @@
 javascript:(function(){
-    if (window.__pokerStalkerV342Master) {
-        alert('🎯 VIP Stalker v34.2 OMNI-MASTER уже запущен!');
+    if (window.__pokerStalkerV343Master) {
+        alert('🎯 VIP Stalker v34.3 OMNI-MASTER уже запущен!');
         return;
     }
-    window.__pokerStalkerV342Master = true;
+    window.__pokerStalkerV343Master = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v34.2 — OMNI-MASTER PRECISION ENGINE
-       • Fixed Lobby Scanner Auth (Мгновенный поиск всех 40 целей)
-       • Zero-Collision Passive & Guest Spectator (0 вылетов)
-       • Universal Hand & Chat Logger (Цели + Личные столы)
-       • 100% Verified GTO Exporter (PioSolver, GTO Wizard, H2N)
+       ULTIMATE SCALPEL v34.3 — ZERO-FLAP OMNI-MASTER ENGINE
+       • Socket Grace Period 15s (Полная ликвидация мерцания столов)
+       • Parallel Worker Pool Concurrency = 5 (Сверхбыстрый скан лобби)
+       • Max Background Tables = 60
+       • Non-blocking Hand & GTO Logger (100% стабильный захват)
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
-    const MAX_BACKGROUND_TABLES = 40;
+    const MAX_BACKGROUND_TABLES = 60;
     const MAX_ARCHIVE_HANDS = 3000;
     const MAX_OUTBOX_QUEUE = 2000;
     const MAX_DEBUG_LOGS = 300;
-    const SCANNER_CONCURRENCY = 4;
+    const SCANNER_CONCURRENCY = 5;
+    const SOCKET_GRACE_PERIOD_MS = 15000;
 
     const TARGET_WATCHLIST = new Set([
         "vesnushka", "bagzik", "nogano777", "dostigatel", "bankiir", 
@@ -40,7 +41,7 @@ javascript:(function(){
         userViewingTournId: null,
         userViewingTableId: null,
         socketCooldowns: new Map(),
-        tournamentCache: new Map(), // tId -> { name, buyin, bounty, fee, rebuyCost, addonCost, isPKO }
+        tournamentCache: new Map(),
         outboxQueue: [],
         completedHandsArchive: [],
         recordedHandNumbers: new Set(),
@@ -174,7 +175,7 @@ javascript:(function(){
         return stalkerState.stalkedPlayers.get(cleanNick);
     }
 
-    // ── ГИБРИДНЫЙ СЕРВЕРНЫЙ ДВИЖОК СТОЛА ──────────────────────────────
+    // ── СЕРВЕРНЫЙ ДВИЖОК СТОЛА ─────────────────────────────────────────
     class TableContext {
         constructor(tableId, tournId = null) {
             this.tableId = tableId;
@@ -208,6 +209,8 @@ javascript:(function(){
             this.seatTimerStart = new Map();
             this.handOrigin = null;
             this.runningPot = 0;
+            this.createdAt = Date.now();
+            this.lastSeatsReceivedAt = null;
         }
 
         getActiveHandBB() {
@@ -498,7 +501,7 @@ javascript:(function(){
         }
     }
 
-    // ── БАТЧЕВЫЙ АСИНХРОННЫЙ OUTBOX С EXPONENTIAL BACKOFF ─────────────
+    // ── БАТЧЕВЫЙ АСИНХРОННЫЙ OUTBOX ───────────────────────────────────
     let backoffDelay = 1000;
     let isFlushingQueue = false;
 
@@ -555,7 +558,7 @@ javascript:(function(){
             : `<span style="color:#f87171;">HF: ○ ${stalkerState.hfStatus}${qStr}</span>`;
     }
 
-    // ── GTO SOLVER EXPORT ENGINE (PIOSOLVER, GTO WIZARD, H2N) ─────────
+    // ── GTO SOLVER EXPORT ENGINE ──────────────────────────────────────
     function convertHandsToPokerStarsHH(handsList) {
         let output = [];
         handsList.forEach(h => {
@@ -717,20 +720,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v342';
+    ui.id = 'stalker-hud-v343';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:460px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v34.2 OMNI-MASTER</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v34.3 OMNI-MASTER</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:3px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v342').remove();window.__pokerStalkerV342Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v343').remove();window.__pokerStalkerV343Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
         <div id="st-hud-body" style="margin-top:8px;">
@@ -785,7 +788,7 @@ javascript:(function(){
         let blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `PokerStars_GTO_v342_${Date.now()}.txt`;
+        a.download = `PokerStars_GTO_v343_${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -840,7 +843,7 @@ javascript:(function(){
                         let isActuallyBusted = e.isBusted || e.stack === 0 || !isTournLive;
 
                         let bbStr = (e.stackBB > 0 && !isActuallyBusted) ? ` (${e.stackBB.toFixed(1)} BB)` : '';
-                        let spentInfo = e.spent > 0 ? ` <span style="color:#a855f7;">[${formatChips(e.spent)}₽]</span>` : '';
+                        let spentInfo = e.spent > 0 ? ` <span style="color:#a855f7;">[Взнос: ${formatChips(e.spent)}₽]</span>` : '';
 
                         if (isActuallyBusted) {
                             let prizeStr = '';
@@ -879,7 +882,7 @@ javascript:(function(){
         });
     }
 
-    // ── ИЗОЛИРОВАННЫЙ GUEST СПЕКТАТОР СТОЛОВ ───────────────────────────
+    // ── СТАБИЛЬНЫЙ СПЕКТАТОР СТОЛОВ (ZERO-FLAP С GRACE PERIOD 15 СЕК) ──
     async function manageBackgroundSpectatorPool() {
         let wsUrl = stalkerState.auth.wssUrl;
         if (!wsUrl) return;
@@ -887,10 +890,19 @@ javascript:(function(){
 
         for (let [tableId, ws] of stalkerState.backgroundTableSockets.entries()) {
             let tableCtx = stalkerState.activeTables.get(tableId);
-            if (tableCtx && tableCtx.hand !== null) continue;
+            if (!tableCtx) continue;
+
+            // Защита от преждевременного закрытия: не закрывать идущую раздачу
+            if (tableCtx.hand !== null) continue;
+
+            // Grace Period 15 сек: дать серверу время прислать Seats и GameState
+            let socketAge = now - (tableCtx.createdAt || now);
+            if (socketAge < SOCKET_GRACE_PERIOD_MS) continue;
+
+            let isUserActiveOnTable = stalkerState.sockets.userTables.has(tableId);
 
             let hasActiveTarget = false;
-            if (tableCtx && tableCtx.seats.size > 0) {
+            if (tableCtx.seats.size > 0) {
                 tableCtx.seats.forEach(s => {
                     if (TARGET_WATCHLIST.has(s.cleanNick) && (s.stack || 0) > 0 && !s.busted) {
                         hasActiveTarget = true;
@@ -898,15 +910,14 @@ javascript:(function(){
                 });
             }
 
-            let isUserActiveOnTable = stalkerState.sockets.userTables.has(tableId);
-
-            if ((!hasActiveTarget || isUserActiveOnTable) && ws.readyState === WebSocket.OPEN) {
+            // Закрывать только если стол живет >15с, данные получены и целей действительно нет
+            if ((!hasActiveTarget || isUserActiveOnTable) && tableCtx.lastSeatsReceivedAt !== null && ws.readyState === WebSocket.OPEN) {
                 if (ws.__heartbeatTimer) clearInterval(ws.__heartbeatTimer);
                 try { ws.close(); } catch(e) {}
                 stalkerState.backgroundTableSockets.delete(tableId);
                 if (!isUserActiveOnTable) stalkerState.activeTables.delete(tableId);
                 stalkerState.discoveredTargetTables.delete(tableId);
-                logDebug("SOCKET_CLEANUP", `Фоновый сокет стола ${tableId} освобожден`);
+                logDebug("SOCKET_CLEANUP", `Стол ${tableId} освобожден (целей нет / ручной фокус)`);
             }
         }
 
@@ -923,10 +934,9 @@ javascript:(function(){
             stalkerState.backgroundTableSockets.set(tableId, tableWs);
             stalkerState.activeTables.set(tableId, tableWs.__tableContext);
 
-            logDebug("SOCKET_CONNECT", `Подключение к столу ${tableId} [Guest Mode] (турнир ${tInfo.tournId}, цель ${tInfo.targetNick})`);
+            logDebug("SOCKET_CONNECT", `Подключение к столу ${tableId} (турнир ${tInfo.tournId}, цель ${tInfo.targetNick})`);
 
             tableWs.onopen = function() {
-                // Анонимный хэндшейк спектатора без sessionId — исключает вылеты
                 tableWs.send(`<EnterTable tableId="${tableId}" tournamentId="${tInfo.tournId}" client="html5mobile" clientVersion="${stalkerState.auth.clientVersion}" guest="true"/>`);
                 tableWs.send('<GetTableDetails/>');
                 tableWs.send('<JoinTable/>');
@@ -963,7 +973,7 @@ javascript:(function(){
         }
     }
 
-    // ── АСИНХРОННЫЙ ПАРАЛЛЕЛЬНЫЙ СКАНЕР ЛОББИ (С АВТОРИЗАЦИЕЙ SESSION ID) ─
+    // ── ПАРАЛЛЕЛЬНЫЙ СКАНЕР ЛОББИ С АВТОРИЗАЦИЕЙ ───────────────────────
     async function dispatchParallelScanner() {
         if (stalkerState.isScanningActive || stalkerState.scannerQueue.length === 0) return;
         autoDetectSessionId();
@@ -980,7 +990,7 @@ javascript:(function(){
 
             if (chunk.length > 0) {
                 await Promise.allSettled(chunk.map(tId => scanSingleTournamentBackground(tId)));
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 80));
             }
         }
 
@@ -1012,7 +1022,6 @@ javascript:(function(){
             setTimeout(cleanup, 4500);
 
             bgWs.onopen = function() {
-                // В лобби турнира передаем sessionId для доступа к списку игроков (не вызывает коллизий столов)
                 let sessAttr = sid ? `sessionId="${sid}"` : '';
                 bgWs.send(`<EnterTournamentLobby id="${tournId}" ${sessAttr} client="html5mobile" clientFace="pokerdom" clientVersion="${stalkerState.auth.clientVersion}"/>`);
                 bgWs.send('<GetSchedule/>');
@@ -1310,6 +1319,7 @@ javascript:(function(){
 
             // СЕРВЕРНАЯ СИНХРОНИЗАЦИЯ МЕСТ, СТЕКОВ И ФИНАНСОВ
             if (xml.includes('<Seats') || (xml.includes('<Seat ') && xml.includes('<PlayerInfo'))) {
+                ctx.lastSeatsReceivedAt = Date.now();
                 let seatBlocks = xml.matchAll(/<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>([\s\S]*?)<\/Seat>)/gs);
                 for (let sb of seatBlocks) {
                     let seatAttrs = sb[1];
@@ -1574,7 +1584,7 @@ javascript:(function(){
                 }
             }
 
-            // ПЕРЕХВАТ ЧАТА (СОХРАНЯЕТ ВСЕ СООБЩЕНИЯ ЖИВЫХ ИГРОКОВ ЗА АКТИВНЫМИ СТОЛАМИ)
+            // ПЕРЕХВАТ ЧАТА
             let chatM = xml.match(/<ChatMessage\s+([^>]*)\/>/);
             if (chatM) {
                 let cAttr = chatM[1];
@@ -1637,7 +1647,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v34_2_omni_${Date.now()}.json`;
+            a.download = `pokerdom_v34_3_omni_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1674,8 +1684,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV342) return;
-        ws.__stalkerHookedV342 = true;
+        if (!ws || ws.__stalkerHookedV343) return;
+        ws.__stalkerHookedV343 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1698,8 +1708,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV342) {
-        window.__stalkerWsProxyV342 = true;
+    if (OrigWS && !window.__stalkerWsProxyV343) {
+        window.__stalkerWsProxyV343 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1722,5 +1732,5 @@ javascript:(function(){
         };
     }
 
-    console.log("%c👑 [SCALPEL v34.2 OMNI-MASTER] Запущен. Авторизация лобби восстановлена, гостевой спектатор столов и расширенный чат активны.", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v34.3 OMNI-MASTER] Запущен. Zero-Flap Grace Period 15s и параллельный скан активны.", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
