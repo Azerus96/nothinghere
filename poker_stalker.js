@@ -1,15 +1,15 @@
 javascript:(function(){
-    if (window.__pokerStalkerV350Master) {
-        alert('🎯 VIP Stalker v35.0 ARCH-MASTER уже запущен!');
+    if (window.__pokerStalkerV351Master) {
+        alert('🎯 VIP Stalker v35.1 ARCH-MASTER уже запущен!');
         return;
     }
-    window.__pokerStalkerV350Master = true;
+    window.__pokerStalkerV351Master = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v35.0 — ARCH-MASTER ROCK-SOLID ENGINE
-       • Pure Observer Mode (Удален JoinTable — 100% Uptime столов)
-       • Exact MTT Economy (250₽, 500₽, 2500₽ — ликвидирован овербиллинг)
-       • Single-Lobby Multiplexing (0 вылетов сессии)
+       ULTIMATE SCALPEL v35.1 — ARCH-MASTER FULL-RECORDING ENGINE
+       • Hooked Observer Pipeline (Слушатели привязаны ко всем 60 сокетам)
+       • 100% Hand Capture & Live VPIP/PFR Stats (0 пропусков раздач)
+       • Exact MTT Economy (250₽, 500₽, 2500₽)
        • Real-time GTO & Solver Export (PioSolver, GTO Wizard, H2N)
        ══════════════════════════════════════════════════════════════════ */
 
@@ -40,7 +40,7 @@ javascript:(function(){
         userViewingTournId: null,
         userViewingTableId: null,
         socketCooldowns: new Map(),
-        tournamentCache: new Map(), // tId -> { name, buyin, bounty, fee, rebuyCost, addonCost, isPKO }
+        tournamentCache: new Map(),
         outboxQueue: [],
         completedHandsArchive: [],
         recordedHandNumbers: new Set(),
@@ -719,20 +719,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v350';
+    ui.id = 'stalker-hud-v351';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:460px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v35.0 ARCH-MASTER</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v35.1 ARCH-MASTER</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:3px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v350').remove();window.__pokerStalkerV350Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v351').remove();window.__pokerStalkerV351Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
         <div id="st-hud-body" style="margin-top:8px;">
@@ -787,7 +787,7 @@ javascript:(function(){
         let blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `PokerStars_GTO_v350_${Date.now()}.txt`;
+        a.download = `PokerStars_GTO_v351_${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -881,7 +881,7 @@ javascript:(function(){
         });
     }
 
-    // ── ЧИСТЫЙ СПЕКТАТОР СТОЛОВ (БЕЗ JOIN-TABLE, 100% АПТАЙМ) ─────────
+    // ── ЧИСТЫЙ СПЕКТАТОР СТОЛОВ С ПОЛНЫМ ПЕРЕХВАТОМ СООБЩЕНИЙ ─────────
     async function manageBackgroundSpectatorPool() {
         let wsUrl = stalkerState.auth.wssUrl;
         if (!wsUrl) return;
@@ -892,10 +892,8 @@ javascript:(function(){
             let tableCtx = stalkerState.activeTables.get(tableId);
             if (!tableCtx) continue;
 
-            // Запрет закрытия стола во время раздачи
             if (tableCtx.hand !== null) continue;
 
-            // Защита стола в первые 30 секунд жизни
             let socketAge = now - (tableCtx.createdAt || now);
             if (socketAge < 30000) continue;
 
@@ -920,7 +918,7 @@ javascript:(function(){
             }
         }
 
-        // 2. Открытие новых столов с целями
+        // 2. Открытие новых столов с целями + ОБЯЗАТЕЛЬНЫЙ ХУК СООБЩЕНИЙ
         for (let [tableId, tInfo] of stalkerState.discoveredTargetTables.entries()) {
             if (stalkerState.backgroundTableSockets.size >= MAX_BACKGROUND_TABLES) break;
             if (stalkerState.backgroundTableSockets.has(tableId) || stalkerState.sockets.userTables.has(tableId)) continue;
@@ -931,13 +929,16 @@ javascript:(function(){
             let tableWs = new OrigWS(wsUrl);
             tableWs.__tableId = tableId;
             tableWs.__tableContext = new TableContext(tableId, tInfo.tournId);
+            
+            // ВАЖНЕЙШИЙ ФИКС: Привязка слушателя сообщений к фоновому сокету
+            hookSocketInstance(tableWs, wsUrl);
+
             stalkerState.backgroundTableSockets.set(tableId, tableWs);
             stalkerState.activeTables.set(tableId, tableWs.__tableContext);
 
             logDebug("SOCKET_CONNECT", `Подключение к столу ${tableId} [Observer] (${tInfo.targetNick})`);
 
             tableWs.onopen = function() {
-                // Чистый спектатор: ТОЛЬКО вход и детали, БЕЗ JoinTable
                 tableWs.send(`<EnterTable tableId="${tableId}" tournamentId="${tInfo.tournId}" client="html5mobile" clientVersion="${stalkerState.auth.clientVersion}"/>`);
                 tableWs.send('<GetTableDetails/>');
 
@@ -1139,7 +1140,7 @@ javascript:(function(){
                         let curMeta = stalkerState.tournamentCache.get(tournId) || {};
                         stalkerState.tournamentCache.set(tournId, {
                             name: decodeHtml(tdName),
-                            buyin: rawBuyin || curMeta.buyin || 0, // buyIn в Pokerdom — это ПОЛНЫЙ бай-ин (250, 500, 2500)
+                            buyin: rawBuyin || curMeta.buyin || 0,
                             bounty: bounty || curMeta.bounty || 0,
                             fee: fee || curMeta.fee || 0,
                             rebuyCost: fattr(text, 'rebuyCost') || 0,
@@ -1218,7 +1219,7 @@ javascript:(function(){
                 stalkerState.sockets.lobby = ws;
             }
 
-            // 2. Сетка турниров + Финансовый парсер (БЕЗ ДВОЙНОГО СЛОЖЕНИЯ)
+            // 2. Сетка турниров + Финансовый парсер
             if (xml.includes('<Tournaments')) {
                 let matches = xml.matchAll(/<Table\s+([^>]+)>/g);
                 for (let m of matches) {
@@ -1235,7 +1236,7 @@ javascript:(function(){
                     if (tId && tName) {
                         stalkerState.tournamentCache.set(tId, {
                             name: decodeHtml(tName),
-                            buyin: rawBuyin, // Чистый полный бай-ин
+                            buyin: rawBuyin,
                             bounty: bounty,
                             fee: fee,
                             isPKO: bounty > 0 || /нокаут|bounty|pko/i.test(tName)
@@ -1584,7 +1585,7 @@ javascript:(function(){
                 }
             }
 
-            // ПЕРЕХВАТ ЧАТА (СОХРАНЯЕТ ВСЕ СООБЩЕНИЯ ЖИВЫХ ИГРОКОВ ЗА АКТИВНЫМИ СТОЛАМИ)
+            // ПЕРЕХВАТ ЧАТА
             let chatM = xml.match(/<ChatMessage\s+([^>]*)\/>/);
             if (chatM) {
                 let cAttr = chatM[1];
@@ -1647,7 +1648,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v35_0_omni_${Date.now()}.json`;
+            a.download = `pokerdom_v35_1_omni_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1656,7 +1657,7 @@ javascript:(function(){
         }
     };
 
-    // ── ПЕРЕХВАТЧИК СОКЕТОВ ───────────────────────────────────────────
+    // ── ПЕРЕХВАТЧИК СОКЕТОВ (ПРИВЯЗКА КО ВСЕМ СОКЕТАМ) ─────────────────
     async function decodeSocketPayload(data) {
         if (!data) return '';
         if (typeof data === 'string') return data;
@@ -1684,8 +1685,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV350) return;
-        ws.__stalkerHookedV350 = true;
+        if (!ws || ws.__stalkerHookedV351) return;
+        ws.__stalkerHookedV351 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1708,8 +1709,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV350) {
-        window.__stalkerWsProxyV350 = true;
+    if (OrigWS && !window.__stalkerWsProxyV351) {
+        window.__stalkerWsProxyV351 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1732,5 +1733,5 @@ javascript:(function(){
         };
     }
 
-    console.log("%c👑 [SCALPEL v35.0 ARCH-MASTER] Запущен. Чистый Observer спектатора активен, точные бай-ины включены.", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v35.1 ARCH-MASTER] Запущен. Слушатели сообщений привязаны ко всем столам.", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
