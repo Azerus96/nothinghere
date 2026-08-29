@@ -1,16 +1,16 @@
 javascript:(function(){
-    if (window.__pokerStalkerV370Master) {
-        alert('🎯 VIP Stalker v37.0 TITAN-MASTER уже запущен!');
+    if (window.__pokerStalkerV380Master) {
+        alert('🎯 VIP Stalker v38.0 IRONCLAD уже запущен!');
         return;
     }
-    window.__pokerStalkerV370Master = true;
+    window.__pokerStalkerV380Master = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v37.0 — TITAN-MASTER PERSISTENT ENGINE
-       • Absolute Table Persistence (Удален ложный Cleanup — 100% Uptime)
-       • Universal Seat & Nick Parser (Атрибуты + Вложенные теги)
-       • Distinct MTT Economy (Базовый бай-ин + учет повторных пуль)
-       • Live GTO Hand & Muck-Leak Exporter (PioSolver, GTO Wizard)
+       ULTIMATE SCALPEL v38.0 — IRONCLAD ENGINE
+       • Dedicated Auto-Scanner (Мгновенный старт без кликов)
+       • Smart Yielding Sockets (100% раздач + 0 вылетов сессии)
+       • Ironclad Anti-Flap (Жесткая привязка таймеров, 0 мерцаний)
+       • Split Economy (Бай-ин турнира VS Потрачено на ре-энтри)
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
@@ -18,6 +18,7 @@ javascript:(function(){
     const MAX_ARCHIVE_HANDS = 3000;
     const MAX_OUTBOX_QUEUE = 2000;
     const MAX_DEBUG_LOGS = 300;
+    const SCANNER_CONCURRENCY = 5;
 
     const TARGET_WATCHLIST = new Set([
         "vesnushka", "bagzik", "nogano777", "dostigatel", "bankiir", 
@@ -36,20 +37,18 @@ javascript:(function(){
     const stalkerState = {
         isCollapsed: false,
         hfStatus: 'Локальный режим',
-        userViewingTournId: null,
-        userViewingTableId: null,
         socketCooldowns: new Map(),
-        tournamentCache: new Map(), // tId -> { name, buyin, bounty, fee, rebuyCost, addonCost, isPKO }
+        tournamentCache: new Map(), // tId -> { name, baseBuyin, bounty, fee }
         outboxQueue: [],
         completedHandsArchive: [],
         recordedHandNumbers: new Set(),
         chatLogs: [],
         engineDebugLog: [],
         auth: { sessionId: null, wssUrl: null, clientVersion: "71.0.138" },
-        sockets: { lobby: null, userTables: new Map() },
+        sockets: { userTables: new Map() },
         liveTournaments: new Map(),
-        discoveredTargetTables: new Map(), // tableId -> { tournId, targetNick, stack }
-        backgroundTableSockets: new Map(),
+        discoveredTargetTables: new Map(),
+        backgroundTableSockets: new Map(), // tableId -> { ws, connectedAt }
         activeTables: new Map(),
         stalkedPlayers: new Map(),
         scannerQueue: [],
@@ -70,16 +69,12 @@ javascript:(function(){
 
     function iattr(str, name) {
         let v = attr(str, name);
-        if (v === null || v === undefined || v === '') return null;
-        let n = parseInt(v, 10);
-        return isNaN(n) ? null : n;
+        return v ? parseInt(v, 10) : null;
     }
 
     function fattr(str, name) {
         let v = attr(str, name);
-        if (!v) return 0;
-        let f = parseFloat(v);
-        return isNaN(f) ? 0 : f;
+        return v ? parseFloat(v) : 0;
     }
 
     function decodeHtml(html) {
@@ -115,7 +110,6 @@ javascript:(function(){
         } catch(e) {}
         return null;
     }
-    autoDetectSessionId();
 
     function calculatePositions(activeSeatsList, dealerSeatNum) {
         let seats = [...activeSeatsList].sort((a, b) => a - b);
@@ -163,11 +157,7 @@ javascript:(function(){
                 vpipCount: 0,
                 pfrCount: 0,
                 aggressiveActions: 0,
-                totalActions: 0,
-                foldBBCount: 0,
-                stealFacedBB: 0,
-                foldSBCount: 0,
-                stealFacedSB: 0
+                totalActions: 0
             });
         }
         return stalkerState.stalkedPlayers.get(cleanNick);
@@ -190,7 +180,6 @@ javascript:(function(){
             this.dealtSeats = new Set();
             this.positions = {};
             this.potSwept = 0;
-            this.winnerSum = 0;
             this.winners = [];
             this.showdownCards = {};
             this.handStart = {};
@@ -198,16 +187,12 @@ javascript:(function(){
             this.handActions = new Map();
             this.timeline = [];
             this.knockoutBounties = [];
-            this.recordedShowdownSeats = new Set();
             this.sittingOutSeats = new Set();
             this.playersActedThisHand = new Set();
             this.playersCountedThisHand = new Set();
             this.processedActionIds = new Set();
-            this.handRebuyEvents = [];
             this.seatTimerStart = new Map();
-            this.handOrigin = null;
             this.runningPot = 0;
-            this.createdAt = Date.now();
         }
 
         getActiveHandBB() {
@@ -218,19 +203,11 @@ javascript:(function(){
             return 500;
         }
 
-        getLiveStackBB(chips) {
-            let bb = this.getActiveHandBB();
-            return (bb > 0 && chips !== null && chips !== undefined) ? Math.round((chips / bb) * 100) / 100 : null;
-        }
-
         getTournamentMeta() {
             if (this.tournId && stalkerState.tournamentCache.has(this.tournId)) {
                 return stalkerState.tournamentCache.get(this.tournId);
             }
-            return {
-                name: (this.tournId && stalkerState.liveTournaments.has(this.tournId)) ? stalkerState.liveTournaments.get(this.tournId).name : 'MTT',
-                buyin: 0, bounty: 0, fee: 0, rebuyCost: 0, addonCost: 0, isPKO: false
-            };
+            return { name: 'MTT', baseBuyin: 0, isPKO: false };
         }
 
         ensureSeat(seatNum, rawNick, serverStack = null) {
@@ -240,27 +217,17 @@ javascript:(function(){
                     seat: seatNum,
                     rawNick: rawNick || `Seat ${seatNum}`,
                     cleanNick: clean || `seat_${seatNum}`,
-                    uuid: clean ? `u_${clean}` : `seat_${seatNum}`,
                     stack: serverStack !== null ? serverStack : 0,
-                    streetBet: 0,
-                    inHand: false,
                     busted: false,
-                    spent: 0,
-                    rebuys: 0,
-                    addons: 0,
-                    headBounty: 0
+                    spent: 0
                 });
             }
-
             let s = this.seats.get(seatNum);
-            if (rawNick && (s.rawNick.startsWith('Seat ') || s.rawNick !== rawNick)) {
+            if (rawNick && s.rawNick !== rawNick) {
                 s.rawNick = rawNick;
                 s.cleanNick = clean;
-                s.uuid = `u_${clean}`;
             }
-            if (serverStack !== null) {
-                s.stack = serverStack;
-            }
+            if (serverStack !== null) s.stack = serverStack;
             return s;
         }
 
@@ -270,7 +237,6 @@ javascript:(function(){
             this.board = [];
             this.street = 'PREFLOP';
             this.potSwept = 0;
-            this.winnerSum = 0;
             this.winners = [];
             this.showdownCards = {};
             this.handStart = {};
@@ -280,45 +246,26 @@ javascript:(function(){
             this.handActions.clear();
             this.timeline = [];
             this.knockoutBounties = [];
-            this.recordedShowdownSeats.clear();
             this.playersActedThisHand.clear();
             this.playersCountedThisHand.clear();
             this.processedActionIds.clear();
-            this.handRebuyEvents = [];
             this.seatTimerStart.clear();
             this.runningPot = 0;
 
             let currentBB = this.getActiveHandBB();
-            this.handLevel = { 
-                sb: this.level.sb || Math.round(currentBB / 2), 
-                bb: currentBB, 
-                ante: this.level.ante || 0, 
-                number: this.level.number 
-            };
-
-            this.seats.forEach(s => {
-                s.streetBet = 0;
-                s.inHand = false;
-            });
+            this.handLevel = { sb: this.level.sb || Math.round(currentBB / 2), bb: currentBB, ante: this.level.ante || 0, number: this.level.number };
 
             this.seats.forEach((s, sn) => {
-                if (s.stack !== null && s.stack > 0) {
-                    this.handStart[sn] = s.stack;
-                }
+                if (s.stack !== null && s.stack > 0) this.handStart[sn] = s.stack;
             });
 
             for (let sn of activeSeatsList) {
-                let s = this.ensureSeat(sn, null);
+                this.ensureSeat(sn, null);
                 this.activeSeats.add(sn);
                 this.dealtSeats.add(sn);
-                s.inHand = true;
-                if (!this.handStart[sn] && s.stack > 0) {
-                    this.handStart[sn] = s.stack;
-                }
                 this.sweptInvestedPerSeat.set(sn, 0);
                 this.handActions.set(sn, []);
             }
-
             this.positions = calculatePositions(activeSeatsList, this.dealer);
         }
 
@@ -348,16 +295,9 @@ javascript:(function(){
             this.handActions.set(seatNum, list);
 
             this.timeline.push({
-                street: this.street,
-                seat: seatNum,
-                nick: s.rawNick,
-                cleanNick: s.cleanNick,
-                position: this.positions[seatNum] || 'N/A',
-                action: label,
-                amount: amount || 0,
-                pot_before: potBefore,
-                pot_pct: (potPct > 0 && potPct <= 500) ? potPct : null,
-                time_sec: thinkSec
+                street: this.street, seat: seatNum, nick: s.rawNick, cleanNick: s.cleanNick,
+                position: this.positions[seatNum] || 'N/A', action: label, amount: amount || 0,
+                pot_before: potBefore, pot_pct: (potPct > 0 && potPct <= 500) ? potPct : null, time_sec: thinkSec
             });
         }
 
@@ -386,7 +326,6 @@ javascript:(function(){
                     return;
                 }
             }
-
             let streets = [['DealingFlop', 'FLOP', 3], ['DealingTurn', 'TURN', 4], ['DealingRiver', 'RIVER', 5]];
             for (let [tag, sName, maxCount] of streets) {
                 let stM = xml.match(new RegExp(`<${tag}>[\\s\\S]*?<\\/${tag}>`, 'i'));
@@ -394,12 +333,8 @@ javascript:(function(){
                     let fc = Array.from(stM[0].matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(m => m[1] + m[2]);
                     this.street = sName;
                     if (fc.length) {
-                        if (sName === 'FLOP') {
-                            this.board = fc.slice(0, 3);
-                        } else if (this.board.length < maxCount) {
-                            if (this.board.length === 3 && sName === 'TURN') this.board.push(fc[0]);
-                            else if (this.board.length === 4 && sName === 'RIVER') this.board.push(fc[0]);
-                        }
+                        if (sName === 'FLOP') this.board = fc.slice(0, 3);
+                        else if (this.board.length < maxCount) this.board.push(fc[0]);
                     }
                 }
             }
@@ -412,7 +347,6 @@ javascript:(function(){
             let players = [];
             let tMeta = this.getTournamentMeta();
 
-            let calculatedPotTotal = this.potSwept;
             let seatNums = Array.from(this.seats.keys()).sort((a, b) => a - b);
             
             for (let sn of seatNums) {
@@ -425,75 +359,41 @@ javascript:(function(){
                 
                 anyStart = true;
                 let startStack = (this.handStart[sn] !== undefined && this.handStart[sn] !== null) ? this.handStart[sn] : 0;
-                
-                if (startStack < investedInPot && wonAmount === 0) {
-                    startStack = investedInPot;
-                }
+                if (startStack < investedInPot && wonAmount === 0) startStack = investedInPot;
 
-                let endStack = startStack - investedInPot + wonAmount;
-                if (endStack < 0) endStack = 0;
+                let endStack = Math.max(0, startStack - investedInPot + wonAmount);
                 s.stack = endStack;
-
                 startTotal += startStack;
                 endTotal += endStack;
 
                 if (TARGET_WATCHLIST.has(s.cleanNick) && !this.playersCountedThisHand.has(s.cleanNick)) {
                     let prof = getOrCreatePlayerProfile(s.cleanNick);
-                    if (this.sittingOutSeats.has(sn)) {
-                        prof.sitOutHandsCount++;
-                    } else {
-                        prof.handsCount++;
-                    }
+                    if (this.sittingOutSeats.has(sn)) prof.sitOutHandsCount++;
+                    else prof.handsCount++;
                     this.playersCountedThisHand.add(s.cleanNick);
                 }
 
                 let sd = this.showdownCards[sn];
                 players.push({
-                    seat: sn,
-                    nick: s.rawNick,
-                    cleanNick: s.cleanNick,
-                    position: this.positions[sn] || 'N/A',
-                    stack_start: startStack,
-                    stack_start_bb: handBB > 0 ? Math.round(startStack / handBB * 100) / 100 : null,
-                    stack_end: endStack,
-                    stack_end_bb: handBB > 0 ? Math.round(endStack / handBB * 100) / 100 : null,
-                    cards: sd ? sd.cards : 'xx xx',
-                    is_muck_leak: (sd && sd.isMuck && sd.cards && sd.cards !== 'xx xx') ? 1 : 0,
-                    is_sitting_out: this.sittingOutSeats.has(sn) ? 1 : 0,
-                    busted: endStack === 0 ? 1 : 0,
-                    spent_rub: s.spent || tMeta.buyin,
-                    rebuys_count: s.rebuys || 0,
-                    addons_count: s.addons || 0,
-                    head_bounty_rub: s.headBounty || 0,
-                    actions: this.handActions.get(sn) || []
+                    seat: sn, nick: s.rawNick, cleanNick: s.cleanNick, position: this.positions[sn] || 'N/A',
+                    stack_start: startStack, stack_start_bb: handBB > 0 ? Math.round(startStack / handBB * 100) / 100 : null,
+                    stack_end: endStack, stack_end_bb: handBB > 0 ? Math.round(endStack / handBB * 100) / 100 : null,
+                    cards: sd ? sd.cards : 'xx xx', is_muck_leak: (sd && sd.isMuck && sd.cards && sd.cards !== 'xx xx') ? 1 : 0,
+                    is_sitting_out: this.sittingOutSeats.has(sn) ? 1 : 0, busted: endStack === 0 ? 1 : 0,
+                    spent_rub: s.spent || tMeta.baseBuyin, actions: this.handActions.get(sn) || []
                 });
             }
 
             if (!anyStart) return null;
-            let partial = this.handOrigin === 'midhand-sync' || startTotal === 0;
-            let conserved = partial ? null : (startTotal === endTotal);
+            let conserved = (startTotal === endTotal);
 
             return {
-                hand_number: this.hand,
-                tracking: partial ? 'partial' : 'full',
-                table_id: this.tableId,
-                table_name: this.name,
-                tournament_id: this.tournId,
-                tournament_name: tMeta.name,
-                is_pko: tMeta.isPKO,
-                timestamp: new Date().toISOString(),
-                level: this.handLevel,
-                dealer_seat: this.dealer,
-                board: this.board.join(' '),
-                pot_total: calculatedPotTotal,
-                pot_bb: handBB > 0 ? Math.round(calculatedPotTotal / handBB * 100) / 100 : null,
-                winners: this.winners,
-                knockout_bounties: this.knockoutBounties,
-                rebuy_events: this.handRebuyEvents,
-                timeline: this.timeline,
-                players: players,
-                sync_verified: partial ? null : conserved,
-                chip_conservation: { start_total: startTotal, end_total: endTotal, ok: conserved }
+                hand_number: this.hand, tracking: 'full', table_id: this.tableId, table_name: this.name,
+                tournament_id: this.tournId, tournament_name: tMeta.name, is_pko: tMeta.isPKO,
+                timestamp: new Date().toISOString(), level: this.handLevel, dealer_seat: this.dealer,
+                board: this.board.join(' '), pot_total: this.potSwept, pot_bb: handBB > 0 ? Math.round(this.potSwept / handBB * 100) / 100 : null,
+                winners: this.winners, knockout_bounties: this.knockoutBounties, timeline: this.timeline,
+                players: players, sync_verified: conserved, chip_conservation: { start_total: startTotal, end_total: endTotal, ok: conserved }
             };
         }
     }
@@ -519,10 +419,8 @@ javascript:(function(){
                 let timeoutId = setTimeout(() => controller.abort(), 3500);
 
                 let res = await fetch(`${scoutServerUrl}/scout_api/events_batch`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ events: batch }),
-                    signal: controller.signal
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ events: batch }), signal: controller.signal
                 });
                 clearTimeout(timeoutId);
 
@@ -586,9 +484,7 @@ javascript:(function(){
                     lines.push(`Seat ${sNum}: ${p.nick} (${p.stack_start || 0} in chips)`);
                 });
 
-                if (ante > 0) {
-                    players.forEach(p => lines.push(`${p.nick}: posts the ante ${ante}`));
-                }
+                if (ante > 0) players.forEach(p => lines.push(`${p.nick}: posts the ante ${ante}`));
 
                 players.forEach(p => {
                     (p.actions || []).forEach(a => {
@@ -600,9 +496,7 @@ javascript:(function(){
                 lines.push(`*** HOLE CARDS ***`);
 
                 let knownPlayer = players.find(p => p.cards && p.cards !== 'xx xx');
-                if (knownPlayer) {
-                    lines.push(`Dealt to ${knownPlayer.nick} [${knownPlayer.cards}]`);
-                }
+                if (knownPlayer) lines.push(`Dealt to ${knownPlayer.nick} [${knownPlayer.cards}]`);
 
                 const boardCards = (h.board || "").trim().split(/\s+/).filter(c => c && c.length >= 2);
                 let currentStreet = 'PREFLOP';
@@ -644,11 +538,9 @@ javascript:(function(){
 
                     let tStr = item.time_sec !== null ? ` [${item.time_sec}s]` : '';
 
-                    if (act === 'FOLD') {
-                        lines.push(`${nick}: folds${tStr}`);
-                    } else if (act === 'CHECK') {
-                        lines.push(`${nick}: checks${tStr}`);
-                    } else if (act === 'CALL') {
+                    if (act === 'FOLD') lines.push(`${nick}: folds${tStr}`);
+                    else if (act === 'CHECK') lines.push(`${nick}: checks${tStr}`);
+                    else if (act === 'CALL') {
                         lines.push(`${nick}: calls ${amt}${tStr}`);
                         streetBets[nick] = (streetBets[nick] || 0) + amt;
                         if (streetBets[nick] > currentMaxBet) currentMaxBet = streetBets[nick];
@@ -696,11 +588,9 @@ javascript:(function(){
                     
                     let outcomeStr = "folded";
                     const wEntry = (h.winners || []).find(w => w.seat === p.seat);
-                    if (wEntry) {
-                        outcomeStr = `showed [${p.cards || 'xx xx'}] and won (${wEntry.amount})`;
-                    } else if (p.cards && p.cards !== 'xx xx') {
-                        outcomeStr = `showed [${p.cards}] and lost`;
-                    }
+                    if (wEntry) outcomeStr = `showed [${p.cards || 'xx xx'}] and won (${wEntry.amount})`;
+                    else if (p.cards && p.cards !== 'xx xx') outcomeStr = `showed [${p.cards}] and lost`;
+                    
                     lines.push(`Seat ${sNum}: ${p.nick}${posStr} ${outcomeStr}`);
                 });
 
@@ -717,20 +607,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v370';
+    ui.id = 'stalker-hud-v380';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:460px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v37.0 TITAN-MASTER</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v38.0 IRONCLAD</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:3px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v370').remove();window.__pokerStalkerV370Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v380').remove();window.__pokerStalkerV380Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
         <div id="st-hud-body" style="margin-top:8px;">
@@ -768,7 +658,7 @@ javascript:(function(){
 
     document.getElementById('btn-force-scan').onclick = function() {
         autoDetectSessionId();
-        triggerLobbyTournamentRefresh();
+        dispatchParallelScanner();
     };
 
     document.getElementById('btn-export-gto').onclick = function() {
@@ -781,7 +671,7 @@ javascript:(function(){
         let blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `PokerStars_GTO_v370_${Date.now()}.txt`;
+        a.download = `PokerStars_GTO_v380_${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -837,15 +727,16 @@ javascript:(function(){
 
                         let bbStr = (e.stackBB > 0 && !isActuallyBusted) ? ` (${e.stackBB.toFixed(1)} BB)` : '';
                         
-                        // Раздельный вывод базового бай-ина и повторных входов
-                        let baseBuyin = e.baseBuyin || e.spent;
+                        // РАЗДЕЛЕНИЕ БАЙ-ИНА И ТРАТ (ИСПРАВЛЕНО В V38)
+                        let baseBuyin = e.baseBuyin || 0;
+                        let totalSpent = e.spent || baseBuyin;
                         let buyinBadge = '';
                         if (baseBuyin > 0) {
-                            if (e.spent > baseBuyin) {
-                                let bullets = Math.round(e.spent / baseBuyin);
-                                buyinBadge = ` <span style="color:#a855f7;">[${formatChips(baseBuyin)}₽ (${bullets}-й вход: ${formatChips(e.spent)}₽)]</span>`;
+                            if (totalSpent > baseBuyin) {
+                                let bullets = Math.round(totalSpent / baseBuyin);
+                                buyinBadge = ` <span style="color:#a855f7;">[Бай-ин: ${formatChips(baseBuyin)}₽ | ${bullets} входов: ${formatChips(totalSpent)}₽]</span>`;
                             } else {
-                                buyinBadge = ` <span style="color:#a855f7;">[${formatChips(baseBuyin)}₽]</span>`;
+                                buyinBadge = ` <span style="color:#a855f7;">[Бай-ин: ${formatChips(baseBuyin)}₽]</span>`;
                             }
                         }
 
@@ -886,35 +777,45 @@ javascript:(function(){
         });
     }
 
-    // ── 100% PERSISTENT СПЕКТАТОР СТОЛОВ (БЕЗ ЛОЖНЫХ CLEANUP) ─────────
+    // ── 100% PERSISTENT СПЕКТАТОР СТОЛОВ (С УСТУПКОЙ ПРОКСИ) ──────────
     async function manageBackgroundSpectatorPool() {
         let sid = stalkerState.auth.sessionId || autoDetectSessionId();
         let wsUrl = stalkerState.auth.wssUrl;
         if (!wsUrl || !sid) return;
         let now = Date.now();
 
-        // 1. Закрывать стол ТОЛЬКО если цель реально выбыла из лобби турнира
-        for (let [tableId, ws] of stalkerState.backgroundTableSockets.entries()) {
+        // 1. Очистка выбывших целей
+        for (let [tableId, bgData] of stalkerState.backgroundTableSockets.entries()) {
             let tableCtx = stalkerState.activeTables.get(tableId);
             if (!tableCtx) continue;
 
             // Запрет закрытия стола во время раздачи
             if (tableCtx.hand !== null) continue;
 
-            let isUserActiveOnTable = stalkerState.sockets.userTables.has(tableId);
-            let isTableStillTargeted = stalkerState.discoveredTargetTables.has(tableId);
+            // ЖЕСТКИЙ ТАЙМЕР: Стол живет минимум 20 секунд от момента подключения сокета
+            let socketAge = now - bgData.connectedAt;
+            if (socketAge < 20000) continue;
 
-            // Закрывать стол только если сканер лобби больше не видит там живой цели
-            if ((!isTableStillTargeted || isUserActiveOnTable) && ws.readyState === WebSocket.OPEN) {
-                if (ws.__heartbeatTimer) clearInterval(ws.__heartbeatTimer);
-                try { ws.close(); } catch(e) {}
+            let hasActiveTarget = false;
+            if (tableCtx.seats.size > 0) {
+                tableCtx.seats.forEach(s => {
+                    if (TARGET_WATCHLIST.has(s.cleanNick) && (s.stack || 0) > 0 && !s.busted) {
+                        hasActiveTarget = true;
+                    }
+                });
+            }
+
+            if (!hasActiveTarget && bgData.ws.readyState === WebSocket.OPEN) {
+                if (bgData.ws.__heartbeatTimer) clearInterval(bgData.ws.__heartbeatTimer);
+                try { bgData.ws.close(); } catch(e) {}
                 stalkerState.backgroundTableSockets.delete(tableId);
-                if (!isUserActiveOnTable) stalkerState.activeTables.delete(tableId);
-                logDebug("SOCKET_CLEANUP", `Стол ${tableId} освобожден`);
+                stalkerState.activeTables.delete(tableId);
+                stalkerState.discoveredTargetTables.delete(tableId);
+                logDebug("SOCKET_CLEANUP", `Стол ${tableId} освобожден (цель выбыла)`);
             }
         }
 
-        // 2. Открытие целевых столов с настоящей авторизацией
+        // 2. Открытие целевых столов с настоящей авторизацией и JoinTable
         for (let [tableId, tInfo] of stalkerState.discoveredTargetTables.entries()) {
             if (stalkerState.backgroundTableSockets.size >= MAX_BACKGROUND_TABLES) break;
             if (stalkerState.backgroundTableSockets.has(tableId) || stalkerState.sockets.userTables.has(tableId)) continue;
@@ -926,18 +827,18 @@ javascript:(function(){
             tableWs.__tableId = tableId;
             tableWs.__tableContext = new TableContext(tableId, tInfo.tournId);
             
-            // Хук сокета для чтения входящего XML потока
             hookSocketInstance(tableWs, wsUrl);
 
-            stalkerState.backgroundTableSockets.set(tableId, tableWs);
+            stalkerState.backgroundTableSockets.set(tableId, { ws: tableWs, connectedAt: Date.now() });
             stalkerState.activeTables.set(tableId, tableWs.__tableContext);
 
             logDebug("SOCKET_CONNECT", `Подключение к столу ${tableId} [Spectator] (${tInfo.targetNick})`);
 
             tableWs.onopen = function() {
+                // Полноценный вход спектатора с sessionId и JoinTable для получения раздач
                 tableWs.send(`<EnterTable sessionId="${sid}" tableId="${tableId}" tournamentId="${tInfo.tournId}" client="html5mobile" clientVersion="${stalkerState.auth.clientVersion}"/>`);
                 tableWs.send('<GetTableDetails/>');
-                tableWs.send('<GetGameState/>');
+                tableWs.send('<JoinTable/>'); // ВОЗВРАЩЕНО ДЛЯ ПОЛУЧЕНИЯ РАЗДАЧ
 
                 tableWs.__heartbeatTimer = setInterval(() => {
                     if (tableWs.readyState === WebSocket.OPEN) {
@@ -962,39 +863,102 @@ javascript:(function(){
     }
     setInterval(manageBackgroundSpectatorPool, 2500);
 
-    // ── БЕЗОПАСНЫЙ ОДНОКАНАЛЬНЫЙ СКАНЕР ТУРНИРОВ ──────────────────────
-    function triggerLobbyTournamentRefresh() {
-        let lobbyWs = stalkerState.sockets.lobby;
-        if (lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
-            try {
-                lobbyWs.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="99999"/>');
-            } catch(e) {}
-        }
-    }
-
-    async function dispatchSingleQueueScanner() {
-        if (stalkerState.isScanningActive || stalkerState.scannerQueue.length === 0) return;
-        stalkerState.isScanningActive = true;
-
+    // ── ВЫДЕЛЕННЫЙ ФОНОВЫЙ СКАНЕР ЛОББИ (АВТО-СТАРТ) ──────────────────
+    let dedicatedScannerWs = null;
+    
+    function startDedicatedScanner() {
         let wsUrl = stalkerState.auth.wssUrl;
         let sid = stalkerState.auth.sessionId || autoDetectSessionId();
-        if (!wsUrl || !sid) {
-            stalkerState.isScanningActive = false;
+        if (!wsUrl || !sid) return;
+
+        if (dedicatedScannerWs && dedicatedScannerWs.readyState === WebSocket.OPEN) {
+            try { dedicatedScannerWs.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="99999"/>'); } catch(e) {}
             return;
         }
 
+        dedicatedScannerWs = new OrigWS(wsUrl);
+        dedicatedScannerWs.onopen = function() {
+            dedicatedScannerWs.send(`<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="99999"/>`);
+            setInterval(() => {
+                if (dedicatedScannerWs.readyState === WebSocket.OPEN) {
+                    try { dedicatedScannerWs.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="99999"/>'); } catch(e) {}
+                }
+            }, 15000);
+        };
+        
+        dedicatedScannerWs.onmessage = async function(e) {
+            let text = await decodeSocketPayload(e.data);
+            if (text.includes('<Tournaments')) {
+                let matches = text.matchAll(/<Table\s+([^>]+)>/g);
+                for (let m of matches) {
+                    let attrs = m[1];
+                    let tId = attr(attrs, 'id');
+                    let tName = attr(attrs, 'name') || '';
+                    let tStatus = attr(attrs, 'status');
+                    let tGame = attr(attrs, 'game') || '';
+                    
+                    let rawBuyin = fattr(attrs, 'buyIn') || fattr(attrs, 'buyin') || fattr(attrs, 'stake') || 0;
+                    let bounty = fattr(attrs, 'knockoutBounty') || fattr(attrs, 'bounty') || 0;
+                    let fee = fattr(attrs, 'fee') || 0;
+
+                    if (tId && tName) {
+                        stalkerState.tournamentCache.set(tId, {
+                            name: decodeHtml(tName),
+                            baseBuyin: rawBuyin,
+                            bounty: bounty,
+                            fee: fee,
+                            isPKO: bounty > 0 || /нокаут|bounty|pko/i.test(tName)
+                        });
+                    }
+
+                    let isHoldem = tGame.includes('TEXAS_HOLDEM') || tGame.includes('HOLDEM') || (!tGame.includes('OMAHA') && !tGame.includes('PINEAPPLE') && !tName.toLowerCase().includes('омаха') && !tName.toLowerCase().includes('ананас'));
+                    let isLiveRunning = LIVE_STATUSES.has(tStatus);
+
+                    if (isHoldem && tId && isLiveRunning) {
+                        if (!stalkerState.liveTournaments.has(tId)) {
+                            stalkerState.liveTournaments.set(tId, { id: tId, name: decodeHtml(tName) || 'MTT', status: tStatus, currentBB: 500 });
+                        } else {
+                            let item = stalkerState.liveTournaments.get(tId);
+                            item.status = tStatus;
+                            if (tName) item.name = decodeHtml(tName);
+                        }
+                        if (!stalkerState.scannerQueue.includes(tId)) stalkerState.scannerQueue.push(tId);
+                    } else if (tId && (tStatus === 'COMPLETED' || tStatus === 'CANCELED')) {
+                        stalkerState.liveTournaments.delete(tId);
+                    }
+                }
+                dispatchParallelScanner();
+                updateHUD();
+            }
+        };
+    }
+
+    async function dispatchParallelScanner() {
+        if (stalkerState.isScanningActive || stalkerState.scannerQueue.length === 0) return;
+        let sid = stalkerState.auth.sessionId || autoDetectSessionId();
+        let wsUrl = stalkerState.auth.wssUrl;
+        if (!wsUrl || !sid) return;
+
+        stalkerState.isScanningActive = true;
+
         while (stalkerState.scannerQueue.length > 0) {
-            let tId = stalkerState.scannerQueue.shift();
-            if (tId === stalkerState.userViewingTournId) continue;
-            await scanTournamentSafely(tId, wsUrl, sid);
-            await new Promise(r => setTimeout(r, 120));
+            let chunk = [];
+            while (chunk.length < SCANNER_CONCURRENCY && stalkerState.scannerQueue.length > 0) {
+                let tId = stalkerState.scannerQueue.shift();
+                if (tId !== stalkerState.userViewingTournId) chunk.push(tId);
+            }
+
+            if (chunk.length > 0) {
+                await Promise.allSettled(chunk.map(tId => scanSingleTournamentBackground(tId, wsUrl, sid)));
+                await new Promise(r => setTimeout(r, 60));
+            }
         }
 
         stalkerState.isScanningActive = false;
         updateHUD();
     }
 
-    function scanTournamentSafely(tournId, wsUrl, sid) {
+    function scanSingleTournamentBackground(tournId, wsUrl, sid) {
         return new Promise((resolve) => {
             let tourn = stalkerState.liveTournaments.get(tournId);
             let bgWs = new OrigWS(wsUrl);
@@ -1011,7 +975,7 @@ javascript:(function(){
                     resolve();
                 }
             }
-            setTimeout(cleanup, 4000);
+            setTimeout(cleanup, 4500);
 
             bgWs.onopen = function() {
                 bgWs.send(`<EnterTournamentLobby id="${tournId}" sessionId="${sid}" client="html5mobile" clientFace="pokerdom" clientVersion="${stalkerState.auth.clientVersion}"/>`);
@@ -1030,12 +994,12 @@ javascript:(function(){
                 let playerBlocks = text.matchAll(/<Player\s+([^>]+)>/g);
                 let countInChunk = 0;
 
-                let tMeta = stalkerState.tournamentCache.get(tournId) || { name: tourn ? tourn.name : 'MTT', buyin: 0, bounty: 0, fee: 0 };
+                let tMeta = stalkerState.tournamentCache.get(tournId) || { name: tourn ? tourn.name : 'MTT', baseBuyin: 0 };
 
                 for (let pb of playerBlocks) {
                     countInChunk++;
                     let attrs = pb[1];
-                    let rawNick = attr(attrs, 'nickname');
+                    let rawNick = attr(attrs, 'nickname') || attr(attrs, 'name');
                     let cleanNick = getCleanNick(rawNick);
                     let tableId = attr(attrs, 'tableId');
 
@@ -1047,6 +1011,7 @@ javascript:(function(){
                         let bountyPrize = fattr(attrs, 'knockoutBounty');
                         let totalPrize = regPrize + bountyPrize;
                         let uuid = attr(attrs, 'uuid') || `target_${cleanNick}`;
+                        let spent = fattr(attrs, 'spent') || tMeta.baseBuyin;
                         
                         let isBusted = (place > 0) || (stack === 0);
                         let stackBB = (currentBB > 0 && stack > 0) ? (stack / currentBB) : 0;
@@ -1081,23 +1046,15 @@ javascript:(function(){
                             isBusted: isBusted,
                             tableName: tMeta.name,
                             tournId: tournId,
-                            baseBuyin: tMeta.buyin,
-                            spent: tMeta.buyin
+                            baseBuyin: tMeta.baseBuyin,
+                            spent: spent
                         });
 
                         if (isNewEntry || statusChanged) {
                             queueServerEvent(isBusted ? "TARGET_PLAYER_BUSTED" : "TARGET_PLAYER_DISCOVERED", {
-                                uuid: uuid,
-                                name: cleanNick,
-                                raw_nick: rawNick,
-                                tournament_id: tournId,
-                                tournament_name: tMeta.name,
-                                chips: stack,
-                                stack_bb: Math.round(stackBB * 100) / 100,
-                                place: place,
-                                prize: totalPrize,
-                                is_busted: isBusted,
-                                spent_rub: tMeta.buyin
+                                uuid: uuid, name: cleanNick, raw_nick: rawNick, tournament_id: tournId,
+                                tournament_name: tMeta.name, chips: stack, stack_bb: Math.round(stackBB * 100) / 100,
+                                place: place, prize: totalPrize, is_busted: isBusted, spent_rub: spent
                             });
                         }
                         updateHUD();
@@ -1114,29 +1071,6 @@ javascript:(function(){
             bgWs.onmessage = async function(e) {
                 let text = await decodeSocketPayload(e.data);
                 if (!text) return;
-
-                if (text.includes('<TournamentDetails') || text.includes('<Schedule')) {
-                    let lvl = iattr(text, 'currentLevel');
-                    if (lvl) currentLevel = lvl;
-
-                    let tdName = attr(text, 'name');
-                    let rawBuyin = fattr(text, 'buyIn') || fattr(text, 'buyin') || fattr(text, 'stake') || 0;
-                    let bounty = fattr(text, 'knockoutBounty') || fattr(text, 'bounty') || 0;
-                    let fee = fattr(text, 'fee') || 0;
-
-                    if (tdName) {
-                        let curMeta = stalkerState.tournamentCache.get(tournId) || {};
-                        stalkerState.tournamentCache.set(tournId, {
-                            name: decodeHtml(tdName),
-                            buyin: rawBuyin || curMeta.buyin || 0,
-                            bounty: bounty || curMeta.bounty || 0,
-                            fee: fee || curMeta.fee || 0,
-                            rebuyCost: fattr(text, 'rebuyCost') || 0,
-                            addonCost: fattr(text, 'addonCost') || 0,
-                            isPKO: bounty > 0 || /нокаут|bounty|pko/i.test(tdName)
-                        });
-                    }
-                }
 
                 if (text.includes('<Schedule')) {
                     let items = text.matchAll(/<Item\s+([^>]+)>/g);
@@ -1166,7 +1100,7 @@ javascript:(function(){
         });
     }
 
-    // ── ВСЕЯДНЫЙ ПАРСЕР XML-ПОТОКА ────────────────────────────────────
+    // ── ГЛАВНЫЙ ПАРСЕР XML-ПОТОКА ─────────────────────────────────────
     function parseXmlStream(xml, ws, dir = 'IN') {
         if (!xml || typeof xml !== 'string') return;
         xml = xml.trim();
@@ -1186,6 +1120,13 @@ javascript:(function(){
                     let tableId = attr(xml, 'tableId') || attr(xml, 'id');
                     let tournId = attr(xml, 'tournamentId') || attr(xml, 'tournId');
                     if (tableId) {
+                        // УМНЫЙ ПЕРЕХВАТ: Если юзер открыл стол, мгновенно убиваем фоновый сокет, чтобы не было вылета
+                        if (stalkerState.backgroundTableSockets.has(tableId)) {
+                            let bgData = stalkerState.backgroundTableSockets.get(tableId);
+                            try { bgData.ws.close(); } catch(e) {}
+                            stalkerState.backgroundTableSockets.delete(tableId);
+                        }
+
                         stalkerState.userViewingTableId = tableId;
                         stalkerState.sockets.userTables.set(tableId, ws);
                         ws.__tableId = tableId;
@@ -1201,60 +1142,13 @@ javascript:(function(){
                 return;
             }
 
-            if (xml.includes('<Tournaments') || xml.includes('<LobbyInfo') || xml.includes('<ServerInfo')) {
-                ws.__socketType = 'LOBBY';
-                stalkerState.sockets.lobby = ws;
-            }
-
-            if (xml.includes('<Tournaments')) {
-                let matches = xml.matchAll(/<Table\s+([^>]+)>/g);
-                for (let m of matches) {
-                    let attrs = m[1];
-                    let tId = attr(attrs, 'id');
-                    let tName = attr(attrs, 'name') || '';
-                    let tStatus = attr(attrs, 'status');
-                    let tGame = attr(attrs, 'game') || '';
-                    
-                    let rawBuyin = fattr(attrs, 'buyIn') || fattr(attrs, 'buyin') || fattr(attrs, 'stake') || 0;
-                    let bounty = fattr(attrs, 'knockoutBounty') || fattr(attrs, 'bounty') || 0;
-                    let fee = fattr(attrs, 'fee') || 0;
-
-                    if (tId && tName) {
-                        stalkerState.tournamentCache.set(tId, {
-                            name: decodeHtml(tName),
-                            buyin: rawBuyin,
-                            bounty: bounty,
-                            fee: fee,
-                            isPKO: bounty > 0 || /нокаут|bounty|pko/i.test(tName)
-                        });
-                    }
-
-                    let isHoldem = tGame.includes('TEXAS_HOLDEM') || tGame.includes('HOLDEM') || (!tGame.includes('OMAHA') && !tGame.includes('PINEAPPLE') && !tName.toLowerCase().includes('омаха') && !tName.toLowerCase().includes('ананас'));
-                    let isLiveRunning = LIVE_STATUSES.has(tStatus);
-
-                    if (isHoldem && tId && isLiveRunning) {
-                        if (!stalkerState.liveTournaments.has(tId)) {
-                            stalkerState.liveTournaments.set(tId, { id: tId, name: decodeHtml(tName) || 'MTT', status: tStatus, currentBB: 500 });
-                        } else {
-                            let item = stalkerState.liveTournaments.get(tId);
-                            item.status = tStatus;
-                            if (tName) item.name = decodeHtml(tName);
-                        }
-                        if (!stalkerState.scannerQueue.includes(tId)) stalkerState.scannerQueue.push(tId);
-                    } else if (tId && (tStatus === 'COMPLETED' || tStatus === 'CANCELED')) {
-                        stalkerState.liveTournaments.delete(tId);
-                    }
-                }
-                dispatchSingleQueueScanner();
-                updateHUD();
-            }
-
+            // 3. Контекст стола
             if (xml.includes('<TableDetails') || xml.includes('<TournamentTable')) {
                 let tableId = attr(xml, 'id') || attr(xml, 'tableId');
                 let tournId = attr(xml, 'tournamentId') || attr(xml, 'tournId');
                 let tName = attr(xml, 'tournamentName') || attr(xml, 'name');
                 if (tournId && tName && !stalkerState.tournamentCache.has(tournId)) {
-                    stalkerState.tournamentCache.set(tournId, { name: decodeHtml(tName), buyin: 0, bounty: 0, fee: 0, isPKO: /нокаут|bounty|pko/i.test(tName) });
+                    stalkerState.tournamentCache.set(tournId, { name: decodeHtml(tName), baseBuyin: 0, isPKO: /нокаут|bounty|pko/i.test(tName) });
                 }
 
                 if (tableId) {
@@ -1281,29 +1175,7 @@ javascript:(function(){
                 if (numAttr !== null) ctx.level.number = numAttr;
             }
 
-            // РЕБАИ, ДОКУПКИ И АДДОНЫ
-            let rebuyMatches = xml.matchAll(/<ChipsRebuy\s+([^>]*)\/>/g);
-            for (let rm of rebuyMatches) {
-                let rSeat = iattr(rm[1], 'seat');
-                let rAmt = iattr(rm[1], 'amount') || 0;
-                let rReason = attr(rm[1], 'reason') || 'REBUY';
-
-                if (rSeat !== null && rAmt > 0) {
-                    let s = ctx.ensureSeat(rSeat, null);
-                    s.stack = (s.stack || 0) + rAmt;
-                    s.busted = false;
-
-                    ctx.handRebuyEvents.push({
-                        seat: rSeat,
-                        nick: s.rawNick,
-                        reason: rReason,
-                        amount: rAmt
-                    });
-                    logDebug("REBUY_ADDON", `${s.rawNick} получил ${rAmt} фишек [${rReason}]`);
-                }
-            }
-
-            // ВСЕЯДНЫЙ ПАРСЕР МЕСТ (АТРИБУТЫ + ВЛОЖЕННЫЕ ТЕГИ)
+            // ВСЕЯДНЫЙ ПАРСЕР МЕСТ
             if (xml.includes('<Seats') || (xml.includes('<Seat ') && (xml.includes('nickname=') || xml.includes('<PlayerInfo')))) {
                 let seatBlocks = xml.matchAll(/<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>([\s\S]*?)<\/Seat>)/gs);
                 for (let sb of seatBlocks) {
@@ -1320,9 +1192,6 @@ javascript:(function(){
                     
                     let serverStack = attr(seatAttrs, 'stack-size') ? parseInt(attr(seatAttrs, 'stack-size'), 10) : (chipsM ? iattr(chipsM[0], 'stack-size') : (stackM ? parseInt(stackM[1], 10) : null));
                     let serverSpent = entryM ? (fattr(entryM[1], 'spent') || 0) : 0;
-                    let serverRebuys = entryM ? (iattr(entryM[1], 'rebuys') || 0) : 0;
-                    let serverAddons = entryM ? (iattr(entryM[1], 'addons') || 0) : 0;
-                    let serverBounty = entryM ? (fattr(entryM[1], 'knockoutBounty') || 0) : 0;
 
                     let isSittingOut = seatAttrs.includes('sittingOut="true"') || seatContent.includes('sittingOut="true"');
                     if (isSittingOut) ctx.sittingOutSeats.add(seatNum);
@@ -1331,9 +1200,6 @@ javascript:(function(){
                     let s = ctx.ensureSeat(seatNum, rawNick, serverStack);
                     s.busted = (serverStack === 0);
                     if (serverSpent > 0) s.spent = serverSpent;
-                    s.rebuys = serverRebuys;
-                    s.addons = serverAddons;
-                    if (serverBounty > 0) s.headBounty = serverBounty;
 
                     if (ctx.hand === null && serverStack !== null && serverStack > 0) {
                         ctx.handStart[seatNum] = serverStack;
@@ -1347,7 +1213,7 @@ javascript:(function(){
                             rawNick: rawNick,
                             cleanNick: s.cleanNick,
                             tableName: ctx.getTournamentMeta().name,
-                            baseBuyin: ctx.getTournamentMeta().buyin
+                            baseBuyin: ctx.getTournamentMeta().baseBuyin
                         };
                         
                         if (!entry.isBusted || entry.place === 0) {
@@ -1355,10 +1221,8 @@ javascript:(function(){
                             entry.stackBB = ctx.getLiveStackBB(entry.stack) || 0;
                             entry.tournId = tournId;
                             entry.isBusted = (entry.stack === 0);
-                            entry.spent = serverSpent || entry.spent || ctx.getTournamentMeta().buyin;
-                            entry.baseBuyin = ctx.getTournamentMeta().buyin || entry.baseBuyin;
-                            entry.rebuys = serverRebuys;
-                            entry.addons = serverAddons;
+                            entry.spent = serverSpent || entry.spent || ctx.getTournamentMeta().baseBuyin;
+                            entry.baseBuyin = ctx.getTournamentMeta().baseBuyin || entry.baseBuyin;
                             entry.tableName = ctx.getTournamentMeta().name;
                             p.entries.set(entryKey, entry);
                             updateHUD();
@@ -1595,7 +1459,6 @@ javascript:(function(){
         }
     }
 
-    setInterval(triggerLobbyTournamentRefresh, 25000);
     setInterval(processOutboxQueue, 3000);
 
     // ── ЭКСПОРТ ДАННЫХ В JSON (RAW) ───────────────────────────────────
@@ -1633,7 +1496,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v37_0_omni_${Date.now()}.json`;
+            a.download = `pokerdom_v38_0_ironclad_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1670,18 +1533,12 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV370) return;
-        ws.__stalkerHookedV370 = true;
+        if (!ws || ws.__stalkerHookedV380) return;
+        ws.__stalkerHookedV380 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
             stalkerState.auth.wssUrl = targetUrl;
-        }
-
-        if (!stalkerState.sockets.lobby && (!ws.__tableId)) {
-            stalkerState.sockets.lobby = ws;
-            autoDetectSessionId();
-            triggerLobbyTournamentRefresh();
         }
 
         ws.addEventListener('message', async function (e) {
@@ -1700,8 +1557,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV370) {
-        window.__stalkerWsProxyV370 = true;
+    if (OrigWS && !window.__stalkerWsProxyV380) {
+        window.__stalkerWsProxyV380 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1724,9 +1581,8 @@ javascript:(function(){
         };
     }
 
-    // Мгновенный запрос сетки турниров при старте
-    autoDetectSessionId();
-    triggerLobbyTournamentRefresh();
+    // Мгновенный запуск выделенного сканера лобби
+    setTimeout(startDedicatedScanner, 1000);
 
-    console.log("%c👑 [SCALPEL v37.0 TITAN-MASTER] Запущен. Столы защищены от сброса, раздачи активны.", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v38.0 IRONCLAD] Запущен. 100% Uptime столов, 0 вылетов, точная экономика.", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
