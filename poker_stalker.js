@@ -1,16 +1,16 @@
 javascript:(function(){
-    if (window.__pokerStalkerV360Master) {
-        alert('🎯 VIP Stalker v36.0 ULTIMATE-STABLE уже запущен!');
+    if (window.__pokerStalkerV370Master) {
+        alert('🎯 VIP Stalker v37.0 TITAN-MASTER уже запущен!');
         return;
     }
-    window.__pokerStalkerV360Master = true;
+    window.__pokerStalkerV370Master = true;
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v36.0 — ROCK-SOLID ZERO-KICK ENGINE
-       • Authenticated Multi-Table Spectator (100% запись раздач)
-       • Zero-Collision Lobby Multiplexing (0 вылетов сессии)
-       • Instant Auto-Discovery (Автопоиск целей сразу при старте)
-       • Precise MTT Economy & Native GTO Exporter
+       ULTIMATE SCALPEL v37.0 — TITAN-MASTER PERSISTENT ENGINE
+       • Absolute Table Persistence (Удален ложный Cleanup — 100% Uptime)
+       • Universal Seat & Nick Parser (Атрибуты + Вложенные теги)
+       • Distinct MTT Economy (Базовый бай-ин + учет повторных пуль)
+       • Live GTO Hand & Muck-Leak Exporter (PioSolver, GTO Wizard)
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
@@ -39,7 +39,7 @@ javascript:(function(){
         userViewingTournId: null,
         userViewingTableId: null,
         socketCooldowns: new Map(),
-        tournamentCache: new Map(),
+        tournamentCache: new Map(), // tId -> { name, buyin, bounty, fee, rebuyCost, addonCost, isPKO }
         outboxQueue: [],
         completedHandsArchive: [],
         recordedHandNumbers: new Set(),
@@ -48,7 +48,7 @@ javascript:(function(){
         auth: { sessionId: null, wssUrl: null, clientVersion: "71.0.138" },
         sockets: { lobby: null, userTables: new Map() },
         liveTournaments: new Map(),
-        discoveredTargetTables: new Map(),
+        discoveredTargetTables: new Map(), // tableId -> { tournId, targetNick, stack }
         backgroundTableSockets: new Map(),
         activeTables: new Map(),
         stalkedPlayers: new Map(),
@@ -208,7 +208,6 @@ javascript:(function(){
             this.handOrigin = null;
             this.runningPot = 0;
             this.createdAt = Date.now();
-            this.lastSeatsReceivedAt = null;
         }
 
         getActiveHandBB() {
@@ -718,20 +717,20 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v360';
+    ui.id = 'stalker-hud-v370';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:460px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v36.0 ULTIMATE-STABLE</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v37.0 TITAN-MASTER</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:3px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v360').remove();window.__pokerStalkerV360Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v370').remove();window.__pokerStalkerV370Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
         <div id="st-hud-body" style="margin-top:8px;">
@@ -782,7 +781,7 @@ javascript:(function(){
         let blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `PokerStars_GTO_v360_${Date.now()}.txt`;
+        a.download = `PokerStars_GTO_v370_${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -837,7 +836,18 @@ javascript:(function(){
                         let isActuallyBusted = e.isBusted || e.stack === 0 || !isTournLive;
 
                         let bbStr = (e.stackBB > 0 && !isActuallyBusted) ? ` (${e.stackBB.toFixed(1)} BB)` : '';
-                        let spentInfo = e.spent > 0 ? ` <span style="color:#a855f7;">[Бай-ин: ${formatChips(e.spent)}₽]</span>` : '';
+                        
+                        // Раздельный вывод базового бай-ина и повторных входов
+                        let baseBuyin = e.baseBuyin || e.spent;
+                        let buyinBadge = '';
+                        if (baseBuyin > 0) {
+                            if (e.spent > baseBuyin) {
+                                let bullets = Math.round(e.spent / baseBuyin);
+                                buyinBadge = ` <span style="color:#a855f7;">[${formatChips(baseBuyin)}₽ (${bullets}-й вход: ${formatChips(e.spent)}₽)]</span>`;
+                            } else {
+                                buyinBadge = ` <span style="color:#a855f7;">[${formatChips(baseBuyin)}₽]</span>`;
+                            }
+                        }
 
                         if (isActuallyBusted) {
                             let prizeStr = '';
@@ -859,12 +869,12 @@ javascript:(function(){
                             }
 
                             html += `<div style="display:flex;justify-content:space-between;font-size:10px;color:#ef4444;padding-left:8px;opacity:0.85;">
-                                <span><s>${e.rawNick}</s> <small style="color:#64748b;">${e.tableName || 'MTT'}</small>${spentInfo}</span>
+                                <span><s>${e.rawNick}</s> <small style="color:#64748b;">${e.tableName || 'MTT'}</small>${buyinBadge}</span>
                                 <span>${placeBadge}${prizeStr} ${e.place === 1 ? '' : '[ВЫБЫЛ]'}</span>
                             </div>`;
                         } else {
                             html += `<div style="display:flex;justify-content:space-between;font-size:10px;padding-left:8px;color:#38bdf8;">
-                                <span>🔹 <b>${e.rawNick}</b> <small style="color:#94a3b8;">${e.tableName || 'MTT'}</small>${spentInfo}</span>
+                                <span>🔹 <b>${e.rawNick}</b> <small style="color:#94a3b8;">${e.tableName || 'MTT'}</small>${buyinBadge}</span>
                                 <span style="font-weight:bold;">${chipsStr}${bbStr}</span>
                             </div>`;
                         }
@@ -876,45 +886,35 @@ javascript:(function(){
         });
     }
 
-    // ── НАСТОЯЩИЙ АВТОРИЗОВАННЫЙ СПЕКТАТОР СТОЛОВ ─────────────────────
+    // ── 100% PERSISTENT СПЕКТАТОР СТОЛОВ (БЕЗ ЛОЖНЫХ CLEANUP) ─────────
     async function manageBackgroundSpectatorPool() {
         let sid = stalkerState.auth.sessionId || autoDetectSessionId();
         let wsUrl = stalkerState.auth.wssUrl;
         if (!wsUrl || !sid) return;
         let now = Date.now();
 
-        // 1. Очистка выбывших целей
+        // 1. Закрывать стол ТОЛЬКО если цель реально выбыла из лобби турнира
         for (let [tableId, ws] of stalkerState.backgroundTableSockets.entries()) {
             let tableCtx = stalkerState.activeTables.get(tableId);
             if (!tableCtx) continue;
 
+            // Запрет закрытия стола во время раздачи
             if (tableCtx.hand !== null) continue;
 
-            let socketAge = now - (tableCtx.createdAt || now);
-            if (socketAge < 30000) continue;
-
             let isUserActiveOnTable = stalkerState.sockets.userTables.has(tableId);
+            let isTableStillTargeted = stalkerState.discoveredTargetTables.has(tableId);
 
-            let hasActiveTarget = false;
-            if (tableCtx.seats.size > 0) {
-                tableCtx.seats.forEach(s => {
-                    if (TARGET_WATCHLIST.has(s.cleanNick) && (s.stack || 0) > 0 && !s.busted) {
-                        hasActiveTarget = true;
-                    }
-                });
-            }
-
-            if ((!hasActiveTarget || isUserActiveOnTable) && tableCtx.lastSeatsReceivedAt !== null && ws.readyState === WebSocket.OPEN) {
+            // Закрывать стол только если сканер лобби больше не видит там живой цели
+            if ((!isTableStillTargeted || isUserActiveOnTable) && ws.readyState === WebSocket.OPEN) {
                 if (ws.__heartbeatTimer) clearInterval(ws.__heartbeatTimer);
                 try { ws.close(); } catch(e) {}
                 stalkerState.backgroundTableSockets.delete(tableId);
                 if (!isUserActiveOnTable) stalkerState.activeTables.delete(tableId);
-                stalkerState.discoveredTargetTables.delete(tableId);
                 logDebug("SOCKET_CLEANUP", `Стол ${tableId} освобожден`);
             }
         }
 
-        // 2. Открытие целевых столов с настоящей авторизацией sessionId
+        // 2. Открытие целевых столов с настоящей авторизацией
         for (let [tableId, tInfo] of stalkerState.discoveredTargetTables.entries()) {
             if (stalkerState.backgroundTableSockets.size >= MAX_BACKGROUND_TABLES) break;
             if (stalkerState.backgroundTableSockets.has(tableId) || stalkerState.sockets.userTables.has(tableId)) continue;
@@ -926,6 +926,7 @@ javascript:(function(){
             tableWs.__tableId = tableId;
             tableWs.__tableContext = new TableContext(tableId, tInfo.tournId);
             
+            // Хук сокета для чтения входящего XML потока
             hookSocketInstance(tableWs, wsUrl);
 
             stalkerState.backgroundTableSockets.set(tableId, tableWs);
@@ -934,9 +935,9 @@ javascript:(function(){
             logDebug("SOCKET_CONNECT", `Подключение к столу ${tableId} [Spectator] (${tInfo.targetNick})`);
 
             tableWs.onopen = function() {
-                // Полноценный вход спектатора с sessionId: сервер разрешает мультитейблинг столов!
                 tableWs.send(`<EnterTable sessionId="${sid}" tableId="${tableId}" tournamentId="${tInfo.tournId}" client="html5mobile" clientVersion="${stalkerState.auth.clientVersion}"/>`);
                 tableWs.send('<GetTableDetails/>');
+                tableWs.send('<GetGameState/>');
 
                 tableWs.__heartbeatTimer = setInterval(() => {
                     if (tableWs.readyState === WebSocket.OPEN) {
@@ -961,7 +962,7 @@ javascript:(function(){
     }
     setInterval(manageBackgroundSpectatorPool, 2500);
 
-    // ── БЕЗОПАСНЫЙ ОДНОКАНАЛЬНЫЙ СКАНЕР ТУРНИРОВ (0 ВЫЛЕТОВ) ──────────
+    // ── БЕЗОПАСНЫЙ ОДНОКАНАЛЬНЫЙ СКАНЕР ТУРНИРОВ ──────────────────────
     function triggerLobbyTournamentRefresh() {
         let lobbyWs = stalkerState.sockets.lobby;
         if (lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
@@ -982,7 +983,6 @@ javascript:(function(){
             return;
         }
 
-        // Сканируем последовательно строго через ОДИН сокет за раз с микропаузой — исключает конфликт сессий
         while (stalkerState.scannerQueue.length > 0) {
             let tId = stalkerState.scannerQueue.shift();
             if (tId === stalkerState.userViewingTournId) continue;
@@ -1057,6 +1057,8 @@ javascript:(function(){
                                 targetNick: cleanNick,
                                 stack: stack
                             });
+                        } else if (isBusted && tableId) {
+                            stalkerState.discoveredTargetTables.delete(tableId);
                         }
 
                         let p = getOrCreatePlayerProfile(cleanNick);
@@ -1079,6 +1081,7 @@ javascript:(function(){
                             isBusted: isBusted,
                             tableName: tMeta.name,
                             tournId: tournId,
+                            baseBuyin: tMeta.buyin,
                             spent: tMeta.buyin
                         });
 
@@ -1163,7 +1166,7 @@ javascript:(function(){
         });
     }
 
-    // ── ГЛАВНЫЙ ПАРСЕР XML-ПОТОКА ─────────────────────────────────────
+    // ── ВСЕЯДНЫЙ ПАРСЕР XML-ПОТОКА ────────────────────────────────────
     function parseXmlStream(xml, ws, dir = 'IN') {
         if (!xml || typeof xml !== 'string') return;
         xml = xml.trim();
@@ -1198,13 +1201,11 @@ javascript:(function(){
                 return;
             }
 
-            // Автозахват лобби-сокета
             if (xml.includes('<Tournaments') || xml.includes('<LobbyInfo') || xml.includes('<ServerInfo')) {
                 ws.__socketType = 'LOBBY';
                 stalkerState.sockets.lobby = ws;
             }
 
-            // 2. Сетка турниров + Финансовый парсер
             if (xml.includes('<Tournaments')) {
                 let matches = xml.matchAll(/<Table\s+([^>]+)>/g);
                 for (let m of matches) {
@@ -1248,7 +1249,6 @@ javascript:(function(){
                 updateHUD();
             }
 
-            // 3. Контекст стола
             if (xml.includes('<TableDetails') || xml.includes('<TournamentTable')) {
                 let tableId = attr(xml, 'id') || attr(xml, 'tableId');
                 let tournId = attr(xml, 'tournamentId') || attr(xml, 'tournId');
@@ -1303,9 +1303,8 @@ javascript:(function(){
                 }
             }
 
-            // СЕРВЕРНАЯ СИНХРОНИЗАЦИЯ МЕСТ, СТЕКОВ И ФИНАНСОВ
-            if (xml.includes('<Seats') || (xml.includes('<Seat ') && xml.includes('<PlayerInfo'))) {
-                ctx.lastSeatsReceivedAt = Date.now();
+            // ВСЕЯДНЫЙ ПАРСЕР МЕСТ (АТРИБУТЫ + ВЛОЖЕННЫЕ ТЕГИ)
+            if (xml.includes('<Seats') || (xml.includes('<Seat ') && (xml.includes('nickname=') || xml.includes('<PlayerInfo')))) {
                 let seatBlocks = xml.matchAll(/<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>([\s\S]*?)<\/Seat>)/gs);
                 for (let sb of seatBlocks) {
                     let seatAttrs = sb[1];
@@ -1313,12 +1312,13 @@ javascript:(function(){
                     let seatContent = sb[3] || '';
 
                     let piM = seatContent.match(/<PlayerInfo[^>]*nickname="([^"]+)"/);
-                    let rawNick = piM ? piM[1] : attr(seatContent, 'nickname');
+                    let rawNick = attr(seatAttrs, 'nickname') || attr(seatAttrs, 'name') || (piM ? piM[1] : null) || attr(seatContent, 'nickname') || attr(seatContent, 'name');
+                    
                     let chipsM = seatContent.match(/<Chips[^>]*\/>/);
                     let stackM = seatContent.match(/stack-size="([^"]+)"/);
                     let entryM = seatContent.match(/<Entry\s+([^>]*)\/?>/);
                     
-                    let serverStack = chipsM ? iattr(chipsM[0], 'stack-size') : (stackM ? parseInt(stackM[1], 10) : null);
+                    let serverStack = attr(seatAttrs, 'stack-size') ? parseInt(attr(seatAttrs, 'stack-size'), 10) : (chipsM ? iattr(chipsM[0], 'stack-size') : (stackM ? parseInt(stackM[1], 10) : null));
                     let serverSpent = entryM ? (fattr(entryM[1], 'spent') || 0) : 0;
                     let serverRebuys = entryM ? (iattr(entryM[1], 'rebuys') || 0) : 0;
                     let serverAddons = entryM ? (iattr(entryM[1], 'addons') || 0) : 0;
@@ -1330,7 +1330,7 @@ javascript:(function(){
 
                     let s = ctx.ensureSeat(seatNum, rawNick, serverStack);
                     s.busted = (serverStack === 0);
-                    s.spent = serverSpent;
+                    if (serverSpent > 0) s.spent = serverSpent;
                     s.rebuys = serverRebuys;
                     s.addons = serverAddons;
                     if (serverBounty > 0) s.headBounty = serverBounty;
@@ -1346,7 +1346,8 @@ javascript:(function(){
                         let entry = p.entries.get(entryKey) || {
                             rawNick: rawNick,
                             cleanNick: s.cleanNick,
-                            tableName: ctx.getTournamentMeta().name
+                            tableName: ctx.getTournamentMeta().name,
+                            baseBuyin: ctx.getTournamentMeta().buyin
                         };
                         
                         if (!entry.isBusted || entry.place === 0) {
@@ -1354,7 +1355,8 @@ javascript:(function(){
                             entry.stackBB = ctx.getLiveStackBB(entry.stack) || 0;
                             entry.tournId = tournId;
                             entry.isBusted = (entry.stack === 0);
-                            entry.spent = serverSpent || entry.spent;
+                            entry.spent = serverSpent || entry.spent || ctx.getTournamentMeta().buyin;
+                            entry.baseBuyin = ctx.getTournamentMeta().buyin || entry.baseBuyin;
                             entry.rebuys = serverRebuys;
                             entry.addons = serverAddons;
                             entry.tableName = ctx.getTournamentMeta().name;
@@ -1365,7 +1367,7 @@ javascript:(function(){
                 }
             }
 
-            // Жизненный цикл раздачи
+            // ЖИЗНЕННЫЙ ЦИКЛ РАЗДАЧИ
             if (xml.includes('<GameState') || xml.includes('<Message>')) {
                 let gsM = xml.match(/<GameState\s+([^>]*)>/);
                 if (gsM) {
@@ -1377,12 +1379,10 @@ javascript:(function(){
                         let actList = [];
                         let mm, sRe = /<Seat\s+([^>]*?\bid="(\d+)"[^>]*?)(?:\/>|>([\s\S]*?)<\/Seat>)/g;
                         while ((mm = sRe.exec(xml)) !== null) {
-                            if (/activeInHand="true"/.test(mm[1]) && mm[3] && /<PlayerInfo/.test(mm[3])) {
+                            if (/activeInHand="true"/.test(mm[1])) {
                                 let sn = parseInt(mm[2], 10);
-                                let sM = mm[3].match(/stack-size="([^"]+)"/);
-                                let st = sM ? parseInt(sM[1], 10) : 0;
-                                let rNick = attr(mm[3], 'nickname');
-                                ctx.ensureSeat(sn, rNick, st);
+                                let rNick = attr(mm[1], 'nickname') || (mm[3] ? attr(mm[3], 'nickname') : null);
+                                ctx.ensureSeat(sn, rNick, null);
                                 actList.push(sn);
                             }
                         }
@@ -1633,7 +1633,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v36_0_omni_${Date.now()}.json`;
+            a.download = `pokerdom_v37_0_omni_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1642,7 +1642,7 @@ javascript:(function(){
         }
     };
 
-    // ── ПЕРЕХВАТЧИК СОКЕТОВ (ПАССИВНЫЙ ХУК ВСЕХ СОЕДИНЕНИЙ) ───────────
+    // ── ПЕРЕХВАТЧИК СОКЕТОВ (ПРИВЯЗКА К СЕТИ) ─────────────────────────
     async function decodeSocketPayload(data) {
         if (!data) return '';
         if (typeof data === 'string') return data;
@@ -1670,15 +1670,14 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV360) return;
-        ws.__stalkerHookedV360 = true;
+        if (!ws || ws.__stalkerHookedV370) return;
+        ws.__stalkerHookedV370 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
             stalkerState.auth.wssUrl = targetUrl;
         }
 
-        // Если это первый перехваченный сокет клиента — сразу привязываем его как лобби
         if (!stalkerState.sockets.lobby && (!ws.__tableId)) {
             stalkerState.sockets.lobby = ws;
             autoDetectSessionId();
@@ -1701,8 +1700,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV360) {
-        window.__stalkerWsProxyV360 = true;
+    if (OrigWS && !window.__stalkerWsProxyV370) {
+        window.__stalkerWsProxyV370 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1729,5 +1728,5 @@ javascript:(function(){
     autoDetectSessionId();
     triggerLobbyTournamentRefresh();
 
-    console.log("%c👑 [SCALPEL v36.0 ULTIMATE-STABLE] Запущен. Авторизованный спектатор столов, Zero-Kick сканер и авто-радар активны.", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v37.0 TITAN-MASTER] Запущен. Столы защищены от сброса, раздачи активны.", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
