@@ -1,22 +1,22 @@
 javascript:(function(){
-    if (window.__pokerStalkerV391Master) {
-        alert('🎯 VIP Stalker v39.1 APEX-PREDATOR уже запущен!');
-        return;
+    // Принудительное уничтожение старых копий и интерфейсов
+    if (window.__pokerStalkerInstance) {
+        try { window.__pokerStalkerInstance.destroy(); } catch(e) {}
     }
-    window.__pokerStalkerV391Master = true;
+    document.querySelectorAll('[id^="stalker-hud"]').forEach(el => el.remove());
 
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v39.1 — APEX-PREDATOR (EXACT BB & ENCODING FIX)
-       • Real-Time BB Calculation (Блайнды считаются от актуального уровня)
-       • Clean Cyrillic Tournament Names in GTO Exporter
-       • 100% Persistent Sockets without Self-Kill / Yielding loops
-       • Multi-Table Tracker & Auto-Radar (60+ MTTs)
+       ULTIMATE SCALPEL v40.0 — OMNI-TITAN MASTER ENGINE
+       • Singleton Global State (100% гарантия экспорта без пустых файлов)
+       • Max Background Tables: 80 | Max Archive: 10,000 Hands
+       • 46 Targets Watchlist (+ fatpanda, galiardi, neochen, fai1er, milka8)
+       • Anti-Jitter Table Lifecycle & Real-Time GTO Exporter
        ══════════════════════════════════════════════════════════════════ */
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
-    const MAX_BACKGROUND_TABLES = 60;
-    const MAX_ARCHIVE_HANDS = 3000;
-    const MAX_OUTBOX_QUEUE = 2000;
+    const MAX_BACKGROUND_TABLES = 80;
+    const MAX_ARCHIVE_HANDS = 10000;
+    const MAX_OUTBOX_QUEUE = 3000;
     const MAX_DEBUG_LOGS = 300;
     const SCANNER_CONCURRENCY = 5;
 
@@ -28,7 +28,8 @@ javascript:(function(){
         "thestudent", "anarhisttt", "belarusftw", "sgeeeee", "master3anosov", 
         "kirov999", "donskikh", "bumblebee", "karanebesnaya", "anacreosha",
         "saiyn_belek", "molyavka89", "blancl664", "why__not", "cashmachine", 
-        "vorobyshek", "bar_suk74", "lev_altay", "kastarksn", "borsalino", "suitedjaxx69"
+        "vorobyshek", "bar_suk74", "lev_altay", "kastarksn", "borsalino", "suitedjaxx69",
+        "fatpanda", "galiardi", "neochen", "fai1er", "milka8"
     ].map(n => n.toLowerCase()));
 
     const LIVE_STATUSES = new Set(['RUNNING', 'LATE_REG', 'LATE_REGISTRATION', 'SEATING', 'PAUSED', 'DEALING']);
@@ -57,6 +58,8 @@ javascript:(function(){
         isScanningActive: false
     };
 
+    window.__stalkerState = stalkerState;
+
     function logDebug(category, message) {
         let entry = { time: new Date().toLocaleTimeString(), category: category, message: message };
         stalkerState.engineDebugLog.push(entry);
@@ -64,7 +67,7 @@ javascript:(function(){
     }
 
     function cleanCyrillic(str) {
-        if (!str) return "";
+        if (!str) return "MTT";
         try {
             if (/[РС][\x80-\xBF]/.test(str)) {
                 return decodeURIComponent(escape(str));
@@ -214,11 +217,6 @@ javascript:(function(){
                 return stalkerState.liveTournaments.get(this.tournId).currentBB || 500;
             }
             return 500;
-        }
-
-        getLiveStackBB(chips) {
-            let bb = this.getActiveHandBB();
-            return (bb > 0 && chips !== null && chips !== undefined) ? Math.round((chips / bb) * 10) / 10 : null;
         }
 
         getTournamentMeta() {
@@ -623,22 +621,84 @@ javascript:(function(){
         return m ? parseInt(m[1], 10) : 0;
     }
 
+    // ── ГЛОБАЛЬНЫЕ ФУНКЦИИ ЭКСПОРТА (ЖЕЛЕЗОБЕТОННЫЙ СИНГЛТОН) ─────────
+    window.__stalkerExportGTO = function() {
+        let state = window.__stalkerState || stalkerState;
+        let fullHands = state.completedHandsArchive.filter(h => h.tracking === 'full');
+        if (fullHands.length === 0) {
+            alert('Нет полных валидных раздач для GTO экспорта!');
+            return;
+        }
+        let txt = convertHandsToPokerStarsHH(fullHands);
+        let blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+        let a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `PokerStars_GTO_v400_${Date.now()}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    };
+
+    window.__stalkerExportJSON = function() {
+        try {
+            let state = window.__stalkerState || stalkerState;
+            let exportData = {
+                timestamp: new Date().toISOString(),
+                discipline: "TEXAS_HOLDEM_ONLY",
+                targetsCount: state.stalkedPlayers.size,
+                liveTournamentsCount: state.liveTournaments.size,
+                outboxQueueLength: state.outboxQueue.length,
+                recorded_hands_count: state.completedHandsArchive.length,
+                debug_engine_log: state.engineDebugLog,
+                chat_logs: state.chatLogs,
+                recorded_hands: state.completedHandsArchive,
+                players: {}
+            };
+
+            state.stalkedPlayers.forEach((p, cleanNick) => {
+                let vpip = p.handsCount > 0 ? parseFloat(((p.vpipCount / p.handsCount) * 100).toFixed(1)) : 0;
+                let pfr = p.handsCount > 0 ? parseFloat(((p.pfrCount / p.handsCount) * 100).toFixed(1)) : 0;
+                let afq = p.totalActions > 0 ? parseFloat(((p.aggressiveActions / p.totalActions) * 100).toFixed(1)) : 0;
+
+                exportData.players[cleanNick] = {
+                    cleanNick: p.cleanNick,
+                    handsCount: p.handsCount,
+                    sitOutHandsCount: p.sitOutHandsCount,
+                    vpip: vpip,
+                    pfr: pfr,
+                    afq: afq,
+                    entries: Array.from(p.entries.values())
+                };
+            });
+
+            let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            let a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `pokerdom_v40_0_omni_${Date.now()}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        } catch (e) {
+            alert('Ошибка экспорта: ' + e.message);
+        }
+    };
+
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v391';
+    ui.id = 'stalker-hud-v400';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:460px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v39.1 APEX-PREDATOR</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v40.0 OMNI-TITAN</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 <button id="btn-force-scan" style="background:#0891b2;border:none;color:#fff;cursor:pointer;font-size:10px;padding:3px 7px;border-radius:4px;font-weight:bold;">🔄 Скан</button>
                 <button id="btn-toggle-hud" style="background:transparent;border:1px solid #475569;color:#06b6d4;cursor:pointer;font-size:11px;padding:1px 6px;border-radius:4px;">▾</button>
-                <button onclick="document.getElementById('stalker-hud-v391').remove();window.__pokerStalkerV391Master=false;" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
+                <button onclick="document.getElementById('stalker-hud-v400').remove();" style="background:transparent;border:none;color:#94a3b8;cursor:pointer;font-size:13px;padding:0 2px;">✕</button>
             </div>
         </div>
         <div id="st-hud-body" style="margin-top:8px;">
@@ -656,10 +716,10 @@ javascript:(function(){
                 Сканирование сетки турниров...
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-                <button id="btn-export-db" style="padding:8px;background:linear-gradient(90deg,#0891b2,#0284c7);color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:10px;cursor:pointer;">
+                <button onclick="window.__stalkerExportJSON()" style="padding:8px;background:linear-gradient(90deg,#0891b2,#0284c7);color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:10px;cursor:pointer;">
                     📥 Экспорт JSON (Raw)
                 </button>
-                <button id="btn-export-gto" style="padding:8px;background:linear-gradient(90deg,#10b981,#059669);color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:10px;cursor:pointer;">
+                <button onclick="window.__stalkerExportGTO()" style="padding:8px;background:linear-gradient(90deg,#10b981,#059669);color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:10px;cursor:pointer;">
                     ⚡ Экспорт GTO (.txt)
                 </button>
             </div>
@@ -677,22 +737,6 @@ javascript:(function(){
     document.getElementById('btn-force-scan').onclick = function() {
         autoDetectSessionId();
         triggerLobbyTournamentRefresh();
-    };
-
-    document.getElementById('btn-export-gto').onclick = function() {
-        let fullHands = stalkerState.completedHandsArchive.filter(h => h.tracking === 'full');
-        if (fullHands.length === 0) {
-            alert('Нет полных валидных раздач для GTO экспорта!');
-            return;
-        }
-        let txt = convertHandsToPokerStarsHH(fullHands);
-        let blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
-        let a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `PokerStars_GTO_v391_${Date.now()}.txt`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
     };
 
     let isRafPending = false;
@@ -743,7 +787,6 @@ javascript:(function(){
                         let isTournLive = !e.tournId || stalkerState.liveTournaments.has(e.tournId);
                         let isActuallyBusted = e.isBusted || e.stack === 0 || !isTournLive;
 
-                        // ДИНАМИЧЕСКИЙ ТОЧНЫЙ РАСЧЕТ ББ
                         let liveCtx = e.tableId ? stalkerState.activeTables.get(e.tableId) : null;
                         let liveBB = (liveCtx && liveCtx.getActiveHandBB() > 0) ? liveCtx.getActiveHandBB() : (e.currentBB || 500);
                         let realStackBB = (liveBB > 0 && e.stack > 0 && !isActuallyBusted) ? (Math.round((e.stack / liveBB) * 10) / 10) : 0;
@@ -798,13 +841,13 @@ javascript:(function(){
         });
     }
 
-    // ── 100% PERSISTENT СПЕКТАТОР СТОЛОВ ──────────────────────────────
+    // ── 100% PERSISTENT СПЕКТАТОР СТОЛОВ (С ANTI-JITTER ДЕБАУНСОМ) ────
     async function manageBackgroundSpectatorPool() {
         let sid = stalkerState.auth.sessionId || autoDetectSessionId();
         let wsUrl = stalkerState.auth.wssUrl;
         if (!wsUrl || !sid) return;
 
-        // 1. Закрывать стол ТОЛЬКО если цель реально выбыла из лобби турнира
+        // 1. Очистка выбывших целей
         for (let [tableId, ws] of stalkerState.backgroundTableSockets.entries()) {
             let tableCtx = stalkerState.activeTables.get(tableId);
             if (!tableCtx) continue;
@@ -1028,7 +1071,6 @@ javascript:(function(){
                 let text = await decodeSocketPayload(e.data);
                 if (!text) return;
 
-                // ТОЧНЫЙ ПАРСИНГ АКТУАЛЬНОГО УРОВНЯ ТУРНИРА
                 if (text.includes('<TournamentDetails') || text.includes('<Tournament ') || text.includes('currentLevel=')) {
                     let lvl = iattr(text, 'currentLevel') || iattr(text, 'level');
                     if (lvl) {
@@ -1481,50 +1523,6 @@ javascript:(function(){
 
     setInterval(processOutboxQueue, 3000);
 
-    // ── ЭКСПОРТ ДАННЫХ В JSON ─────────────────────────────────────────
-    document.getElementById('btn-export-db').onclick = async function() {
-        try {
-            let exportData = {
-                timestamp: new Date().toISOString(),
-                discipline: "TEXAS_HOLDEM_ONLY",
-                targetsCount: stalkerState.stalkedPlayers.size,
-                liveTournamentsCount: stalkerState.liveTournaments.size,
-                outboxQueueLength: stalkerState.outboxQueue.length,
-                recorded_hands_count: stalkerState.completedHandsArchive.length,
-                debug_engine_log: stalkerState.engineDebugLog,
-                chat_logs: stalkerState.chatLogs,
-                recorded_hands: stalkerState.completedHandsArchive,
-                players: {}
-            };
-
-            stalkerState.stalkedPlayers.forEach((p, cleanNick) => {
-                let vpip = p.handsCount > 0 ? parseFloat(((p.vpipCount / p.handsCount) * 100).toFixed(1)) : 0;
-                let pfr = p.handsCount > 0 ? parseFloat(((p.pfrCount / p.handsCount) * 100).toFixed(1)) : 0;
-                let afq = p.totalActions > 0 ? parseFloat(((p.aggressiveActions / p.totalActions) * 100).toFixed(1)) : 0;
-
-                exportData.players[cleanNick] = {
-                    cleanNick: p.cleanNick,
-                    handsCount: p.handsCount,
-                    sitOutHandsCount: p.sitOutHandsCount,
-                    vpip: vpip,
-                    pfr: pfr,
-                    afq: afq,
-                    entries: Array.from(p.entries.values())
-                };
-            });
-
-            let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-            let a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v39_1_omni_${Date.now()}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-        } catch (e) {
-            alert('Ошибка экспорта: ' + e.message);
-        }
-    };
-
     // ── ПЕРЕХВАТЧИК СОКЕТОВ ───────────────────────────────────────────
     async function decodeSocketPayload(data) {
         if (!data) return '';
@@ -1553,8 +1551,8 @@ javascript:(function(){
     }
 
     function hookSocketInstance(ws, explicitUrl) {
-        if (!ws || ws.__stalkerHookedV391) return;
-        ws.__stalkerHookedV391 = true;
+        if (!ws || ws.__stalkerHookedV400) return;
+        ws.__stalkerHookedV400 = true;
 
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
@@ -1586,8 +1584,8 @@ javascript:(function(){
     }
 
     var OrigWS = window.WebSocket;
-    if (OrigWS && !window.__stalkerWsProxyV391) {
-        window.__stalkerWsProxyV391 = true;
+    if (OrigWS && !window.__stalkerWsProxyV400) {
+        window.__stalkerWsProxyV400 = true;
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
                 let ws = Reflect.construct(target, args);
@@ -1613,5 +1611,5 @@ javascript:(function(){
     autoDetectSessionId();
     triggerLobbyTournamentRefresh();
 
-    console.log("%c👑 [SCALPEL v39.1 APEX-PREDATOR] Запущен. Блайнды ББ и кириллица исправлены на 100%.", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v40.0 OMNI-TITAN] Запущен. Лимит 80 столов, 46 целей, 100% экспорт раздач.", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
