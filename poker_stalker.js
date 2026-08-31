@@ -1,13 +1,19 @@
 javascript:(function(){
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v49.0 — APEX-RESILIENCE (ANTI-SPLIT-BRAIN)
-       • Global Namespace Architecture (100% Immune to Re-injections)
-       • Auto-Healing Sockets (Recovers from Session Drops/Disconnects)
-       • Pure Delta Architecture (100% Flawless Chip Conservation)
-       • Restored GTO Exporter & Dynamic State-Machine for Dense DSL
+       ULTIMATE SCALPEL v50.0 — APEX-ULTRA (FULL LOBBY AUTO-SCAN)
+       • Global OrigWS Scope Fix (Lobby Scanner & Spectator Spawner Restored)
+       • Instant Multi-Tournament Parallel Pagination
+       • Auto-Socket Adoption & Anti-Split-Brain State Architecture
+       • Pure Delta Hand Tracking & Restored GTO/DSL Engine
        ══════════════════════════════════════════════════════════════════ */
 
-    // 1. ГЛОБАЛЬНЫЙ ДЕСТРУКТОР (Убиваем старые инстансы чисто)
+    // 1. БЕЗОПАСНЫЙ ЗАХВАТ ИСХОДНОГО WEBSOCKET
+    if (!window.__SCALPEL_ORIG_WS) {
+        window.__SCALPEL_ORIG_WS = window.WebSocket;
+    }
+    const OrigWS = window.__SCALPEL_ORIG_WS;
+
+    // 2. ДЕСТРУКТОР СТАРОГО ИНСТАНСА
     if (window.__SCALPEL && typeof window.__SCALPEL.destroy === 'function') {
         try { window.__SCALPEL.destroy(); } catch(e) {}
     }
@@ -18,7 +24,7 @@ javascript:(function(){
     const MAX_ARCHIVE_HANDS = 10000;
     const MAX_OUTBOX_QUEUE = 3000;
     const MAX_DEBUG_LOGS = 300;
-    const SCANNER_CONCURRENCY = 5;
+    const SCANNER_CONCURRENCY = 6;
 
     const TARGET_LIST = [
         "vesnushka", "bagzik", "nogano777", "dostigatel", "bankiir", 
@@ -38,7 +44,6 @@ javascript:(function(){
     const LIVE_STATUSES = new Set(['RUNNING', 'LATE_REG', 'LATE_REGISTRATION', 'SEATING', 'PAUSED', 'DEALING']);
     const SYSTEM_CHAT_REGEX = /показывает|сбросил|занял место|покинул стол|банк выиграл|выбыл|тайм-банк/i;
 
-    // 2. ЕДИНЫЙ ГЛОБАЛЬНЫЙ НЕЙМСПЕЙС
     window.__SCALPEL = {
         state: {
             isCollapsed: false,
@@ -409,7 +414,6 @@ javascript:(function(){
             let amtNum = amount || 0;
             let delta = 0;
 
-            // PURE DELTA ARCHITECTURE
             if (['ANTE', 'SB', 'BB', 'CALL', 'BET', 'RAISE', 'ALLIN'].includes(label)) {
                 delta = amtNum; 
             } else if (label === 'UNCALLEDBET') {
@@ -475,7 +479,6 @@ javascript:(function(){
 
         finalizeHand() {
             if (!this.hand) return null;
-            
             if (this.handOrigin === 'midhand-sync') return null;
 
             let handBB = this.getActiveHandBB();
@@ -496,7 +499,6 @@ javascript:(function(){
                 let startStack = (this.handStart[sn] !== undefined && this.handStart[sn] !== null && this.handStart[sn] > 0) ? this.handStart[sn] : Math.max(s.stack, investedInPot);
                 
                 if (startStack === 0 && investedInPot > 0) return null;
-
                 if (startStack < investedInPot && wonAmount === 0) startStack = investedInPot;
 
                 anyStart = true;
@@ -528,7 +530,6 @@ javascript:(function(){
 
             if (!anyStart) return null;
             let conserved = (startTotal === endTotal);
-
             let calculatedPotTotal = Array.from(this.investedPerSeat.values()).reduce((a, b) => a + b, 0);
 
             return {
@@ -690,7 +691,7 @@ javascript:(function(){
                 (h.timeline || []).forEach(item => {
                     let st = item.street;
                     let act = item.action;
-                    let amt = item.amount || 0; // DELTA
+                    let amt = item.amount || 0;
                     let nick = item.nick;
 
                     if (['ANTE', 'SB', 'BB'].includes(act)) return;
@@ -906,7 +907,7 @@ javascript:(function(){
         let blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `PokerStars_GTO_v490_${Date.now()}.txt`;
+        a.download = `PokerStars_GTO_v500_${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -922,7 +923,7 @@ javascript:(function(){
         let blob = new Blob([dslText], { type: 'text/plain;charset=utf-8' });
         let a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `Scalpel_Dense_AI_v490_${Date.now()}.dsl`;
+        a.download = `Scalpel_Dense_AI_v500_${Date.now()}.dsl`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -965,7 +966,7 @@ javascript:(function(){
             let blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             let a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `pokerdom_v49_0_omni_${Date.now()}.json`;
+            a.download = `pokerdom_v50_0_omni_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -976,14 +977,14 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v490';
+    ui.id = 'stalker-hud-v500';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:470px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v49.0 APEX-RESILIENCE</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v50.0 APEX-ULTRA</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
@@ -1145,7 +1146,6 @@ javascript:(function(){
         for (let [tableId, ws] of state.backgroundTableSockets.entries()) {
             let tableCtx = state.activeTables.get(tableId);
             if (!tableCtx) continue;
-
             if (tableCtx.hand !== null) continue;
 
             let isTableStillTargeted = state.discoveredTargetTables.has(tableId);
@@ -1223,12 +1223,10 @@ javascript:(function(){
 
     function triggerLobbyTournamentRefresh() {
         let lobbyWs = state.sockets.lobby;
-        if (lobbyWs) {
-            if (lobbyWs.readyState === WebSocket.OPEN) {
-                try { lobbyWs.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="99999"/>'); } catch(e) {}
-            } else {
-                state.sockets.lobby = null; // AUTO-HEAL: Clear dead socket
-            }
+        if (lobbyWs && lobbyWs.readyState === WebSocket.OPEN) {
+            try {
+                lobbyWs.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="99999"/>');
+            } catch(e) {}
         }
     }
 
@@ -1240,21 +1238,23 @@ javascript:(function(){
 
         state.isScanningActive = true;
 
-        while (state.scannerQueue.length > 0) {
-            let chunk = [];
-            while (chunk.length < SCANNER_CONCURRENCY && state.scannerQueue.length > 0) {
-                let tId = state.scannerQueue.shift();
-                if (tId !== state.userViewingTournId) chunk.push(tId);
-            }
+        try {
+            while (state.scannerQueue.length > 0) {
+                let chunk = [];
+                while (chunk.length < SCANNER_CONCURRENCY && state.scannerQueue.length > 0) {
+                    let tId = state.scannerQueue.shift();
+                    if (tId !== state.userViewingTournId) chunk.push(tId);
+                }
 
-            if (chunk.length > 0) {
-                await Promise.allSettled(chunk.map(tId => scanSingleTournamentBackground(tId, wsUrl, sid)));
-                await new Promise(r => setTimeout(r, 40));
+                if (chunk.length > 0) {
+                    await Promise.allSettled(chunk.map(tId => scanSingleTournamentBackground(tId, wsUrl, sid)));
+                    await new Promise(r => setTimeout(r, 40));
+                }
             }
+        } finally {
+            state.isScanningActive = false;
+            updateHUD();
         }
-
-        state.isScanningActive = false;
-        updateHUD();
     }
 
     function scanSingleTournamentBackground(tournId, wsUrl, sid) {
@@ -1265,8 +1265,6 @@ javascript:(function(){
             let finished = false;
             let currentLevel = (tourn && tourn.currentLevel) ? tourn.currentLevel : 1;
             let levelMap = new Map();
-            let scheduleLoaded = false;
-            let cachedPlayersXml = [];
             let dynamicTimeout = null;
 
             function cleanup() {
@@ -1287,6 +1285,7 @@ javascript:(function(){
             bgWs.onopen = function() {
                 bgWs.send(`<EnterTournamentLobby id="${tournId}" sessionId="${sid}" client="html5mobile" clientFace="pokerdom" clientVersion="${state.auth.clientVersion}"/>`);
                 bgWs.send('<GetSchedule/>');
+                bgWs.send('<GetPlayers offset="0" count="50"/>');
             };
 
             function processPlayerBlocks(text) {
@@ -1412,17 +1411,10 @@ javascript:(function(){
                     if (levelMap.has(currentLevel) && tourn) {
                         tourn.currentBB = levelMap.get(currentLevel);
                     }
-                    scheduleLoaded = true;
-                    bgWs.send('<GetPlayers offset="0" count="50"/>');
-
-                    while (cachedPlayersXml.length > 0) {
-                        processPlayerBlocks(cachedPlayersXml.shift());
-                    }
                 }
 
                 if (text.includes('<Players')) {
-                    if (scheduleLoaded) processPlayerBlocks(text);
-                    else cachedPlayersXml.push(text);
+                    processPlayerBlocks(text);
                 }
             };
             bgWs.onerror = cleanup;
@@ -1876,7 +1868,7 @@ javascript:(function(){
             }
         }
         if (ws === state.sockets.lobby) {
-            state.sockets.lobby = null; // AUTO-HEAL: Clear dead lobby socket
+            state.sockets.lobby = null;
         }
     };
 
@@ -1887,6 +1879,13 @@ javascript:(function(){
         let targetUrl = explicitUrl || ws.url || ws._url;
         if (targetUrl && typeof targetUrl === 'string' && (targetUrl.includes('/ws') || targetUrl.startsWith('ws'))) {
             state.auth.wssUrl = targetUrl;
+        }
+
+        if (ws.readyState === WebSocket.OPEN && !ws.__isBackgroundSpectator) {
+            if (!state.sockets.lobby || state.sockets.lobby.readyState !== WebSocket.OPEN) {
+                state.sockets.lobby = ws;
+                try { ws.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="99999"/>'); } catch(e) {}
+            }
         }
 
         ws.addEventListener('message', async function (e) {
@@ -1942,10 +1941,9 @@ javascript:(function(){
         }
     }
 
-    // 3. УСТАНОВКА PROXY (Только один раз за сессию страницы)
+    // 3. УСТАНОВКА ЕДИНОГО PROXY
     if (!window.__SCALPEL_WS_PROXY_INSTALLED) {
         window.__SCALPEL_WS_PROXY_INSTALLED = true;
-        const OrigWS = window.WebSocket;
         
         window.WebSocket = new Proxy(OrigWS, {
             construct: function(target, args) {
@@ -1966,6 +1964,10 @@ javascript:(function(){
             if (window.__SCALPEL && window.__SCALPEL.hookSocket) {
                 window.__SCALPEL.hookSocket(this);
             }
+            if (!this.__isBackgroundSpectator && (!window.__SCALPEL.state.sockets.lobby || window.__SCALPEL.state.sockets.lobby.readyState !== WebSocket.OPEN)) {
+                window.__SCALPEL.state.sockets.lobby = this;
+                try { this.send('<GetTournaments tournament="SCHEDULED|LIVE" games="TEXAS_HOLDEM" id="99999"/>'); } catch(e) {}
+            }
             if (window.__SCALPEL && window.__SCALPEL.handleOutgoing) {
                 window.__SCALPEL.handleOutgoing(this, data);
             }
@@ -1976,5 +1978,5 @@ javascript:(function(){
     autoDetectSessionId();
     triggerLobbyTournamentRefresh();
 
-    console.log("%c👑 [SCALPEL v49.0 APEX-RESILIENCE] Запущен. Глобальная архитектура, защита от Split-Brain и Auto-Healing сокетов.", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v50.0 APEX-ULTRA] Запущен. Фоновый сканер и спектатор полностью разблокированы.", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
