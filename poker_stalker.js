@@ -1,6 +1,26 @@
 javascript:(function(){
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v63.0 — APEX-IMPERIOR (HARDENED MONOLITH)
+       ULTIMATE SCALPEL v64.0 — APEX-IMPERIOR (HARDENED MONOLITH)
+       • v64 F1 (BUG-BUYIN-DISTORTION): номинальный бай-ин = buyIn + bounty
+         БЕЗ рейка (fee) — эвристика «buyIn уже включает всё» раздувала номинал
+         2500+2500+400 → 5400₽; полный вход хранится отдельно (entryCost)
+       • v64 F2 (BUG-POT-DESYNC): amount у ВСЕХ тегов действий протокола —
+         ДЕЛЬТА (прирост фишек), а не тотал улицы: SB 150k + Raise 450k = 600k
+         тотал; прежняя трактовка теряла 150k на каждом рейзе поверх блайнда
+         (chip_conservation 6/13 рук, GTO «raises 150000 to 450000»);
+         C7-агрессивность олл-ина переведена на итог улицы (streetBetAfter)
+       • v64 F3 (BUG-REBUY-BADGE): бейдж HUD считает входы как
+         max(bullets, rebuys+1) и берёт сумму из e.spent — суффикс #N в
+         лобби-строке часто отсутствует, ребаи жили только в e.rebuys
+       • v64 F4 (BUG-BUYIN-ROUNDING): деньги (₽) форматирует formatRub —
+         группировка разрядов с копейками, без принудительного «k»-округления
+         (1080₽ больше не превращается в «1.1k₽»)
+       • v64 F5 (BUG-MUCK-MARKER): Dense DSL помечает карты, слитые через
+         утечку протокола, маркером «!» (As7d → !As7d) — отличимо от
+         добровольного шоудауна
+       • v64 F6 (BUG-KO-SUMMARY): GTO-экспорт добавляет каноническую строку
+         PokerStars «X wins the tournament and receives Y in bounty» —
+         PT4/HM3 теперь видят баунти-выплаты при импорте
        • v62 B1 (BUG-ZOMBIE-TABLE): bust rows без tableId теперь чистят устаревшую
          запись discoveredTargetTables («зомби»-спектаторы больше не держат слот
          80-столового пула весь турнир); записи профиля переключены на ключ cleanNick
@@ -13,8 +33,8 @@ javascript:(function(){
          в экспорт добавлены знаменатели stealFaced*Opp и foldToSteal*Pct
        • v62 B4 (BUG-SPENT): детерминированные bullets × baseBuyin — единый
          источник во всех трёх местах; серверный `spent` сохраняется как
-         spent_server (аудит) + фолбэк при промахе кэша; мёртвая fee-ветка
-         эвристики baseBuyin исправлена (лобби 330+30 теперь = 360)
+         spent_server (аудит) + фолбэк при промахе кэша; fee-ветка исправлена
+         в v62 (330+30 = 360), в v64 F1 номинал = 330 (рейк в номинал не входит)
        • v62 B5: dead-button fallback не изменён — проверен как корректный
          (TDA rule 32); внешнее сообщение опровергнуто в раунде-2
        • v63 C1: HU-сводка печатает ОБА тега — "(button) (small blind)"
@@ -259,6 +279,24 @@ javascript:(function(){
         return Math.round(chips).toString();
     }
 
+    // v64 F4 (BUG-BUYIN-ROUNDING): деньги (₽) форматируются отдельно от
+    // фишек. formatChips(1080) давал «1.1k₽», formatChips(5000) — «5.0k₽»:
+    // принудительное k-округление искажало номинал бай-ина. formatRub
+    // печатает полное число с неразрывными разделителями разрядов,
+    // копейки сохраняются (14 932.61₽), целые — без дробной части.
+    function formatRub(amount) {
+        if (amount === null || amount === undefined || isNaN(amount)) return "0";
+        let n = Number(amount);
+        if (n <= 0) return "0";
+        let hasCents = Math.abs(n - Math.round(n)) > 1e-9;
+        let str = hasCents ? n.toFixed(2) : Math.round(n).toString();
+        let dot = str.indexOf('.');
+        let intPart = dot === -1 ? str : str.slice(0, dot);
+        let fracPart = dot === -1 ? '' : str.slice(dot);
+        let grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, "\u00a0");
+        return grouped + fracPart;
+    }
+
     function extractAmt(str) {
         let m = str.match(/:(\d+)/);
         return m ? parseInt(m[1], 10) : 0;
@@ -473,17 +511,21 @@ javascript:(function(){
             // определяется против него, а не против собственной прошлой ставки
             let preMaxBet = this.currentMaxBet;
 
-            // v61 F4: unified bet accounting — RAISE/ALLIN amount is the player's TOTAL
-            // street commitment after the action (server protocol semantics used by the
-            // engine since v60 "Fix 4"). CALL amount is the increment. Exporters must
-            // consume timeline.street_bet_after so GTO/DSL totals can never diverge
-            // from invested/pot accounting. Fallback (amount <= prev) adds 0 chips —
-            // the old `: amtNum` fallback double-counted in that edge case.
-            if (['ANTE', 'SB', 'BB', 'CALL', 'BET'].includes(label)) {
+            // v64 F2 (BUG-POT-DESYNC): в протоколе Pokerdom / Connective Games
+            // атрибут amount у ВСЕХ тегов действий (<Raise>, <Call>, <Bet>,
+            // <AllIn>, <PostSmallBlind>, <PostAnte>) — это ДЕЛЬТА: прирост фишек
+            // игрока именно в этот момент, а не суммарная ставка на улице.
+            // Трактовка v61-F4 «RAISE/ALLIN amount = тотал улицы» вычитала
+            // prevStreetBet из каждого рейза поверх блайнда и теряла фишки:
+            // SB 150k → <Raise amount="450000"> = 600k тотал (2 BB), движок
+            // считал 450k и ронял chip_conservation на 6/13 реальных рук,
+            // банк занижался на 150k–450k, GTO писал «raises 150000 to 450000».
+            // Экспортёры по-прежнему потребляют timeline.street_bet_after —
+            // итог улицы теперь восстановлен корректно из дельт.
+            if (['ANTE', 'SB', 'BB', 'CALL', 'BET', 'RAISE', 'ALLIN'].includes(label)) {
                 delta = amtNum;
-            } else if (label === 'RAISE' || label === 'ALLIN') {
-                delta = Math.max(0, amtNum - prevStreetBet);
             } else if (label === 'UNCALLEDBET') {
+                // возврат неколлированной части ставки — отрицательная дельта
                 delta = -amtNum;
             }
 
@@ -503,7 +545,7 @@ javascript:(function(){
             }
 
             // v62 B3 (BUG-STEAL-METRICS): трекинг префлоп-рейзов руки. Попытка
-            // кражи = ЕДИНСТВЕННЫЙ рейз префлопа, сделанный из поздней позиции
+            // кражи = ЕДИНСТВЕННЫЙ рейз префлоп, сделанный из поздней позиции
             // (CO/BTN/SB; в HU — BTN/SB). Второй рейз (3-бет) снимает флаг:
             // фолд блайнда против 3-бета — уже не fold-to-steal. Агрессивный
             // ALL-IN считается рейзом (пуш из CO в нераскрытом банке — та же
@@ -516,10 +558,15 @@ javascript:(function(){
             // инкрементируется до классификации рейза, поэтому лимпер раньше
             // рейзера закрывает банк автоматически.
             if (this.street === 'PREFLOP') {
-                if (label === 'CALL' || (label === 'ALLIN' && amtNum <= preMaxBet)) {
+                // v64 F2: amount олл-ина теперь дельта, поэтому агрессивность
+                // сравнивает ИТОГ улицы (streetBetAfter = prev + delta) с
+                // максимумом ДО действия — семантика v63 сохранена: короткий
+                // all-in-рейз 250k поверх своей 200k (итог 450k > 300k) — рейз,
+                // а не лимп; неагрессивный all-in-колл (итог ≤ max) — лимп.
+                if (label === 'CALL' || (label === 'ALLIN' && streetBetAfter <= preMaxBet)) {
                     this.preflopCallers++;
                 }
-                if (label === 'RAISE' || (label === 'ALLIN' && amtNum > preMaxBet)) {
+                if (label === 'RAISE' || (label === 'ALLIN' && streetBetAfter > preMaxBet)) {
                     this.preflopRaises++;
                     if (this.preflopRaises === 1) {
                         let rp = this.positions[seatNum] || '';
@@ -968,6 +1015,21 @@ javascript:(function(){
                     totalWonAmount += w.amount;
                 });
 
+                // v64 F6 (BUG-KO-SUMMARY): каноническая строка PokerStars для
+                // PKO-наускаута — «X wins the tournament and receives Y in
+                // bounty» — стоит в настоящем HH сразу после collected-строк,
+                // перед SUMMARY. PT4/HM3 парсят её при импорте, чтобы учесть
+                // баунти-выплаты; без неё трекеры не видели баунти вовсе.
+                (h.knockout_bounties || []).forEach(ko => {
+                    let kNick = ko.killer_nick;
+                    let kp = players.find(p => p.seat === ko.killer_seat);
+                    if (kp) kNick = kp.nick;
+                    let bountyCash = ko.cash_payout_rub || 0;
+                    if (kNick && bountyCash > 0) {
+                        lines.push(`${kNick} wins the tournament and receives ${bountyCash} in bounty`);
+                    }
+                });
+
                 lines.push(`*** SUMMARY ***`);
                 let finalPot = totalWonAmount > 0 ? totalWonAmount : (h.pot_total || 0);
                 lines.push(`Total pot ${finalPot} | Rake 0`);
@@ -1037,7 +1099,15 @@ javascript:(function(){
 
                 let pBlock = (h.players || []).map(p => {
                     let pId = globalDict.get(p.cleanNick) || `p${p.seat}`;
-                    let cardStr = (p.cards && p.cards !== 'xx xx') ? `:${p.cards.replace(/\s+/g, '')}` : '';
+                    // v64 F5 (BUG-MUCK-MARKER): карты оппонента, слитые в открытую
+                    // через утечку протокола (is_muck_leak), помечаются «!» перед
+                    // кодом карт: :!As7d. Без маркера их невозможно отличить от
+                    // добровольного шоудауна/показа при пост-обработке DSL.
+                    let cardStr = '';
+                    if (p.cards && p.cards !== 'xx xx') {
+                        let cleanCards = p.cards.replace(/\s+/g, '');
+                        cardStr = p.is_muck_leak ? `:!${cleanCards}` : `:${cleanCards}`;
+                    }
                     let evalStr = p.eval_rank ? `:${p.eval_rank}` : '';
                     return `${p.seat}:${pId}:${p.stack_start}${cardStr}${evalStr}`;
                 }).join('|');
@@ -1125,7 +1195,7 @@ javascript:(function(){
         let url = URL.createObjectURL(blob);
         let a = document.createElement('a');
         a.href = url;
-        a.download = `PokerStars_GTO_v630_${Date.now()}.txt`;
+        a.download = `PokerStars_GTO_v640_${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1144,7 +1214,7 @@ javascript:(function(){
         let url = URL.createObjectURL(blob);
         let a = document.createElement('a');
         a.href = url;
-        a.download = `Scalpel_Dense_AI_v630_${Date.now()}.dsl`;
+        a.download = `Scalpel_Dense_AI_v640_${Date.now()}.dsl`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1200,7 +1270,7 @@ javascript:(function(){
             let url = URL.createObjectURL(blob);
             let a = document.createElement('a');
             a.href = url;
-            a.download = `pokerdom_v63_0_omni_${Date.now()}.json`;
+            a.download = `pokerdom_v64_0_omni_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1213,14 +1283,14 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v630';
+    ui.id = 'stalker-hud-v640';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:470px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v63.0 APEX-IMPERATOR</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v64.0 APEX-IMPERATOR</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
@@ -1331,13 +1401,21 @@ javascript:(function(){
                         let bbStr = (realStackBB > 0 && !isActuallyBusted) ? ` (${realStackBB} BB)` : '';
                         
                         let baseBuyin = e.baseBuyin || 0;
-                        let totalSpent = (e.bullets || 1) * baseBuyin;
+                        // v64 F3 (BUG-REBUY-BADGE): e.bullets парсится ТОЛЬКО из
+                        // суффикса «#N» ника; лобби-строка нередко теряет суффикс
+                        // (mike_scott → bullets=1), тогда реальные ре-энтри живут
+                        // в e.rebuys, а готовая сумма — в e.spent (сканер уже
+                        // посчитал max(bullets, rebuys+1) × baseBuyin). Прежний
+                        // код при bullets=1 молча пропускал бейдж ребаев и
+                        // рендерил только номинал.
+                        let bulletCount = Math.max(e.bullets || 1, (e.rebuys || 0) + 1);
+                        let totalSpent = e.spent || (bulletCount * baseBuyin);
                         let buyinBadge = '';
                         if (baseBuyin > 0) {
-                            if (e.bullets > 1) {
-                                buyinBadge = ` <span style="color:#a855f7;">[${formatChips(baseBuyin)}₽ (${e.bullets}-й вход: ${formatChips(totalSpent)}₽)]</span>`;
+                            if (bulletCount > 1) {
+                                buyinBadge = ` <span style="color:#a855f7;">[${formatRub(baseBuyin)}₽ (#${bulletCount}: ${formatRub(totalSpent)}₽)]</span>`;
                             } else {
-                                buyinBadge = ` <span style="color:#a855f7;">[${formatChips(baseBuyin)}₽]</span>`;
+                                buyinBadge = ` <span style="color:#a855f7;">[${formatRub(baseBuyin)}₽]</span>`;
                             }
                         }
 
@@ -1345,11 +1423,11 @@ javascript:(function(){
                             let prizeStr = '';
                             if (e.prize > 0) {
                                 if (e.regular_prize > 0 && e.bounty_prize > 0) {
-                                    prizeStr = ` <b style="color:#22c55e;">+${formatChips(e.prize)}₽</b> <small style="color:#94a3b8;">(${formatChips(e.regular_prize)}₽ + ${formatChips(e.bounty_prize)}₽ KO)</small>`;
+                                    prizeStr = ` <b style="color:#22c55e;">+${formatRub(e.prize)}₽</b> <small style="color:#94a3b8;">(${formatRub(e.regular_prize)}₽ + ${formatRub(e.bounty_prize)}₽ KO)</small>`;
                                 } else if (e.regular_prize > 0) {
-                                    prizeStr = ` <b style="color:#22c55e;">+${formatChips(e.prize)}₽</b> <small style="color:#94a3b8;">[Приз]</small>`;
+                                    prizeStr = ` <b style="color:#22c55e;">+${formatRub(e.regular_prize)}₽</b> <small style="color:#94a3b8;">[Приз]</small>`;
                                 } else if (e.bounty_prize > 0) {
-                                    prizeStr = ` <b style="color:#22c55e;">+${formatChips(e.prize)}₽</b> <small style="color:#94a3b8;">[KO]</small>`;
+                                    prizeStr = ` <b style="color:#22c55e;">+${formatRub(e.bounty_prize)}₽</b> <small style="color:#94a3b8;">[KO]</small>`;
                                 }
                             }
 
@@ -1826,31 +1904,26 @@ javascript:(function(){
                     let bounty = fattr(attrs, 'knockoutBounty') || fattr(attrs, 'bounty') || 0;
                     let fee = fattr(attrs, 'fee') || 0;
 
-                    let trueBaseBuyin = rawBuyin;
-                    let extraCosts = bounty + fee;
-                    if (rawBuyin > 0 && extraCosts > 0) {
-                        if (rawBuyin <= extraCosts + 10) {
-                            trueBaseBuyin = rawBuyin + extraCosts;
-                        } else if (fee > 0 && bounty === 0) {
-                            // v62 B4: мёртвая ветка v60/v61 — условие было недостижимо
-                            // (fee > 0 ⇒ extraCosts > 0 ⇒ поток всегда уходил в первую
-                            // ветку, и лобби 330+30 кэшировало baseBuyin=330 без рейка).
-                            // Теперь достижима: buyIn — призовая часть, fee — рейк;
-                            // полный вход = buyIn + fee, если атрибут stake не
-                            // сигнализирует, что buyIn уже полная цена.
-                            let attrStake = fattr(attrs, 'stake');
-                            if (attrStake === 0 || rawBuyin === attrStake) {
-                                trueBaseBuyin = rawBuyin + fee;
-                            }
-                        }
-                    }
+                    // v64 F1 (BUG-BUYIN-DISTORTION): лобби PKO присылает ТРИ
+                    // раздельных атрибута: buyIn — доля в основной призовой фонд,
+                    // knockoutBounty — доля в баунти-фонде, fee — рейк рума.
+                    // Эвристика v60–v63 (rawBuyin <= bounty+fee+10 ⇒ «buyIn уже
+                    // включает bounty и fee») втягивала рейк в номинал бай-ина:
+                    // 2500 + 2500 + 400 кэшировалось как baseBuyin=5400₽,
+                    // 1250+1250+200 — как 2700₽, 500+500+80 — как 1080₽.
+                    // Номинальный бай-ин (взнос в призовой фонд) = buyIn + bounty
+                    // БЕЗ рейка; полный вход (с рейком) хранится отдельно в
+                    // entryCost — для аудита и отображения полной цены.
+                    let nominalBuyin = rawBuyin + bounty;      // взнос в призовой фонд
+                    let totalEntryCost = nominalBuyin + fee;   // полный вход с рейком
 
                     if (tId && tName) {
                         state.tournamentCache.set(tId, {
                             name: decodeHtml(tName),
-                            baseBuyin: trueBaseBuyin,
+                            baseBuyin: nominalBuyin,
                             bounty: bounty,
                             fee: fee,
+                            entryCost: totalEntryCost,
                             isPKO: bounty > 0 || /нокаут|bounty|pko/i.test(tName)
                         });
                     }
@@ -2389,7 +2462,7 @@ javascript:(function(){
         state.scannerQueue.length = 0;
         state.scannerQueued.clear();
         document.querySelectorAll('[id^="stalker-hud"]').forEach(el => el.remove());
-        console.log("%c[SCALPEL] Инстанс v63.0 уничтожен.", "color:#f59e0b;");
+        console.log("%c[SCALPEL] Инстанс v64.0 уничтожен.", "color:#f59e0b;");
     };
 
     // v61 F7: периодическое обслуживание состояния — очистка устаревших/растущих структур
@@ -2677,5 +2750,5 @@ javascript:(function(){
     autoDetectSessionId();
     triggerLobbyTournamentRefresh();
 
-    console.log("%c👑 [SCALPEL v63.0 APEX-IMPERATOR] Запущен. v60 (8 багов) + v61 F1–F8 + v62 B1–B4 устранено; v63 — раунд-3: C1/C3/C5 приняты, C7 исправлен (unopened-pot + сброс в beginHand), C2 усилен (оба цикла + анте), C9 миграция ключа; C4/C8/C10 отклонены по результатам проверки; B5 не изменён (TDA rule 32).", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v64.0 APEX-IMPERATOR] Запущен. v60 + v61 F1–F8 + v62 B1–B4 + v63 C-раунд устранено; v64 — раунд-4: F1 номинал бай-ина = buyIn + bounty (рейк в entryCost), F2 amount = дельта во всех действиях (chip_conservation восстановлен), F3 бейдж ре-энтрий max(bullets, rebuys+1) из e.spent, F4 formatRub для денег, F5 маркер «!» утекших карт в DSL, F6 строка баунти в GTO SUMMARY; C7-агрессивность олл-ина переведена на итог улицы.", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
