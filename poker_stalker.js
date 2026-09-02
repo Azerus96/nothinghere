@@ -1,6 +1,6 @@
 javascript:(function(){
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v64.0 — APEX-IMPERIOR (HARDENED MONOLITH)
+       ULTIMATE SCALPEL v64.1 — APEX-IMPERIOR (HARDENED MONOLITH)
        • v64 F1 (BUG-BUYIN-DISTORTION): номинальный бай-ин = buyIn + bounty
          БЕЗ рейка (fee) — эвристика «buyIn уже включает всё» раздувала номинал
          2500+2500+400 → 5400₽; полный вход хранится отдельно (entryCost)
@@ -21,6 +21,13 @@ javascript:(function(){
        • v64 F6 (BUG-KO-SUMMARY): GTO-экспорт добавляет каноническую строку
          PokerStars «X wins the tournament and receives Y in bounty» —
          PT4/HM3 теперь видят баунти-выплаты при импорте
+       • v64.1 P1 (POLISH): PKO-детект обогащён кириллическими ключами
+         Pokerdom (нокаут|баунти|пко|охотник + hunter|knockout) — ловит
+         «Первое Правило ПКО», «Баунти Сиеста», «Вечерний Охотник»
+       • v64.1 P2 (POLISH): фолбэк-имя непризнанного места в ensureSeat
+         выровнен по serverSeatBase — 0-based сервер экспортирует
+         «Seat 6: Seat 6», а не «Seat 6: Seat 5»; при перекалибровке
+         базы 0→1 заглушки перестраиваются (realignSeatPlaceholders)
        • v62 B1 (BUG-ZOMBIE-TABLE): bust rows без tableId теперь чистят устаревшую
          запись discoveredTargetTables («зомби»-спектаторы больше не держат слот
          80-столового пула весь турнир); записи профиля переключены на ключ cleanNick
@@ -376,6 +383,27 @@ javascript:(function(){
         return state.stalkedPlayers.get(cleanNick);
     }
 
+    // v64.1: при перекалибровке базы нумерации мест (0→1) выравнивает
+    // фолбэк-имена непризнанных мест под новую базу — вместе с никами уже
+    // записанных действий текущей руки. Инвариант: имя-заглушка всегда
+    // совпадает с отображаемым номером места в экспорте («Seat N: Seat N»).
+    function realignSeatPlaceholders() {
+        state.activeTables.forEach(ctx => {
+            ctx.seats.forEach((s, sn) => {
+                if (/^Seat \d+$/.test(s.rawNick) && /^seat_\d+$/.test(s.cleanNick)) {
+                    let display = sn + (state.serverSeatBase === 0 ? 1 : 0);
+                    if (s.rawNick !== `Seat ${display}`) {
+                        s.rawNick = `Seat ${display}`;
+                        s.cleanNick = `seat_${display}`;
+                        ctx.timeline.forEach(t => {
+                            if (t.seat === sn) { t.nick = s.rawNick; t.cleanNick = s.cleanNick; }
+                        });
+                    }
+                }
+            });
+        });
+    }
+
     // ── СЕРВЕРНЫЙ ДВИЖОК СТОЛА ─────────────────────────────────────────
     class TableContext {
         constructor(tableId, tournId = null) {
@@ -434,11 +462,15 @@ javascript:(function(){
 
         ensureSeat(seatNum, rawNick, serverStack = null) {
             let clean = rawNick ? getCleanNick(rawNick) : '';
+            // v64.1: фолбэк-имя непризнанного места выровнен по базе нумерации
+            // сервера (Connective Games 0-based: id 0..5). Экспорт PokerStars
+            // печатает место seatNum+1 — раньше получалось «Seat 6: Seat 5».
+            let displaySeatNum = seatNum + (state.serverSeatBase === 0 ? 1 : 0);
             if (!this.seats.has(seatNum)) {
                 this.seats.set(seatNum, {
                     seat: seatNum,
-                    rawNick: rawNick || `Seat ${seatNum}`,
-                    cleanNick: clean || `seat_${seatNum}`,
+                    rawNick: rawNick || `Seat ${displaySeatNum}`,
+                    cleanNick: clean || `seat_${displaySeatNum}`,
                     stack: serverStack !== null ? serverStack : 0,
                     busted: false,
                     spent: 0
@@ -1195,7 +1227,7 @@ javascript:(function(){
         let url = URL.createObjectURL(blob);
         let a = document.createElement('a');
         a.href = url;
-        a.download = `PokerStars_GTO_v640_${Date.now()}.txt`;
+        a.download = `PokerStars_GTO_v641_${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1214,7 +1246,7 @@ javascript:(function(){
         let url = URL.createObjectURL(blob);
         let a = document.createElement('a');
         a.href = url;
-        a.download = `Scalpel_Dense_AI_v640_${Date.now()}.dsl`;
+        a.download = `Scalpel_Dense_AI_v641_${Date.now()}.dsl`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1270,7 +1302,7 @@ javascript:(function(){
             let url = URL.createObjectURL(blob);
             let a = document.createElement('a');
             a.href = url;
-            a.download = `pokerdom_v64_0_omni_${Date.now()}.json`;
+            a.download = `pokerdom_v64_1_omni_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1283,14 +1315,14 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v640';
+    ui.id = 'stalker-hud-v641';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:470px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v64.0 APEX-IMPERATOR</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v64.1 APEX-IMPERATOR</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
@@ -1307,7 +1339,7 @@ javascript:(function(){
                 </div>
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;margin-top:4px;">
                     <span>Живых MTT: <b id="st-tourns-count" style="color:#38bdf8;">0</b></span>
-                    <span>Найдено целей: <b id="st-targets-found" style="color:#4ade80;">0</b></span>
+                    <span id="st-targets-found" style="color:#4ade80;">0</span>
                 </div>
             </div>
             <div id="st-targets-list" style="max-height:240px;overflow-y:auto;background:#030712;padding:6px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;color:#cbd5e1;">
@@ -1924,7 +1956,7 @@ javascript:(function(){
                             bounty: bounty,
                             fee: fee,
                             entryCost: totalEntryCost,
-                            isPKO: bounty > 0 || /нокаут|bounty|pko/i.test(tName)
+                            isPKO: bounty > 0 || /нокаут|баунти|bounty|пко|pko|охотник|hunter|knockout/i.test(tName)
                         });
                     }
 
@@ -1970,7 +2002,7 @@ javascript:(function(){
                 let tournId = attr(xml, 'tournamentId') || attr(xml, 'tournId');
                 let tName = attr(xml, 'tournamentName') || attr(xml, 'name');
                 if (tournId && tName && !state.tournamentCache.has(tournId)) {
-                    state.tournamentCache.set(tournId, { name: decodeHtml(tName), baseBuyin: 0, isPKO: /нокаут|bounty|pko/i.test(tName) });
+                    state.tournamentCache.set(tournId, { name: decodeHtml(tName), baseBuyin: 0, isPKO: /нокаут|баунти|bounty|пко|pko|охотник|hunter|knockout/i.test(tName) });
                 }
 
                 if (tableId) {
@@ -2103,7 +2135,11 @@ javascript:(function(){
                 // v61 F5: фиксируем наблюдаемое число мест стола
                 if (seatBlocksSeen > ctx.observedSeatCount) ctx.observedSeatCount = seatBlocksSeen;
                 if (!state.serverSeatBaseLocked && ctx.observedSeatCount > 1 && ctx.maxSeatId === ctx.observedSeatCount) {
+                    // v64.1: при переходе 0→1 заглушки, созданные по старой
+                    // базе, перестраиваются под новую
+                    let seatBaseFlipped = (state.serverSeatBase === 0);
                     state.serverSeatBase = 1;
+                    if (seatBaseFlipped) realignSeatPlaceholders();
                 }
             }
 
@@ -2462,7 +2498,7 @@ javascript:(function(){
         state.scannerQueue.length = 0;
         state.scannerQueued.clear();
         document.querySelectorAll('[id^="stalker-hud"]').forEach(el => el.remove());
-        console.log("%c[SCALPEL] Инстанс v64.0 уничтожен.", "color:#f59e0b;");
+        console.log("%c[SCALPEL] Инстанс v64.1 уничтожен.", "color:#f59e0b;");
     };
 
     // v61 F7: периодическое обслуживание состояния — очистка устаревших/растущих структур
@@ -2750,5 +2786,5 @@ javascript:(function(){
     autoDetectSessionId();
     triggerLobbyTournamentRefresh();
 
-    console.log("%c👑 [SCALPEL v64.0 APEX-IMPERATOR] Запущен. v60 + v61 F1–F8 + v62 B1–B4 + v63 C-раунд устранено; v64 — раунд-4: F1 номинал бай-ина = buyIn + bounty (рейк в entryCost), F2 amount = дельта во всех действиях (chip_conservation восстановлен), F3 бейдж ре-энтрий max(bullets, rebuys+1) из e.spent, F4 formatRub для денег, F5 маркер «!» утекших карт в DSL, F6 строка баунти в GTO SUMMARY; C7-агрессивность олл-ина переведена на итог улицы.", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v64.1 APEX-IMPERATOR] Запущен. v60 + v61 F1–F8 + v62 B1–B4 + v63 C-раунд устранено; v64 — раунд-4: F1 номинал бай-ина = buyIn + bounty (рейк в entryCost), F2 amount = дельта во всех действиях (chip_conservation восстановлен), F3 бейдж ре-энтрий max(bullets, rebuys+1) из e.spent, F4 formatRub для денег, F5 маркер «!» утекших карт в DSL, F6 строка баунти в GTO SUMMARY; C7-агрессивность олл-ина переведена на итог улицы. v64.1 — polish: кириллические ключи PKO (нокаут|баунти|пко|охотник|hunter|knockout) + фолбэк-имена мест по serverSeatBase.", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
