@@ -1,6 +1,6 @@
 javascript:(function(){
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v64.1 — APEX-IMPERIOR (HARDENED MONOLITH)
+       ULTIMATE SCALPEL v64.2 — APEX-IMPERIOR (HARDENED MONOLITH)
        • v64 F1 (BUG-BUYIN-DISTORTION): номинальный бай-ин = buyIn + bounty
          БЕЗ рейка (fee) — эвристика «buyIn уже включает всё» раздувала номинал
          2500+2500+400 → 5400₽; полный вход хранится отдельно (entryCost)
@@ -28,6 +28,25 @@ javascript:(function(){
          выровнен по serverSeatBase — 0-based сервер экспортирует
          «Seat 6: Seat 6», а не «Seat 6: Seat 5»; при перекалибровке
          базы 0→1 заглушки перестраиваются (realignSeatPlaceholders)
+       • v64.2 Z1 (BUG-BULLET-RESURRECTION, «зомби-перезапись»): лобби
+         вечно держит строку выбывшей пули рядом со строкой живой ре-энтри
+         (обе дают один entryKey) — «мёртвая» строка каждый опрос
+         перезаписывала живую запись (stack→0, isBusted→true) и вычищала
+         стол из discoveredTargetTables → пул зрителей рвал сокет ЖИВОГО
+         стола, HUD «мигал» и вешал [ВЫБЫЛ] играющему (master3anosov играл
+         HU за 1-е место, пока HUD показывал 205-е место выбывшим).
+         Zombie-Guard: устаревшая «мёртвая» строка НИКОГДА не перезаписывает
+         живую запись (сравнение номеров пуль + память мест выбытия +
+         транзиентный stack=0/place=0); пул зрителей самовосстанавливает
+         регистрацию живого стола
+       • v64.2 Z2 (HUD-ERGO): мобильные двухстрочные карточки вместо
+         скомканной строки; живые цели всегда вверху списка, активные
+         турниры — выше выбывших внутри карточки; явная финансовая
+         раскладка «Пуля #7 (+7 реб.) • Влито: 21 000₽» вместо
+         крипто-бейджа «[#7: 21 000₽]»
+       • v64.2 Z3: суффикс «#N» ника за СТОЛОМ — счётчик всех покупок
+         (входы + ребаи), номер пули берётся из лобби: «Пуля #N» в HUD
+         не мигает 7↔14, Zombie-Guard не слабеет
        • v62 B1 (BUG-ZOMBIE-TABLE): bust rows без tableId теперь чистят устаревшую
          запись discoveredTargetTables («зомби»-спектаторы больше не держат слот
          80-столового пула весь турнир); записи профиля переключены на ключ cleanNick
@@ -302,6 +321,15 @@ javascript:(function(){
         let fracPart = dot === -1 ? '' : str.slice(dot);
         let grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, "\u00a0");
         return grouped + fracPart;
+    }
+
+    // v64.2 Z2 (HUD-ERGO): русская плюрализация для финансовой строки HUD
+    // (1 вход / 2 входа / 5 входов / 21 вход).
+    function pluralRu(n, one, few, many) {
+        let n10 = n % 10, n100 = n % 100;
+        if (n10 === 1 && n100 !== 11) return one;
+        if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return few;
+        return many;
     }
 
     function extractAmt(str) {
@@ -1227,7 +1255,7 @@ javascript:(function(){
         let url = URL.createObjectURL(blob);
         let a = document.createElement('a');
         a.href = url;
-        a.download = `PokerStars_GTO_v641_${Date.now()}.txt`;
+        a.download = `PokerStars_GTO_v642_${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1246,7 +1274,7 @@ javascript:(function(){
         let url = URL.createObjectURL(blob);
         let a = document.createElement('a');
         a.href = url;
-        a.download = `Scalpel_Dense_AI_v641_${Date.now()}.dsl`;
+        a.download = `Scalpel_Dense_AI_v642_${Date.now()}.dsl`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1302,7 +1330,7 @@ javascript:(function(){
             let url = URL.createObjectURL(blob);
             let a = document.createElement('a');
             a.href = url;
-            a.download = `pokerdom_v64_1_omni_${Date.now()}.json`;
+            a.download = `pokerdom_v64_2_omni_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1315,14 +1343,14 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v641';
+    ui.id = 'stalker-hud-v642';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:470px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v64.1 APEX-IMPERATOR</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v64.2 APEX-IMPERATOR</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
@@ -1339,7 +1367,7 @@ javascript:(function(){
                 </div>
                 <div style="display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;margin-top:4px;">
                     <span>Живых MTT: <b id="st-tourns-count" style="color:#38bdf8;">0</b></span>
-                    <span id="st-targets-found" style="color:#4ade80;">0</span>
+                    <span>Найдено целей: <b id="st-targets-found" style="color:#4ade80;">0</b></span>
                 </div>
             </div>
             <div id="st-targets-list" style="max-height:240px;overflow-y:auto;background:#030712;padding:6px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;color:#cbd5e1;">
@@ -1386,25 +1414,39 @@ javascript:(function(){
             let listEl = document.getElementById('st-targets-list');
             if (!countEl || !listEl) return;
 
+            // v64.2 Z2 (HUD-ERGO): единый критерий «живой» записи — фишки > 0
+            // в живом турнире. Используется счётчиком активных целей,
+            // сортировкой целей и сортировкой записей внутри карточки.
+            let isLiveEntry = (e) => !e.isBusted && (e.stack || 0) > 0 && (!e.tournId || state.liveTournaments.has(e.tournId));
+
             let activeTargets = 0;
             state.stalkedPlayers.forEach(p => {
-                let hasActive = Array.from(p.entries.values()).some(e => 
-                    !e.isBusted && (e.stack || 0) > 0 && (!e.tournId || state.liveTournaments.has(e.tournId))
-                );
-                if (hasActive) activeTargets++;
+                if (Array.from(p.entries.values()).some(isLiveEntry)) activeTargets++;
             });
 
             countEl.innerText = `${state.stalkedPlayers.size} (в игре: ${activeTargets})`;
             if (tournsEl) tournsEl.innerText = state.liveTournaments.size;
-            
+
             let openSpectators = Array.from(state.backgroundTableSockets.values()).filter(ws => ws && ws.readyState === WebSocket.OPEN).length;
             if (specEl) specEl.innerText = `${openSpectators} столов в фоне`;
-            
             if (handsEl) handsEl.innerHTML = `Раздач: <b>${state.completedHandsArchive.length}</b>`;
 
             if (state.stalkedPlayers.size > 0) {
+                // =============================================================
+                // v64.2 Z2 (HUD-ERGO): динамическая приоритизация для экрана
+                // смартфона (360px): цели с живым стеком — в самом верху
+                // списка, полностью выбывшие тонут вниз; внутри карточки
+                // активные турниры выше выбывших.
+                // =============================================================
+                let sortedPlayers = Array.from(state.stalkedPlayers.values()).sort((a, b) => {
+                    let aLive = Array.from(a.entries.values()).some(isLiveEntry);
+                    let bLive = Array.from(b.entries.values()).some(isLiveEntry);
+                    if (aLive !== bLive) return aLive ? -1 : 1;
+                    return (b.handsCount || 0) - (a.handsCount || 0);
+                });
+
                 let html = '';
-                state.stalkedPlayers.forEach((p) => {
+                sortedPlayers.forEach((p) => {
                     let agg = p.aggressiveActions || 0;
                     let pass = p.passiveActions || 0;
                     let totalActs = p.totalActions || (agg + pass);
@@ -1412,17 +1454,29 @@ javascript:(function(){
                     let afStr = pass > 0 ? (agg / pass).toFixed(1) : (agg > 0 ? '99.0' : '0.0');
                     let vpip = p.handsCount > 0 ? Math.round((p.vpipCount / p.handsCount) * 100) : 0;
                     let pfr = p.handsCount > 0 ? Math.round((p.pfrCount / p.handsCount) * 100) : 0;
-                    
-                    let statsStr = p.handsCount > 0 
-                        ? `<small style="color:#38bdf8;font-weight:bold;margin-left:4px;">[H:${p.handsCount}${p.sitOutHandsCount > 0 ? `+${p.sitOutHandsCount}AFK` : ''} V:${vpip}% P:${pfr}% AF:${afStr} AFq:${afq}%]</small>` 
+
+                    let statsStr = p.handsCount > 0
+                        ? `<small style="color:#38bdf8;font-weight:bold;margin-left:4px;">[H:${p.handsCount}${p.sitOutHandsCount > 0 ? `+${p.sitOutHandsCount}AFK` : ''} V:${vpip}% P:${pfr}% AF:${afStr} AFq:${afq}%]</small>`
                         : `<small style="color:#64748b;margin-left:4px;">[Поиск рук...]</small>`;
 
-                    html += `<div style="border-bottom:1px solid #1e293b;padding:4px 0;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;">
-                            <span style="color:#fde047;">🎯 <b>${escapeHtml(p.cleanNick)}</b> ${statsStr}</span>
+                    let isPlayerInGame = Array.from(p.entries.values()).some(isLiveEntry);
+
+                    html += `<div style="border-bottom:1px solid #1e293b;padding:6px 0;margin-bottom:4px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                            <span style="color:${isPlayerInGame ? '#fde047' : '#94a3b8'};font-size:12px;">
+                                ${isPlayerInGame ? '🎯' : '⚪'} <b>${escapeHtml(p.cleanNick)}</b> ${statsStr}
+                            </span>
                         </div>`;
 
-                    p.entries.forEach(e => {
+                    // v64.2 Z2: активные столы выше выбывших турниров
+                    let sortedEntries = Array.from(p.entries.values()).sort((a, b) => {
+                        let aLive = isLiveEntry(a);
+                        let bLive = isLiveEntry(b);
+                        if (aLive !== bLive) return aLive ? -1 : 1;
+                        return (b.stack || 0) - (a.stack || 0);
+                    });
+
+                    sortedEntries.forEach(e => {
                         let chipsStr = formatChips(e.stack);
                         let isTournLive = !e.tournId || state.liveTournaments.has(e.tournId);
                         let isActuallyBusted = e.isBusted || e.stack === 0 || !isTournLive;
@@ -1430,28 +1484,43 @@ javascript:(function(){
                         let liveCtx = e.tableId ? state.activeTables.get(e.tableId) : null;
                         let liveBB = (liveCtx && liveCtx.getActiveHandBB() > 0) ? liveCtx.getActiveHandBB() : (e.currentBB || 500);
                         let realStackBB = (liveBB > 0 && e.stack > 0 && !isActuallyBusted) ? (Math.round((e.stack / liveBB) * 10) / 10) : 0;
-                        let bbStr = (realStackBB > 0 && !isActuallyBusted) ? ` (${realStackBB} BB)` : '';
-                        
+
+                        // v64.2 Z2 (HUD-ERGO): явная финансовая раскладка вместо
+                        // крипто-бейджа «[#7: 21 000₽]» — номер пули и счётчик
+                        // покупок больше не сталкиваются в одной строке 360px.
+                        // totalBuys = max(bullets, rebuys+1) — v64 F3-совместимо:
+                        // при потере суффикса лобби реальные ре-энтри живут в
+                        // e.rebuys, тогда показываем просто «N входов».
                         let baseBuyin = e.baseBuyin || 0;
-                        // v64 F3 (BUG-REBUY-BADGE): e.bullets парсится ТОЛЬКО из
-                        // суффикса «#N» ника; лобби-строка нередко теряет суффикс
-                        // (mike_scott → bullets=1), тогда реальные ре-энтри живут
-                        // в e.rebuys, а готовая сумма — в e.spent (сканер уже
-                        // посчитал max(bullets, rebuys+1) × baseBuyin). Прежний
-                        // код при bullets=1 молча пропускал бейдж ребаев и
-                        // рендерил только номинал.
-                        let bulletCount = Math.max(e.bullets || 1, (e.rebuys || 0) + 1);
-                        let totalSpent = e.spent || (bulletCount * baseBuyin);
-                        let buyinBadge = '';
+                        let bulletNum = Math.max(1, e.bullets || 1);
+                        let totalBuys = Math.max(bulletNum, (e.rebuys || 0) + 1);
+                        let totalSpent = e.spent || (baseBuyin > 0 ? totalBuys * baseBuyin : 0);
+                        let finStr = '';
                         if (baseBuyin > 0) {
-                            if (bulletCount > 1) {
-                                buyinBadge = ` <span style="color:#a855f7;">[${formatRub(baseBuyin)}₽ (#${bulletCount}: ${formatRub(totalSpent)}₽)]</span>`;
+                            let tableRebuys = Math.max(0, totalBuys - bulletNum);
+                            if (tableRebuys > 0 && bulletNum > 1) {
+                                finStr = `Пуля #${bulletNum} (+${tableRebuys} реб.) • Влито: ${formatRub(totalSpent)}₽`;
+                            } else if (totalBuys > 1) {
+                                finStr = `${totalBuys} ${pluralRu(totalBuys, 'вход', 'входа', 'входов')} • Влито: ${formatRub(totalSpent)}₽`;
                             } else {
-                                buyinBadge = ` <span style="color:#a855f7;">[${formatRub(baseBuyin)}₽]</span>`;
+                                finStr = `1 вход • ${formatRub(baseBuyin)}₽`;
                             }
                         }
 
-                        if (isActuallyBusted) {
+                        if (!isActuallyBusted) {
+                            // ── АКТИВНАЯ ЗАПИСЬ (живой стол) ──
+                            html += `<div style="background:#091322;border-left:3px solid #38bdf8;padding:4px 7px;margin-bottom:3px;border-radius:4px;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                    <span style="color:#38bdf8;font-weight:bold;font-size:11px;">🔹 ${escapeHtml(e.tableName || 'MTT')}</span>
+                                    <span style="color:#22c55e;font-weight:bold;font-size:11px;">${chipsStr}${realStackBB > 0 ? ` <small style="color:#94a3b8;font-weight:normal;">(${realStackBB} BB)</small>` : ''}</span>
+                                </div>
+                                <div style="display:flex;justify-content:space-between;color:#94a3b8;font-size:9px;margin-top:2px;">
+                                    <span>${finStr}</span>
+                                    <span style="color:#64748b;">${escapeHtml(e.rawNick)}</span>
+                                </div>
+                            </div>`;
+                        } else {
+                            // ── ВЫБЫВШАЯ ЗАПИСЬ ──
                             let prizeStr = '';
                             if (e.prize > 0) {
                                 if (e.regular_prize > 0 && e.bounty_prize > 0) {
@@ -1470,14 +1539,15 @@ javascript:(function(){
                                 placeBadge = `${e.place} место`;
                             }
 
-                            html += `<div style="display:flex;justify-content:space-between;font-size:10px;color:#ef4444;padding-left:8px;opacity:0.85;">
-                                <span><s>${escapeHtml(e.rawNick)}</s> <small style="color:#64748b;">${escapeHtml(e.tableName || 'MTT')}</small>${buyinBadge}</span>
-                                <span>${placeBadge}${prizeStr} ${e.place === 1 ? '' : '[ВЫБЫЛ]'}</span>
-                            </div>`;
-                        } else {
-                            html += `<div style="display:flex;justify-content:space-between;font-size:10px;padding-left:8px;color:#38bdf8;">
-                                <span>🔹 <b>${escapeHtml(e.rawNick)}</b> <small style="color:#94a3b8;">${escapeHtml(e.tableName || 'MTT')}</small>${buyinBadge}</span>
-                                <span style="font-weight:bold;">${chipsStr}${bbStr}</span>
+                            html += `<div style="background:#0c0f17;border-left:3px solid #ef4444;padding:3px 7px;margin-bottom:2px;border-radius:4px;opacity:0.8;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;">
+                                    <span style="color:#ef4444;font-size:10px;">✕ <s>${escapeHtml(e.tableName || 'MTT')}</s></span>
+                                    <span style="font-size:10px;color:#f87171;">${placeBadge}${prizeStr}${e.place === 1 ? '' : ' [ВЫБЫЛ]'}</span>
+                                </div>
+                                <div style="display:flex;justify-content:space-between;color:#64748b;font-size:9px;margin-top:1px;">
+                                    <span>${finStr}</span>
+                                    <span><s>${escapeHtml(e.rawNick)}</s></span>
+                                </div>
                             </div>`;
                         }
                     });
@@ -1525,6 +1595,31 @@ javascript:(function(){
             let tInfo = state.discoveredTargetTables.get(tableId);
             let isTableStillTargeted = tInfo && tInfo.targets && tInfo.targets.size > 0;
             let isUserActiveOnTable = state.sockets.userTables.has(tableId);
+
+            // v64.2 Z1 (ZOMBIE-GUARD, самовосстановление пула): даже если
+            // регистрацию стола снесла устаревшая «мёртвая» строка лобби (или
+            // любой другой путь очистки), живая запись цели с фишками
+            // восстанавливает её ДО освобождения сокета — сокет живого стола
+            // больше не выкидывается из фона. Сокет пользовательского стола
+            // освобождаем как прежде (свой сокет берёт стол на себя).
+            if (!isTableStillTargeted && !isUserActiveOnTable) {
+                let revived = false;
+                state.stalkedPlayers.forEach(p => p.entries.forEach(en => {
+                    if (en && en.tableId === tableId && !en.isBusted && (en.stack || 0) > 0 &&
+                        (!en.tournId || state.liveTournaments.has(en.tournId))) {
+                        if (!tInfo) {
+                            tInfo = { tournId: en.tournId || null, targets: new Set() };
+                            state.discoveredTargetTables.set(tableId, tInfo);
+                        }
+                        tInfo.targets.add(p.cleanNick);
+                        revived = true;
+                    }
+                }));
+                if (revived) {
+                    isTableStillTargeted = true;
+                    logDebug("SOCKET_REVIVE", `Регистрация стола ${tableId} восстановлена по живой записи цели`);
+                }
+            }
 
             if (!isTableStillTargeted || isUserActiveOnTable) {
                 releaseBackgroundSocket(tableId, isUserActiveOnTable);
@@ -1737,6 +1832,47 @@ javascript:(function(){
                         let isNewEntry = !existingEntry;
                         let statusChanged = existingEntry && (existingEntry.isBusted !== isBusted);
 
+                        // =====================================================
+                        // v64.2 Z1 (ZOMBIE-GUARD / BUG-BULLET-RESURRECTION):
+                        // Лобби Connective Games ПОСТОЯННО держит строку
+                        // выбывшей пули рядом со строкой живой ре-энтри:
+                        //   <Player nickname="master3anosov"    place="205" stack="0"/>
+                        //   <Player nickname="master3anosov #2" place="0" stack="550000" tableId="f54-…"/>
+                        // Обе строки дают один entryKey (cleanNick), и «мёртвая»
+                        // строка каждый опрос перезаписывала живую запись
+                        // (stack→0, isBusted→true, place=205) И вычищала стол из
+                        // discoveredTargetTables → пул зрителей рвал сокет живого
+                        // стола, HUD «мигал» живой/выбывшей и показывал [ВЫБЫЛ]
+                        // играющему. Защита: «мёртвая» строка НИКОГДА не
+                        // перезаписывает живую запись с фишками. ЖИВЫЕ строки
+                        // (isBusted=false) проходят всегда — обновление стека не
+                        // должно страдать даже при потере суффикса #N (v64 F3).
+                        // ВАЖНО: continue, а не return — return обрывал бы
+                        // пагинацию GetPlayers (остальные цели в этом чанке и
+                        // следующих чанках терялись бы).
+                        // =====================================================
+                        if (existingEntry && isBusted && !existingEntry.isBusted && (existingEntry.stack || 0) > 0) {
+                            // Case A: строка старой пули — её #N меньше номера
+                            // текущей пули записи (живая строка ре-энтри несёт #2,
+                            // мёртвая строка первой пули суффикса не имеет).
+                            if (bullets < (existingEntry.bullets || 1)) {
+                                continue;
+                            }
+                            // Case A2: «мёртвая» строка с УЖЕ записанным ранее
+                            // местом выбытия — лобби перетранслирует выбытие
+                            // старой пули (place=205 живёт в standings вечно).
+                            // НОВОЕ место — настоящее выбытие, проходит.
+                            if (place > 0 && Array.isArray(existingEntry.bust_places) && existingEntry.bust_places.includes(place)) {
+                                continue;
+                            }
+                            // Case B: та же пуля, stack=0 и место ещё не присвоено,
+                            // при этом запись держит живой tableId — транзиентный
+                            // рассинхрон лобби; источник правды — столовой сокет.
+                            if (bullets === (existingEntry.bullets || 1) && existingEntry.tableId && place === 0) {
+                                continue;
+                            }
+                        }
+
                         let serverSpent = fattr(attrs, 'spent');
                         let serverRebuys = (existingEntry && existingEntry.rebuys !== undefined) ? existingEntry.rebuys : Math.max(0, bullets - 1);
                         // v62 B4: детерминированное значение — первичный источник.
@@ -1747,6 +1883,12 @@ javascript:(function(){
                         // турнира (baseBuyin неизвестен), чтобы цель не рапортовала 0₽.
                         let bulletCount = Math.max(bullets, serverRebuys + 1);
                         let totalSpent = (tMeta.baseBuyin > 0) ? (bulletCount * tMeta.baseBuyin) : (serverSpent > 0 ? serverSpent : 0);
+
+                        // v64.2 Z1: память мест выбытия — лобби перетранслирует
+                        // «мёртвые» строки бесконечно; повтор УЖЕ записанного
+                        // места = устаревшая строка (Case A2 в Zombie-Guard).
+                        let bustPlaces = (existingEntry && Array.isArray(existingEntry.bust_places)) ? existingEntry.bust_places.slice() : [];
+                        if (isBusted && place > 0 && !bustPlaces.includes(place)) bustPlaces.push(place);
 
                         // v62 B1: чистим СТАРЫЙ стол даже когда строка лобби не несёт
                         // tableId — так выглядят строки выбывших (стол уже не назначен).
@@ -1794,7 +1936,8 @@ javascript:(function(){
                             tournId: tournId,
                             baseBuyin: tMeta.baseBuyin,
                             spent: totalSpent,
-                            spent_server: serverSpent > 0 ? serverSpent : null
+                            spent_server: serverSpent > 0 ? serverSpent : null,
+                            bust_places: bustPlaces
                         });
 
                         if (isNewEntry || statusChanged) {
@@ -2117,8 +2260,18 @@ javascript:(function(){
                             entry.tournId = tournId;
                             entry.tableId = ctx.tableId;
                             entry.isBusted = (entry.stack === 0);
-                            entry.bullets = bullets;
-                            entry.rebuys = Math.max(0, bullets - 1);
+                            // v64.2 Z3 (ZOMBIE-GUARD, столовая сторона): суффикс
+                            // «#N» ника ЗА СТОЛОМ — счётчик ВСЕХ покупок (входы +
+                            // ребаи за столом; наблюдение: лобби «borsalino #7»,
+                            // стол «borsalino #14», всего 14 покупок), а суффикс
+                            // ЛОББИ — номер текущей пули. Прежний безусловный
+                            // перезапис затирал табличным числом номер пули:
+                            // (а) HUD «Пуля #N» мигал 7↔14; (б) Zombie-Guard
+                            // сканера, сравнивающий номера пуль, слабел. Теперь
+                            // табличное число только ПОДНИМАЕТ rebuys (покупки
+                            // монотонны), номер пули не трогаем.
+                            if (bullets > (entry.rebuys || 0) + 1) entry.rebuys = bullets - 1;
+                            if (!entry.bullets) entry.bullets = bullets;
                             // v62 B4: та же формула, что и в сканере/экспорте —
                             // детерминированные bullets × baseBuyin; серверное
                             // значение — аудит + фолбэк при неизвестном baseBuyin.
@@ -2498,7 +2651,7 @@ javascript:(function(){
         state.scannerQueue.length = 0;
         state.scannerQueued.clear();
         document.querySelectorAll('[id^="stalker-hud"]').forEach(el => el.remove());
-        console.log("%c[SCALPEL] Инстанс v64.1 уничтожен.", "color:#f59e0b;");
+        console.log("%c[SCALPEL] Инстанс v64.2 уничтожен.", "color:#f59e0b;");
     };
 
     // v61 F7: периодическое обслуживание состояния — очистка устаревших/растущих структур
@@ -2786,5 +2939,5 @@ javascript:(function(){
     autoDetectSessionId();
     triggerLobbyTournamentRefresh();
 
-    console.log("%c👑 [SCALPEL v64.1 APEX-IMPERATOR] Запущен. v60 + v61 F1–F8 + v62 B1–B4 + v63 C-раунд устранено; v64 — раунд-4: F1 номинал бай-ина = buyIn + bounty (рейк в entryCost), F2 amount = дельта во всех действиях (chip_conservation восстановлен), F3 бейдж ре-энтрий max(bullets, rebuys+1) из e.spent, F4 formatRub для денег, F5 маркер «!» утекших карт в DSL, F6 строка баунти в GTO SUMMARY; C7-агрессивность олл-ина переведена на итог улицы. v64.1 — polish: кириллические ключи PKO (нокаут|баунти|пко|охотник|hunter|knockout) + фолбэк-имена мест по serverSeatBase.", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v64.2 APEX-IMPERATOR] Запущен. v60 + v61 F1–F8 + v62 B1–B4 + v63 C-раунд устранено; v64 — раунд-4: F1 номинал бай-ина = buyIn + bounty (рейк в entryCost), F2 amount = дельта во всех действиях (chip_conservation восстановлен), F3 бейдж ре-энтрий max(bullets, rebuys+1) из e.spent, F4 formatRub для денег, F5 маркер «!» утекших карт в DSL, F6 строка баунти в GTO SUMMARY; C7-агрессивность олл-ина переведена на итог улицы. v64.1 — polish: кириллические ключи PKO (нокаут|баунти|пко|охотник|hunter|knockout) + фолбэк-имена мест по serverSeatBase. v64.2 — Zombie-Guard: «мёртвая» строка лобби больше не перезаписывает живую запись и не рвёт сокет живого стола (пул самовосстанавливается); HUD-ERGO: живые цели сверху, двухстрочные карточки, «Пуля #N (+R реб.) • Влито: X₽».", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
