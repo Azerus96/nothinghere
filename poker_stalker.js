@@ -113,14 +113,14 @@ javascript:(function(){
     document.querySelectorAll('[id^="stalker-hud"]').forEach(el => el.remove());
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
-    const MAX_BACKGROUND_TABLES = 80;
+    const MAX_BACKGROUND_TABLES = 180;
     const MAX_ARCHIVE_HANDS = 10000;
-    const MAX_OUTBOX_QUEUE = 3000;
-    const MAX_DEBUG_LOGS = 300;
+    const MAX_OUTBOX_QUEUE = 10000;
+    const MAX_DEBUG_LOGS = 800;
     const SCANNER_CONCURRENCY = 3;
-    const MAX_SCANNER_QUEUE = 500;
+    const MAX_SCANNER_QUEUE = 800;
     const MAX_CHAT_LOGS = 2000;
-    const MAX_TOURNAMENT_CACHE = 3000;
+    const MAX_TOURNAMENT_CACHE = 8000;
     const STALE_TOURNAMENT_MS = 15 * 60 * 1000;
 
     const TARGET_LIST = [
