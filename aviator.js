@@ -1,14 +1,19 @@
 javascript:(function(){
-  if(window.__avtrxDOMv7){
-    alert('Логгер v7 уже запущен!');
+  // Снимаем блокировку от предыдущих версий
+  window.__avtrxDOMv7 = false;
+  window.__avtrxPrecisionV6 = false;
+  
+  if (window.__avtrxIroncladV8) {
+    alert('Ironclad v8 уже активен!');
     return;
   }
-  window.__avtrxDOMv7 = true;
+  window.__avtrxIroncladV8 = true;
 
   var rounds = [];
-  var lastRoundTime = Date.now();
+  var lastLeadText = '';
   var streakCount = 0;
   var streakSum = 0;
+  var lastRoundTs = Date.now();
 
   var buckets = {
     total: 0,
@@ -36,14 +41,13 @@ javascript:(function(){
     if (m >= 100.00) buckets.gt_100_++;
   }
 
-  function onNewMultiplier(m) {
+  function addRound(m, isBacklog) {
     var now = Date.now();
-    var cycleDuration = +((now - lastRoundTime) / 1000).toFixed(2);
-    lastRoundTime = now;
+    var cycle = isBacklog ? 0 : +((now - lastRoundTs) / 1000).toFixed(2);
+    if (!isBacklog) lastRoundTs = now;
 
     updateBuckets(m);
 
-    // Подсчет серий перед 10x+ (Пункт 4)
     var gapInfo = null;
     if (m >= 10.0) {
       gapInfo = {
@@ -58,7 +62,6 @@ javascript:(function(){
       streakSum += m;
     }
 
-    // Число игроков из селектора HTML
     var pEl = document.querySelector('.flight-radar-participants-count');
     var players = pEl ? parseInt(pEl.textContent.trim(), 10) : 0;
 
@@ -66,74 +69,75 @@ javascript:(function(){
       num: rounds.length + 1,
       ts: now,
       multiplier: m,
-      cycle_sec: cycleDuration,
+      cycle_sec: cycle,
       players: players,
       gap_before_10x: gapInfo
     });
-
-    updateHUD(m);
   }
 
-  // Наблюдатель за лентой истории внизу экрана
-  var historyContainer = document.querySelector('.bottom-odds-history');
-  if (!historyContainer) {
-    alert('Не найден контейнер истории (.bottom-odds-history)!');
-    return;
-  }
-
-  // При старте считываем последний отображаемый коэф
-  var lastAddedEl = historyContainer.querySelector('.px-1:last-child div');
-  var lastRecordedText = lastAddedEl ? lastAddedEl.textContent.trim() : '';
-
-  var observer = new MutationObserver(function(mutations){
-    mutations.forEach(function(mutation){
-      mutation.addedNodes.forEach(function(node){
-        if (node.nodeType === 1) {
-          var valEl = node.querySelector ? node.querySelector('[class*="text-action-a"]') : null;
-          if (!valEl && node.getAttribute('class') && node.getAttribute('class').includes('text-action-a')) {
-            valEl = node;
-          }
-          if (valEl) {
-            var valTxt = valEl.textContent.trim();
-            var m = parseFloat(valTxt);
-            if (!isNaN(m) && m > 0) {
-              onNewMultiplier(m);
-            }
-          }
-        }
-      });
+  // --- 1. МГНОВЕННЫЙ ЗАХВАТ ВСЕЙ ИМЕЮЩЕЙСЯ ИСТОРИИ ИЗ DOM ---
+  var currentEls = document.querySelectorAll('.bottom-odds-history [class*="text-action-a"]');
+  if (currentEls.length > 0) {
+    // В ленте первый элемент - самый свежий, последний - самый старый. Загружаем хронологически:
+    var historical = [];
+    currentEls.forEach(function(el){
+      var v = parseFloat(el.textContent.trim());
+      if (!isNaN(v) && v > 0) historical.push(v);
     });
-  });
+    
+    // Запоминаем текущий самый свежий элемент
+    lastLeadText = currentEls[0].textContent.trim();
 
-  observer.observe(historyContainer, { childList: true, subtree: true });
+    // Загружаем снизу вверх (хронологически)
+    historical.reverse().forEach(function(m){
+      addRound(m, true);
+    });
+  }
 
-  // --- ИНТЕРФЕЙС HUD ---
+  // --- 2. ЖЕЛЕЗОБЕТОННЫЙ ПОЛЛИНГ КАЖДЫЕ 200 МС ---
+  setInterval(function(){
+    var firstEl = document.querySelector('.bottom-odds-history [class*="text-action-a"]');
+    if (firstEl) {
+      var txt = firstEl.textContent.trim();
+      if (txt && txt !== lastLeadText) {
+        lastLeadText = txt;
+        var m = parseFloat(txt);
+        if (!isNaN(m) && m > 0) {
+          addRound(m, false);
+          updateHUD(m);
+        }
+      }
+    }
+  }, 200);
+
+  // --- 3. ИНТЕРФЕЙС HUD ---
+  var old = document.getElementById('avtrx-ironclad-hud');
+  if (old) old.remove();
+
   var hud = document.createElement('div');
-  hud.id = 'avtrx-hud-v7';
-  hud.style.cssText = 'position:fixed;bottom:10px;left:4%;width:92%;background:#090d16;color:#fff;border:2px solid #22c55e;border-radius:10px;padding:8px 12px;z-index:2147483647;font-family:monospace;font-size:11px;box-shadow:0 0 25px rgba(0,0,0,0.9);';
+  hud.id = 'avtrx-ironclad-hud';
+  hud.style.cssText = 'position:fixed;bottom:10px;left:4%;width:92%;background:#090d16;color:#fff;border:2px solid #38bdf8;border-radius:10px;padding:8px 12px;z-index:2147483647;font-family:monospace;font-size:11px;box-shadow:0 0 25px rgba(0,0,0,0.9);';
   
   hud.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-                  '<span style="color:#4ade80;font-weight:bold;">✈ DOM-TRACKER v7</span>' +
-                  '<span id="v7-last" style="color:#facc15;font-weight:bold;font-size:13px;">Слушаю ленту...</span>' +
-                  '<b id="v7-cnt" style="color:#38bdf8;font-size:12px;">0 R</b>' +
+                  '<span style="color:#38bdf8;font-weight:bold;">✈ IRONCLAD v8</span>' +
+                  '<span id="v8-last" style="color:#facc15;font-weight:bold;font-size:13px;">' + (rounds.length ? rounds[rounds.length-1].multiplier + 'x' : 'Слежу...') + '</span>' +
+                  '<b id="v8-cnt" style="color:#4ade80;font-size:12px;">' + rounds.length + ' R</b>' +
                   '</div>' +
-                  '<div id="v7-stats" style="font-size:10px;color:#94a3b8;margin-bottom:8px;line-height:1.4;">' +
-                  '< 1.10: 0% | < 1.50: 0% | > 10x: 0%' +
-                  '</div>' +
+                  '<div id="v8-stats" style="font-size:10px;color:#94a3b8;margin-bottom:8px;line-height:1.4;"></div>' +
                   '<div style="display:flex;gap:6px;">' +
-                  '<button id="v7-save" style="flex:1;background:#16a34a;color:#fff;border:none;padding:6px;border-radius:4px;font-weight:bold;cursor:pointer;">💾 JSON ДЛЯ АНАЛИЗА</button>' +
-                  '<button id="v7-stat-btn" style="background:#0284c7;color:#fff;border:none;padding:6px 10px;border-radius:4px;cursor:pointer;">📊 ИНФО</button>' +
-                  '<button id="v7-clr" style="background:#475569;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🧹</button>' +
+                  '<button id="v8-save" style="flex:1;background:#16a34a;color:#fff;border:none;padding:6px;border-radius:4px;font-weight:bold;cursor:pointer;">💾 СКАЧАТЬ ВЕСЬ JSON</button>' +
+                  '<button id="v8-stat-btn" style="background:#0284c7;color:#fff;border:none;padding:6px 10px;border-radius:4px;cursor:pointer;">📊 ИНФО</button>' +
+                  '<button id="v8-clr" style="background:#475569;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🧹</button>' +
                   '</div>';
   document.body.appendChild(hud);
 
   function updateHUD(lastM){
-    var cEl = document.getElementById('v7-cnt');
-    var lEl = document.getElementById('v7-last');
-    var sEl = document.getElementById('v7-stats');
+    var cEl = document.getElementById('v8-cnt');
+    var lEl = document.getElementById('v8-last');
+    var sEl = document.getElementById('v8-stats');
 
     if (cEl) cEl.textContent = rounds.length + ' R';
-    if (lEl) lEl.textContent = lastM.toFixed(2) + 'x';
+    if (lEl && lastM) lEl.textContent = lastM.toFixed(2) + 'x';
     
     if (sEl && buckets.total > 0) {
       var p11 = ((buckets.lt_1_10 / buckets.total) * 100).toFixed(1);
@@ -143,22 +147,25 @@ javascript:(function(){
     }
   }
 
-  document.getElementById('v7-stat-btn').onclick = function(){
-    if (!rounds.length) return alert('Пока раундов не записано.');
+  updateHUD(rounds.length ? rounds[rounds.length-1].multiplier : 0);
+
+  document.getElementById('v8-stat-btn').onclick = function(){
+    var avgC = (rounds.reduce(function(a,b){return a+b.cycle_sec;},0)/rounds.length).toFixed(2);
     var txt = '📊 СТАТИСТИКА (' + rounds.length + ' раундов):\n\n' +
               ' • Мгновенный (<=1.01): ' + buckets.instant_1_00 + ' (' + ((buckets.instant_1_00/buckets.total)*100).toFixed(1) + '%)\n' +
               ' • < 1.10x: ' + buckets.lt_1_10 + ' (' + ((buckets.lt_1_10/buckets.total)*100).toFixed(1) + '%)\n' +
               ' • < 1.50x: ' + buckets.lt_1_50 + ' (' + ((buckets.lt_1_50/buckets.total)*100).toFixed(1) + '%)\n' +
               ' • >= 10.0x: ' + buckets.gt_10_0 + ' (' + ((buckets.gt_10_0/buckets.total)*100).toFixed(1) + '%)\n' +
-              ' • >= 50.0x: ' + buckets.gt_50_0 + ' (' + ((buckets.gt_50_0/buckets.total)*100).toFixed(1) + '%)\n\n' +
-              'Текущая серия без 10x: ' + streakCount + ' раундов (сумма множителей: ' + streakSum.toFixed(2) + ')';
+              ' • >= 50.0x: ' + buckets.gt_50_0 + ' (' + ((buckets.gt_50_0/buckets.total)*100).toFixed(1) + '%)\n' +
+              ' • >= 100.0x: ' + buckets.gt_100_ + ' (' + ((buckets.gt_100_/buckets.total)*100).toFixed(1) + '%)\n\n' +
+              'Текущая серия без 10x+: ' + streakCount + ' раундов (сумма: ' + streakSum.toFixed(2) + ')';
     alert(txt);
   };
 
-  document.getElementById('v7-save').onclick = function(){
-    if (!rounds.length) return alert('Выборка пуста!');
+  document.getElementById('v8-save').onclick = function(){
     var payload = {
       exportedAt: new Date().toISOString(),
+      game: 'Aviatrix',
       totalRounds: rounds.length,
       bucketStats: buckets,
       rounds: rounds
@@ -166,11 +173,11 @@ javascript:(function(){
     var blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'aviatrix_v7_dataset_' + Date.now() + '.json';
+    a.download = 'aviatrix_ironclad_v8_' + Date.now() + '.json';
     a.click();
   };
 
-  document.getElementById('v7-clr').onclick = function(){
+  document.getElementById('v8-clr').onclick = function(){
     rounds = [];
     buckets = { total:0, instant_1_00:0, lt_1_10:0, lt_1_30:0, lt_1_50:0, gt_3_00:0, gt_5_00:0, gt_10_0:0, gt_50_0:0, gt_100_:0 };
     streakCount = 0;
