@@ -1,10 +1,10 @@
 javascript:(function(){
-  window.__avtrxDossierV17 = false;
-  if (window.__avtrxTurboV18) {
-    alert('Turbo v18 уже запущен!');
+  window.__avtrxTurboV18 = false;
+  if (window.__avtrxInstantV19) {
+    alert('Instant v19 уже работает!');
     return;
   }
-  window.__avtrxTurboV18 = true;
+  window.__avtrxInstantV19 = true;
 
   var rounds = [];
   var playerDossier = {};
@@ -17,7 +17,6 @@ javascript:(function(){
   var lastCrashTs = Date.now();
   var peakPlayers = 0;
 
-  // Несгораемый накопитель участников текущего полета
   var currentFlightWhales = new Map();
   var seenBetsInCurrentRound = new Set();
 
@@ -45,7 +44,7 @@ javascript:(function(){
     return +(parseFloat(clean.replace(/[^\d.]/g, '')) || 0).toFixed(2);
   }
 
-  // Радар онлайна (✈ 1700)
+  // Радар онлайна (✈)
   setInterval(function(){
     var pEl = document.querySelector('.flight-radar-participants-count');
     if (pEl) {
@@ -54,13 +53,10 @@ javascript:(function(){
     }
   }, 200);
 
-  // Добавление ставки игрока (СТРОГО 1 РАЗ ЗА РАУНД)
   function registerPlayerBet(name, bet, mult, payout, isCashout) {
     if (!name || name === '₽' || bet <= 0) return;
-    
     var betKey = name + '_' + bet;
-    
-    // Обновляем текущее состояние в раунде
+
     currentFlightWhales.set(betKey, {
       name: name,
       bet: bet,
@@ -70,25 +66,21 @@ javascript:(function(){
       status: isCashout ? 'STATUS_CASHOUT' : 'STATUS_PENDING'
     });
 
-    // В финансовое досье пишем только один раз за этот раунд!
     if (!seenBetsInCurrentRound.has(betKey)) {
       seenBetsInCurrentRound.add(betKey);
-
       if (!playerDossier[name]) {
         playerDossier[name] = { name: name, bets: 0, wagered: 0, won: 0, pnl: 0, cashouts: [] };
       }
       var pd = playerDossier[name];
       pd.bets++;
       pd.wagered = +(pd.wagered + bet).toFixed(2);
-      
-      // Слежка за Porceh
+
       if (name.toLowerCase().includes(targetPlayer.toLowerCase())) {
         targetStats.bets++;
         targetStats.wagered = +(targetStats.wagered + bet).toFixed(2);
       }
     }
 
-    // Если произошел кэшаут, обновляем выигрыш игрока
     if (isCashout && payout > 0) {
       var pdWin = playerDossier[name];
       if (pdWin) {
@@ -105,42 +97,17 @@ javascript:(function(){
     }
   }
 
-  // --- 1. МГНОВЕННЫЙ СЕТЕВОЙ ЗАХВАТ ВСЕХ 50 ИГРОКОВ (ЗА 5 МС) ---
-  var origFetch = window.fetch;
-  window.fetch = async function(){
-    var res = await origFetch.apply(this, arguments);
-    var urlStr = arguments[0] ? (typeof arguments[0] === 'string' ? arguments[0] : arguments[0].url || '') : '';
-    
-    if (urlStr.includes('GetParticipants')) {
-      try {
-        res.clone().json().then(function(d){
-          if (d.participants && d.participants.length) {
-            d.participants.forEach(function(p){
-              var pName = p.assetsInfo ? p.assetsInfo.name : 'Anonymous';
-              var b = +(p.betAmount || p.amount || 0);
-              var w = +(p.winAmount || 0);
-              var m = +(p.odds || 0);
-              var isOut = p.status === 'STATUS_CASHOUT' || w > 0;
-              registerPlayerBet(pName, b, m, w, isOut);
-            });
-            updateWhalesUI();
-          }
-        }).catch(function(){});
-      } catch(e){}
-    }
-    return res;
-  };
-
-  // --- 2. ПОЗИЦИОННЫЙ СКАНИРОВАНИЕ DOM (РЕЗЕРВНЫЙ КАНАЛ) ---
-  function scanDOMFast() {
+  // --- МГНОВЕННЫЙ ЗАХВАТ ВСЕХ ИГРОКОВ (ВКЛЮЧАЯ ТИРЕ —/–/-) ---
+  function scanAllWhalesInstant() {
     var all = document.querySelectorAll('*');
     for (var i = 0; i < all.length; i++) {
       var el = all[i];
-      if (el.closest('#avtrx-v18-hud') || el.closest('.bottom-odds-history') || el.closest('.bet-panel')) continue;
+      if (el.closest('#avtrx-v19-hud') || el.closest('.bottom-odds-history') || el.closest('.bet-panel')) continue;
 
       if (el.children.length === 0 && el.textContent) {
         var txt = el.textContent.trim();
-        if (/^\d+(\.\d+)?x$/i.test(txt) || txt === '-') {
+        // Ловит множитель 1.50x ИЛИ ЛЮБОЕ ТИРЕ (—, –, −, -)
+        if (/^\d+(\.\d+)?x$/i.test(txt) || /^[—–−-]$/.test(txt)) {
           var row = el.parentElement;
           while (row && row.children.length < 3 && row.parentElement && !row.parentElement.classList.contains('app-root')) {
             row = row.parentElement;
@@ -154,39 +121,60 @@ javascript:(function(){
                 if (cTxt) colTexts.push(cTxt);
               }
             }
-            var mIdx = colTexts.findIndex(function(t){ return /^\d+(\.\d+)?x$/i.test(t) || t === '-'; });
+            var mIdx = colTexts.findIndex(function(t){ return /^\d+(\.\d+)?x$/i.test(t) || /^[—–−-]$/.test(t); });
             if (mIdx >= 2) {
               var multStr = colTexts[mIdx];
               var betStr = colTexts[mIdx - 1];
               var nameStr = colTexts.slice(0, mIdx - 1).join(' ').trim();
               var winStr = colTexts[mIdx + 1] || '-';
 
+              var isDash = /^[—–−-]$/.test(multStr);
               var bVal = parseMoney(betStr);
-              var mVal = multStr === '-' ? 0 : (parseFloat(multStr.replace('x', '')) || 0);
-              var wVal = (winStr === '-' || !winStr) ? 0 : parseMoney(winStr);
+              var mVal = isDash ? 0 : (parseFloat(multStr.replace('x', '')) || 0);
+              var wVal = isDash ? 0 : parseMoney(winStr);
 
-              if (bVal >= 10) {
-                registerPlayerBet(nameStr, bVal, mVal, wVal, multStr !== '-');
+              if (bVal >= 10 && nameStr && nameStr !== '₽') {
+                registerPlayerBet(nameStr, bVal, mVal, wVal, !isDash);
               }
             }
           }
         }
       }
     }
-    updateWhalesUI();
-  }
 
-  setInterval(scanDOMFast, 250);
-
-  function updateWhalesUI() {
-    var stEl = document.getElementById('v18-whales-stat');
+    var stEl = document.getElementById('v19-whales-stat');
     if (stEl) {
       stEl.textContent = 'В базе полета: ' + currentFlightWhales.size + ' чел';
-      stEl.style.color = currentFlightWhales.size > 0 ? '#4ade80' : '#f87171';
+      stEl.style.color = currentFlightWhales.size >= 20 ? '#4ade80' : (currentFlightWhales.size > 0 ? '#facc15' : '#f87171');
     }
   }
 
-  // Фиксация раунда при падении
+  // Сканируем 5 раз в секунду
+  setInterval(scanAllWhalesInstant, 200);
+
+  // Сетевой перехват GetParticipants
+  var origFetch = window.fetch;
+  window.fetch = async function(){
+    var res = await origFetch.apply(this, arguments);
+    var urlStr = arguments[0] ? (typeof arguments[0] === 'string' ? arguments[0] : arguments[0].url || '') : '';
+    if (urlStr.includes('GetParticipants')) {
+      try {
+        res.clone().json().then(function(d){
+          if (d.participants && d.participants.length) {
+            d.participants.forEach(function(p){
+              var pName = p.assetsInfo ? p.assetsInfo.name : 'Anonymous';
+              var b = +(p.betAmount || p.amount || 0);
+              var w = +(p.winAmount || 0);
+              var m = +(p.odds || 0);
+              registerPlayerBet(pName, b, m, w, p.status === 'STATUS_CASHOUT' || w > 0);
+            });
+          }
+        }).catch(function(){});
+      } catch(e){}
+    }
+    return res;
+  };
+
   function recordRound(m) {
     var now = Date.now();
     var cycleTotal = +((now - lastCrashTs) / 1000).toFixed(2);
@@ -211,7 +199,6 @@ javascript:(function(){
       streakSum += m;
     }
 
-    // Сохраняем участников, зафиксированных за время этого полета
     var roundWhales = Array.from(currentFlightWhales.values());
 
     rounds.push({
@@ -221,13 +208,12 @@ javascript:(function(){
       cycle_sec: cycleTotal,
       flight_sec: flightSec,
       pause_sec: pauseSec,
-      players_online: peakPlayers || 1600,
+      players_online: peakPlayers || 1500,
       streak_before_10x: gapInfo,
       whales_count: roundWhales.length,
       whales: roundWhales
     });
 
-    // Сброс буферов под следующий раунд
     currentFlightWhales.clear();
     seenBetsInCurrentRound.clear();
     peakPlayers = 0;
@@ -235,7 +221,7 @@ javascript:(function(){
     updateHUD(m, flightSec, rounds[rounds.length-1].players_online);
   }
 
-  // Поллинг ленты истории коэффициентов
+  // Поллинг ленты истории
   setInterval(function(){
     var firstEl = document.querySelector('.bottom-odds-history [class*="text-action-a"]');
     if (firstEl) {
@@ -253,34 +239,34 @@ javascript:(function(){
   }, 200);
 
   // HUD
-  var old = document.getElementById('avtrx-v18-hud');
+  var old = document.getElementById('avtrx-v19-hud');
   if (old) old.remove();
 
   var hud = document.createElement('div');
-  hud.id = 'avtrx-v18-hud';
+  hud.id = 'avtrx-v19-hud';
   hud.style.cssText = 'position:fixed;bottom:10px;left:4%;width:92%;background:#090d16;color:#fff;border:2px solid #38bdf8;border-radius:10px;padding:8px 12px;z-index:2147483647;font-family:monospace;font-size:11px;box-shadow:0 0 25px rgba(0,0,0,0.9);';
   
   hud.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
-                  '<span style="color:#38bdf8;font-weight:bold;">✈ TURBO v18</span>' +
-                  '<span id="v18-status" style="color:#facc15;font-weight:bold;font-size:12px;">Слежу...</span>' +
-                  '<b id="v18-cnt" style="color:#4ade80;font-size:12px;">0 R</b>' +
+                  '<span style="color:#38bdf8;font-weight:bold;">✈ INSTANT v19</span>' +
+                  '<span id="v19-status" style="color:#facc15;font-weight:bold;font-size:12px;">Слежу...</span>' +
+                  '<b id="v19-cnt" style="color:#4ade80;font-size:12px;">0 R</b>' +
                   '</div>' +
                   '<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:6px;">' +
-                  '<span id="v18-whales-stat" style="color:#f87171;">В базе полета: 0 чел</span>' +
-                  '<span id="v18-target-stat" style="color:#38bdf8;">🎯 ' + targetPlayer + ': жду...</span>' +
+                  '<span id="v19-whales-stat" style="color:#f87171;">В базе полета: 0 чел</span>' +
+                  '<span id="v19-target-stat" style="color:#38bdf8;">🎯 ' + targetPlayer + ': жду...</span>' +
                   '</div>' +
                   '<div style="display:flex;gap:4px;">' +
-                  '<button id="v18-save" style="flex:1;background:#16a34a;color:#fff;border:none;padding:6px;border-radius:4px;font-weight:bold;cursor:pointer;">💾 СКАЧАТЬ</button>' +
-                  '<button id="v18-check-btn" style="background:#0284c7;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🔍 КТО В БАЗЕ?</button>' +
-                  '<button id="v18-target-btn" style="background:#8b5cf6;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🎯</button>' +
-                  '<button id="v18-clr" style="background:#475569;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🧹</button>' +
+                  '<button id="v19-save" style="flex:1;background:#16a34a;color:#fff;border:none;padding:6px;border-radius:4px;font-weight:bold;cursor:pointer;">💾 СКАЧАТЬ</button>' +
+                  '<button id="v19-check-btn" style="background:#0284c7;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🔍 КТО В БАЗЕ?</button>' +
+                  '<button id="v19-target-btn" style="background:#8b5cf6;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🎯</button>' +
+                  '<button id="v19-clr" style="background:#475569;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🧹</button>' +
                   '</div>';
   document.body.appendChild(hud);
 
   function updateHUD(lastM, flightSec, players){
-    var cEl = document.getElementById('v18-cnt');
-    var sEl = document.getElementById('v18-status');
-    var tEl = document.getElementById('v18-target-stat');
+    var cEl = document.getElementById('v19-cnt');
+    var sEl = document.getElementById('v19-status');
+    var tEl = document.getElementById('v19-target-stat');
 
     if (cEl) cEl.textContent = rounds.length + ' R';
     if (sEl && lastM) sEl.innerHTML = lastM.toFixed(2) + 'x (' + flightSec + 'с | ' + players + ' чел)';
@@ -291,27 +277,27 @@ javascript:(function(){
     }
   }
 
-  document.getElementById('v18-check-btn').onclick = function(){
+  document.getElementById('v19-check-btn').onclick = function(){
     var arr = Array.from(currentFlightWhales.values());
-    if (!arr.length) return alert('В текущем полете игроки еще не зафиксированы. Откройте шторку участников пальцем!');
+    if (!arr.length) return alert('Список пуст. Убедитесь, что шторка открыта пальцем!');
     var msg = '👀 СЕЙЧАС В БАЗЕ (' + arr.length + ' игроков):\n\n';
     arr.slice(0, 10).forEach(function(p, i){
-      var st = p.status === 'STATUS_CASHOUT' ? (p.mult + 'x -> ' + p.payout + '₽') : 'В полете (-)';
+      var st = p.status === 'STATUS_CASHOUT' ? (p.mult + 'x -> ' + p.payout + '₽') : 'В полете (—)';
       msg += (i+1) + '. ' + p.name + ' | ' + p.bet + ' ₽ | ' + st + '\n';
     });
     alert(msg);
   };
 
-  document.getElementById('v18-target-btn').onclick = function(){
+  document.getElementById('v19-target-btn').onclick = function(){
     var n = prompt('Ник для слежки:', targetPlayer);
     if (n) {
       targetPlayer = n.trim();
       targetStats = { bets: 0, wagered: 0, won: 0, pnl: 0 };
-      document.getElementById('v18-target-stat').textContent = '🎯 ' + targetPlayer + ': жду...';
+      document.getElementById('v19-target-stat').textContent = '🎯 ' + targetPlayer + ': жду...';
     }
   };
 
-  document.getElementById('v18-save').onclick = function(){
+  document.getElementById('v19-save').onclick = function(){
     if (!rounds.length) return alert('Выборка пуста!');
     var payload = {
       exportedAt: new Date().toISOString(),
@@ -324,11 +310,11 @@ javascript:(function(){
     var blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'aviatrix_turbo_v18_' + Date.now() + '.json';
+    a.download = 'aviatrix_instant_v19_' + Date.now() + '.json';
     a.click();
   };
 
-  document.getElementById('v18-clr').onclick = function(){
+  document.getElementById('v19-clr').onclick = function(){
     rounds = [];
     playerDossier = {};
     currentFlightWhales.clear();
