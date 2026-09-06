@@ -1,24 +1,23 @@
 javascript:(function(){
-  window.__avtrxStealthV14 = false;
-  window.__avtrxOpticalV15 = false;
-  if (window.__avtrxRadarV16) {
-    alert('Radar v16 уже активен!');
+  window.__avtrxRadarV16 = false;
+  if (window.__avtrxDossierV17) {
+    alert('Dossier v17 уже запущен!');
     return;
   }
-  window.__avtrxRadarV16 = true;
+  window.__avtrxDossierV17 = true;
 
   var rounds = [];
   var playerDossier = {};
   var targetPlayer = 'Porceh';
-  var targetFound = false;
   var targetStats = { bets: 0, wagered: 0, won: 0, pnl: 0, lastBet: 0, lastMult: 0 };
+  var targetFound = false;
 
   var lastLeadText = '';
   var streakCount = 0;
   var streakSum = 0;
   var lastCrashTs = Date.now();
   var peakPlayers = 0;
-  var cachedWhales = [];
+  var currentWhalesBuffer = [];
 
   var buckets = { total: 0, instant_1_00: 0, lt_1_10: 0, lt_1_30: 0, lt_1_50: 0, gt_3_00: 0, gt_5_00: 0, gt_10_0: 0, gt_50_0: 0, gt_100_: 0 };
 
@@ -35,6 +34,15 @@ javascript:(function(){
     if (m >= 100.00) buckets.gt_100_++;
   }
 
+  function parseMoneyStr(s) {
+    if (!s) return 0;
+    var clean = s.replace('₽', '').trim();
+    if (/K$/i.test(clean)) {
+      return +(parseFloat(clean.replace(/K$/i, '')) * 1000).toFixed(2);
+    }
+    return +(parseFloat(clean.replace(/[^\d.]/g, '')) || 0).toFixed(2);
+  }
+
   // Непрерывный радар онлайна (✈ 1127)
   setInterval(function(){
     var pEl = document.querySelector('.flight-radar-participants-count');
@@ -44,101 +52,142 @@ javascript:(function(){
     }
   }, 200);
 
-  // --- БРОНЕБОЙНЫЙ ПОИСК СТРОК ИГРОКОВ ПО ЯКОРНОМУ СИМВОЛУ ---
-  function extractWhalesByAnchor() {
-    var extracted = [];
+  // --- ПОЗИЦИОННЫЙ ПАРСЕР СТРОК ИГРОКОВ (ЯКОРЬ: МНОЖИТЕЛЬ) ---
+  function parseAllVisibleWhales() {
+    var list = [];
     var all = document.querySelectorAll('*');
-    var anchorRow = null;
 
-    // Шаг 1: Ищем хотя бы один элемент со множителем со скриншота (например "1.33x" или "-")
     for (var i = 0; i < all.length; i++) {
       var el = all[i];
-      if (el.closest('#avtrx-v16-hud') || el.closest('.bottom-odds-history') || el.closest('.bet-panel')) continue;
-      
+      if (el.closest('#avtrx-v17-hud') || el.closest('.bottom-odds-history') || el.closest('.bet-panel')) continue;
+
+      // Ищем якорный элемент множителя: либо "1.33x", либо прочерк "-" (в полете)
       if (el.children.length === 0 && el.textContent) {
         var txt = el.textContent.trim();
-        // Ищем якорный кэшаут вида "1.33x" или "2.00x"
-        if (/^\d+\.\d{2}x$/i.test(txt)) {
-          // Находим строку-родитель
-          var p = el.parentElement;
-          if (p && p.textContent && (p.textContent.includes('K') || p.textContent.includes('₽'))) {
-            anchorRow = p;
-            break;
+        if (/^\d+(\.\d+)?x$/i.test(txt) || txt === '-') {
+          var row = el.parentElement;
+          // Ищем родительскую строку, содержащую информацию о ставке
+          while (row && row.children.length < 3 && row.parentElement && !row.parentElement.classList.contains('app-root')) {
+            row = row.parentElement;
+          }
+
+          if (row && row.children.length >= 3) {
+            // Собираем текстовые колонки внутри этой строки
+            var colTexts = [];
+            var colNodes = row.querySelectorAll('*');
+            for (var c = 0; c < colNodes.length; c++) {
+              if (colNodes[c].children.length === 0) {
+                var cTxt = colNodes[c].textContent.trim();
+                if (cTxt) colTexts.push(cTxt);
+              }
+            }
+
+            // Находим точный индекс множителя среди колонок
+            var mIdx = colTexts.findIndex(function(t){ return /^\d+(\.\d+)?x$/i.test(t) || t === '-'; });
+            if (mIdx >= 2) {
+              var multStr = colTexts[mIdx];
+              var betStr = colTexts[mIdx - 1]; // Колонка строго ПЕРЕД множителем — это ставка!
+              var nameStr = colTexts.slice(0, mIdx - 1).join(' ').trim(); // Все до ставки — это имя!
+              var winStr = colTexts[mIdx + 1] || '-'; // Колонка строго ПОСЛЕ — это выплата!
+
+              if (nameStr && nameStr !== '₽' && !nameStr.includes('Place')) {
+                var bVal = parseMoneyStr(betStr);
+                var mVal = multStr === '-' ? 0 : (parseFloat(multStr.replace('x', '')) || 0);
+                var wVal = (winStr === '-' || !winStr) ? 0 : parseMoneyStr(winStr);
+
+                if (bVal > 0) {
+                  list.push({
+                    name: nameStr,
+                    bet: bVal,
+                    mult: mVal,
+                    payout: wVal,
+                    profit: +(wVal - bVal).toFixed(2),
+                    in_flight: multStr === '-'
+                  });
+
+                  // Персональная слежка за Porceh
+                  if (nameStr.toLowerCase().includes(targetPlayer.toLowerCase())) {
+                    targetFound = true;
+                    targetStats.bets++;
+                    targetStats.lastBet = bVal;
+                    targetStats.lastMult = mVal;
+                    targetStats.wagered = +(targetStats.wagered + bVal).toFixed(2);
+                    targetStats.won = +(targetStats.won + wVal).toFixed(2);
+                    targetStats.pnl = +(targetStats.won - targetStats.wagered).toFixed(2);
+                  }
+
+                  // Формирование досье игрока
+                  if (!playerDossier[nameStr]) {
+                    playerDossier[nameStr] = { name: nameStr, bets: 0, wagered: 0, won: 0, pnl: 0, cashouts: [] };
+                  }
+                  var pd = playerDossier[nameStr];
+                  pd.bets++;
+                  pd.wagered = +(pd.wagered + bVal).toFixed(2);
+                  pd.won = +(pd.won + wVal).toFixed(2);
+                  pd.pnl = +(pd.won - pd.wagered).toFixed(2);
+                  if (mVal > 0) pd.cashouts.push(mVal);
+                }
+              }
+            }
           }
         }
       }
     }
 
-    // Шаг 2: Если строка найдена, берем всех ее соседей (это и есть весь список участников)
-    if (anchorRow && anchorRow.parentElement) {
-      var rowList = anchorRow.parentElement.children;
-      for (var r = 0; r < rowList.length; r++) {
-        var rowEl = rowList[r];
-        var rowText = (rowEl.innerText || rowEl.textContent || '').trim();
-        var words = rowText.split(/\s+/).filter(Boolean);
-
-        if (words.length >= 3) {
-          var pName = words[0];
-          if (pName === '₽' || pName.includes('Place')) continue;
-
-          // Ищем ставку (с K или число)
-          var betStr = words.find(function(w){ return /^\d+(\.\d+)?K$/i.test(w) || /^\d+₽?$/.test(w); }) || '0';
-          var multStr = words.find(function(w){ return /^\d+(\.\d+)?x$/i.test(w); }) || '-';
-          var winStr = words[words.length - 1];
-
-          var bVal = parseFloat(betStr.replace('K', '000').replace(/[^\d.]/g, '')) || 0;
-          var mVal = multStr === '-' ? 0 : (parseFloat(multStr.replace('x', '')) || 0);
-          var wVal = (winStr === '-' || !winStr) ? 0 : (parseFloat(winStr.replace('K', '000').replace(/[^\d.]/g, '')) || 0);
-
-          if (bVal >= 10) {
-            extracted.push({
-              name: pName,
-              bet: bVal,
-              mult: mVal,
-              payout: wVal,
-              profit: +(wVal - bVal).toFixed(2),
-              in_flight: multStr === '-'
-            });
-
-            // Слежка за Porceh
-            if (pName.toLowerCase().includes(targetPlayer.toLowerCase())) {
-              targetFound = true;
-              targetStats.bets++;
-              targetStats.lastBet = bVal;
-              targetStats.lastMult = mVal;
-              targetStats.wagered = +(targetStats.wagered + bVal).toFixed(2);
-              targetStats.won = +(targetStats.won + wVal).toFixed(2);
-              targetStats.pnl = +(targetStats.won - targetStats.wagered).toFixed(2);
-            }
-
-            // Досье игроков
-            if (!playerDossier[pName]) {
-              playerDossier[pName] = { name: pName, bets: 0, wagered: 0, won: 0, pnl: 0, cashouts: [] };
-            }
-            var d = playerDossier[pName];
-            d.bets++;
-            d.wagered = +(d.wagered + bVal).toFixed(2);
-            d.won = +(d.won + wVal).toFixed(2);
-            d.pnl = +(d.won - d.wagered).toFixed(2);
-            if (mVal > 0) d.cashouts.push(mVal);
-          }
-        }
+    // Дедупликация списка
+    var unique = [];
+    var seen = new Set();
+    list.forEach(function(item){
+      var k = item.name + '_' + item.bet;
+      if (!seen.has(k)) {
+        seen.add(k);
+        unique.push(item);
       }
-    }
+    });
 
-    if (extracted.length > 0) cachedWhales = extracted;
-    return cachedWhales;
+    if (unique.length > 0) currentWhalesBuffer = unique;
+    return unique;
   }
 
-  // Опрос участников каждые 250 мс
+  // Сканирование участников 3 раза в секунду
   setInterval(function(){
-    var list = extractWhalesByAnchor();
-    var stEl = document.getElementById('v16-whales-stat');
+    var live = parseAllVisibleWhales();
+    var stEl = document.getElementById('v17-whales-stat');
     if (stEl) {
-      stEl.textContent = 'Игроков в памяти: ' + list.length;
-      stEl.style.color = list.length > 0 ? '#4ade80' : '#f87171';
+      stEl.textContent = 'Игроков в памяти: ' + live.length;
+      stEl.style.color = live.length > 0 ? '#4ade80' : '#f87171';
     }
-  }, 250);
+  }, 300);
+
+  // Сетевой перехват GetParticipants (дублирующий канал)
+  var origFetch = window.fetch;
+  window.fetch = async function(){
+    var res = await origFetch.apply(this, arguments);
+    var urlStr = arguments[0] ? (typeof arguments[0] === 'string' ? arguments[0] : arguments[0].url || '') : '';
+    if (urlStr.includes('GetParticipants')) {
+      try {
+        res.clone().json().then(function(d){
+          if (d.participants && d.participants.length) {
+            d.participants.forEach(function(p){
+              var pName = p.assetsInfo ? p.assetsInfo.name : (p.userId ? p.userId.substring(0,8) : 'Anonymous');
+              var b = +(p.betAmount || p.amount || 0);
+              var w = +(p.winAmount || 0);
+              var m = +(p.odds || 0);
+
+              if (pName.toLowerCase().includes(targetPlayer.toLowerCase())) {
+                targetFound = true;
+                targetStats.bets++;
+                targetStats.wagered = +(targetStats.wagered + b).toFixed(2);
+                targetStats.won = +(targetStats.won + w).toFixed(2);
+                targetStats.pnl = +(targetStats.won - targetStats.wagered).toFixed(2);
+              }
+            });
+          }
+        }).catch(function(){});
+      } catch(e){}
+    }
+    return res;
+  };
 
   function recordRound(m) {
     var now = Date.now();
@@ -164,7 +213,7 @@ javascript:(function(){
       streakSum += m;
     }
 
-    var whalesNow = extractWhalesByAnchor();
+    var whalesNow = parseAllVisibleWhales();
 
     rounds.push({
       round_num: rounds.length + 1,
@@ -173,17 +222,17 @@ javascript:(function(){
       cycle_sec: cycleTotal,
       flight_sec: flightSec,
       pause_sec: pauseSec,
-      players_online: peakPlayers || 1500,
+      players_online: peakPlayers || 1600,
       streak_before_10x: gapInfo,
       whales_count: whalesNow.length,
-      whales: whalesNow.slice(0, 40)
+      whales: whalesNow.slice(0, 50)
     });
 
     peakPlayers = 0;
     updateHUD(m, flightSec, rounds[rounds.length-1].players_online);
   }
 
-  // Поллинг ленты истории
+  // Поллинг ленты истории коэффициентов
   setInterval(function(){
     var firstEl = document.querySelector('.bottom-odds-history [class*="text-action-a"]');
     if (firstEl) {
@@ -201,33 +250,34 @@ javascript:(function(){
   }, 200);
 
   // HUD
-  var old = document.getElementById('avtrx-v16-hud');
+  var old = document.getElementById('avtrx-v17-hud');
   if (old) old.remove();
 
   var hud = document.createElement('div');
-  hud.id = 'avtrx-v16-hud';
+  hud.id = 'avtrx-v17-hud';
   hud.style.cssText = 'position:fixed;bottom:10px;left:4%;width:92%;background:#090d16;color:#fff;border:2px solid #38bdf8;border-radius:10px;padding:8px 12px;z-index:2147483647;font-family:monospace;font-size:11px;box-shadow:0 0 25px rgba(0,0,0,0.9);';
   
   hud.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">' +
-                  '<span style="color:#38bdf8;font-weight:bold;">✈ RADAR v16</span>' +
-                  '<span id="v16-status" style="color:#facc15;font-weight:bold;font-size:12px;">Слежу...</span>' +
-                  '<b id="v16-cnt" style="color:#4ade80;font-size:12px;">0 R</b>' +
+                  '<span style="color:#38bdf8;font-weight:bold;">✈ DOSSIER v17</span>' +
+                  '<span id="v17-status" style="color:#facc15;font-weight:bold;font-size:12px;">Слежу...</span>' +
+                  '<b id="v17-cnt" style="color:#4ade80;font-size:12px;">0 R</b>' +
                   '</div>' +
                   '<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:6px;">' +
-                  '<span id="v16-whales-stat" style="color:#f87171;">Игроков в памяти: 0</span>' +
-                  '<span id="v16-target-stat" style="color:#38bdf8;">🎯 ' + targetPlayer + ': жду...</span>' +
+                  '<span id="v17-whales-stat" style="color:#f87171;">Игроков в памяти: 0</span>' +
+                  '<span id="v17-target-stat" style="color:#38bdf8;">🎯 ' + targetPlayer + ': жду...</span>' +
                   '</div>' +
                   '<div style="display:flex;gap:4px;">' +
-                  '<button id="v16-save" style="flex:1;background:#16a34a;color:#fff;border:none;padding:6px;border-radius:4px;font-weight:bold;cursor:pointer;">💾 СКАЧАТЬ</button>' +
-                  '<button id="v16-check-btn" style="background:#0284c7;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🔍 КТО В ПАМЯТИ?</button>' +
-                  '<button id="v16-clr" style="background:#475569;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🧹</button>' +
+                  '<button id="v17-save" style="flex:1;background:#16a34a;color:#fff;border:none;padding:6px;border-radius:4px;font-weight:bold;cursor:pointer;">💾 СКАЧАТЬ</button>' +
+                  '<button id="v17-check-btn" style="background:#0284c7;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🔍 КТО В ПАМЯТИ?</button>' +
+                  '<button id="v17-target-btn" style="background:#8b5cf6;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🎯</button>' +
+                  '<button id="v17-clr" style="background:#475569;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🧹</button>' +
                   '</div>';
   document.body.appendChild(hud);
 
   function updateHUD(lastM, flightSec, players){
-    var cEl = document.getElementById('v16-cnt');
-    var sEl = document.getElementById('v16-status');
-    var tEl = document.getElementById('v16-target-stat');
+    var cEl = document.getElementById('v17-cnt');
+    var sEl = document.getElementById('v17-status');
+    var tEl = document.getElementById('v17-target-stat');
 
     if (cEl) cEl.textContent = rounds.length + ' R';
     if (sEl && lastM) sEl.innerHTML = lastM.toFixed(2) + 'x (' + flightSec + 'с | ' + players + ' чел)';
@@ -242,19 +292,28 @@ javascript:(function(){
     }
   }
 
-  // Кнопка моментальной проверки
-  document.getElementById('v16-check-btn').onclick = function(){
-    var list = extractWhalesByAnchor();
-    if (!list.length) return alert('Список игроков пока не привязался. Откройте шторку участников пальцем на 2-3 секунды!');
+  document.getElementById('v17-check-btn').onclick = function(){
+    var list = parseAllVisibleWhales();
+    if (!list.length) return alert('Список игроков не обнаружен. Откройте шторку участников пальцем!');
     var msg = '👀 СЕЙЧАС В ПАМЯТИ (' + list.length + ' игроков):\n\n';
-    list.slice(0, 7).forEach(function(p, i){
-      var st = p.in_flight ? 'В полете' : (p.mult + 'x -> ' + p.payout + '₽');
-      msg += (i+1) + '. ' + p.name + ' | ' + p.bet + ' ₽ | ' + st + '\n';
+    list.slice(0, 10).forEach(function(p, i){
+      var st = p.in_flight ? 'В полете (-)' : (p.mult + 'x -> ' + p.payout + '₽');
+      msg += (i+1) + '. ' + p.name + ' | Ставка: ' + p.bet + ' ₽ | ' + st + '\n';
     });
     alert(msg);
   };
 
-  document.getElementById('v16-save').onclick = function(){
+  document.getElementById('v17-target-btn').onclick = function(){
+    var n = prompt('Ник для персональной слежки:', targetPlayer);
+    if (n) {
+      targetPlayer = n.trim();
+      targetStats = { bets: 0, wagered: 0, won: 0, pnl: 0, lastBet: 0, lastMult: 0 };
+      targetFound = false;
+      document.getElementById('v17-target-stat').textContent = '🎯 ' + targetPlayer + ': жду...';
+    }
+  };
+
+  document.getElementById('v17-save').onclick = function(){
     if (!rounds.length) return alert('Выборка пуста!');
     var payload = {
       exportedAt: new Date().toISOString(),
@@ -267,14 +326,14 @@ javascript:(function(){
     var blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'aviatrix_radar_v16_' + Date.now() + '.json';
+    a.download = 'aviatrix_dossier_v17_' + Date.now() + '.json';
     a.click();
   };
 
-  document.getElementById('v16-clr').onclick = function(){
+  document.getElementById('v17-clr').onclick = function(){
     rounds = [];
     playerDossier = {};
-    cachedWhales = [];
+    currentWhalesBuffer = [];
     targetStats = { bets: 0, wagered: 0, won: 0, pnl: 0, lastBet: 0, lastMult: 0 };
     targetFound = false;
     updateHUD(0, 0, 0);
