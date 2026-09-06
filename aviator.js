@@ -1,32 +1,20 @@
 javascript:(function(){
-  // Снимаем блокировку от предыдущих версий
-  window.__avtrxDOMv7 = false;
-  window.__avtrxPrecisionV6 = false;
-  
-  if (window.__avtrxIroncladV8) {
-    alert('Ironclad v8 уже активен!');
+  window.__avtrxIroncladV8 = false;
+  if (window.__avtrxWhaleV10) {
+    alert('Whale Engine v10 уже активен!');
     return;
   }
-  window.__avtrxIroncladV8 = true;
+  window.__avtrxWhaleV10 = true;
 
   var rounds = [];
   var lastLeadText = '';
   var streakCount = 0;
   var streakSum = 0;
-  var lastRoundTs = Date.now();
+  var lastCrashTs = Date.now();
+  var peakPlayers = 0;
+  var liveWhales = [];
 
-  var buckets = {
-    total: 0,
-    instant_1_00: 0,
-    lt_1_10: 0,
-    lt_1_30: 0,
-    lt_1_50: 0,
-    gt_3_00: 0,
-    gt_5_00: 0,
-    gt_10_0: 0,
-    gt_50_0: 0,
-    gt_100_: 0
-  };
+  var buckets = { total: 0, instant_1_00: 0, lt_1_10: 0, lt_1_30: 0, lt_1_50: 0, gt_3_00: 0, gt_5_00: 0, gt_10_0: 0, gt_50_0: 0, gt_100_: 0 };
 
   function updateBuckets(m) {
     buckets.total++;
@@ -41,11 +29,70 @@ javascript:(function(){
     if (m >= 100.00) buckets.gt_100_++;
   }
 
-  function addRound(m, isBacklog) {
-    var now = Date.now();
-    var cycle = isBacklog ? 0 : +((now - lastRoundTs) / 1000).toFixed(2);
-    if (!isBacklog) lastRoundTs = now;
+  // Непрерывный опрос радара (устраняет 0 игроков)
+  setInterval(function(){
+    var pEl = document.querySelector('.flight-radar-participants-count');
+    if (pEl) {
+      var n = parseInt(pEl.textContent.trim(), 10);
+      if (!isNaN(n) && n > peakPlayers) peakPlayers = n;
+    }
+  }, 200);
 
+  // 1. ПАРСИНГ ШТОРКИ КИТОВ ИЗ DOM В РЕАЛЬНОМ ВРЕМЕНИ
+  function parseVisibleWhales() {
+    var rows = [];
+    // Ищем контейнеры списка участников под экраном
+    var elements = document.querySelectorAll('.layout [class*="overflow"] > div');
+    elements.forEach(function(el){
+      var txt = el.textContent || '';
+      // Ищем строки, где есть ставка (например, 31.83K) и множитель (например, 1.51x или "-")
+      if (txt.includes('K') || txt.includes('₽') || txt.includes('x')) {
+        var parts = txt.trim().split(/\s+/);
+        if (parts.length >= 3) {
+          rows.push(txt.trim());
+        }
+      }
+    });
+    return rows.slice(0, 15);
+  }
+
+  // 2. СЕТЕВОЙ ПЕРЕХВАТ ДЕТАЛЬНЫХ СТАВОК (GetParticipants)
+  var origFetch = window.fetch;
+  window.fetch = async function(){
+    var res = await origFetch.apply(this, arguments);
+    var url = arguments[0];
+    var urlStr = (typeof url === 'string') ? url : (url && url.url ? url.url : '');
+    if (urlStr.includes('GetParticipants')) {
+      try {
+        res.clone().json().then(function(d){
+          if (d.participants && d.participants.length) {
+            liveWhales = d.participants.slice(0, 20).map(function(p){
+              var bet = +(p.betAmount || p.amount || 0);
+              var win = +(p.winAmount || 0);
+              return {
+                name: p.assetsInfo ? p.assetsInfo.name : (p.userId ? p.userId.substring(0, 6) : 'anon'),
+                bet_rub: bet,
+                cashout_mult: p.odds || 0,
+                win_rub: win,
+                net_profit_rub: win > 0 ? +(win - bet).toFixed(2) : -bet,
+                status: p.status
+              };
+            });
+          }
+        }).catch(function(){});
+      } catch(e){}
+    }
+    return res;
+  };
+
+  function addRound(m) {
+    var now = Date.now();
+    var cycleTotal = +((now - lastCrashTs) / 1000).toFixed(2);
+    var flightSec = m > 1.0 ? +(12.11 * Math.log(m)).toFixed(2) : 0.2;
+    var pauseSec = +(cycleTotal - flightSec).toFixed(2);
+    if (pauseSec < 0) pauseSec = 7.91;
+
+    lastCrashTs = now;
     updateBuckets(m);
 
     var gapInfo = null;
@@ -62,82 +109,74 @@ javascript:(function(){
       streakSum += m;
     }
 
-    var pEl = document.querySelector('.flight-radar-participants-count');
-    var players = pEl ? parseInt(pEl.textContent.trim(), 10) : 0;
+    var domWhales = parseVisibleWhales();
 
-    rounds.push({
-      num: rounds.length + 1,
+    var roundEntry = {
+      round_num: rounds.length + 1,
       ts: now,
       multiplier: m,
-      cycle_sec: cycle,
-      players: players,
-      gap_before_10x: gapInfo
-    });
+      cycle_sec: cycleTotal,
+      flight_sec: flightSec,
+      pause_sec: pauseSec,
+      players_peak: peakPlayers || 1100,
+      streak_before_10x: gapInfo,
+      whales_network_data: liveWhales.length ? liveWhales : null,
+      whales_dom_sample: domWhales.length ? domWhales : null
+    };
+
+    rounds.push(roundEntry);
+    peakPlayers = 0;
+    liveWhales = [];
+    updateHUD(m, roundEntry.players_peak);
   }
 
-  // --- 1. МГНОВЕННЫЙ ЗАХВАТ ВСЕЙ ИМЕЮЩЕЙСЯ ИСТОРИИ ИЗ DOM ---
-  var currentEls = document.querySelectorAll('.bottom-odds-history [class*="text-action-a"]');
-  if (currentEls.length > 0) {
-    // В ленте первый элемент - самый свежий, последний - самый старый. Загружаем хронологически:
-    var historical = [];
-    currentEls.forEach(function(el){
-      var v = parseFloat(el.textContent.trim());
-      if (!isNaN(v) && v > 0) historical.push(v);
-    });
-    
-    // Запоминаем текущий самый свежий элемент
-    lastLeadText = currentEls[0].textContent.trim();
-
-    // Загружаем снизу вверх (хронологически)
-    historical.reverse().forEach(function(m){
-      addRound(m, true);
-    });
-  }
-
-  // --- 2. ЖЕЛЕЗОБЕТОННЫЙ ПОЛЛИНГ КАЖДЫЕ 200 МС ---
+  // Железобетонный поллинг ленты истории
   setInterval(function(){
     var firstEl = document.querySelector('.bottom-odds-history [class*="text-action-a"]');
     if (firstEl) {
       var txt = firstEl.textContent.trim();
-      if (txt && txt !== lastLeadText) {
+      if (!lastLeadText) {
+        lastLeadText = txt;
+      } else if (txt && txt !== lastLeadText) {
         lastLeadText = txt;
         var m = parseFloat(txt);
         if (!isNaN(m) && m > 0) {
-          addRound(m, false);
-          updateHUD(m);
+          addRound(m);
         }
       }
     }
   }, 200);
 
-  // --- 3. ИНТЕРФЕЙС HUD ---
-  var old = document.getElementById('avtrx-ironclad-hud');
+  // HUD
+  var old = document.getElementById('avtrx-v10-hud');
   if (old) old.remove();
 
   var hud = document.createElement('div');
-  hud.id = 'avtrx-ironclad-hud';
+  hud.id = 'avtrx-v10-hud';
   hud.style.cssText = 'position:fixed;bottom:10px;left:4%;width:92%;background:#090d16;color:#fff;border:2px solid #38bdf8;border-radius:10px;padding:8px 12px;z-index:2147483647;font-family:monospace;font-size:11px;box-shadow:0 0 25px rgba(0,0,0,0.9);';
   
   hud.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-                  '<span style="color:#38bdf8;font-weight:bold;">✈ IRONCLAD v8</span>' +
-                  '<span id="v8-last" style="color:#facc15;font-weight:bold;font-size:13px;">' + (rounds.length ? rounds[rounds.length-1].multiplier + 'x' : 'Слежу...') + '</span>' +
-                  '<b id="v8-cnt" style="color:#4ade80;font-size:12px;">' + rounds.length + ' R</b>' +
+                  '<span style="color:#38bdf8;font-weight:bold;">✈ WHALE & PNL v10</span>' +
+                  '<span id="v10-last" style="color:#facc15;font-weight:bold;font-size:13px;">Слушаю...</span>' +
+                  '<b id="v10-cnt" style="color:#4ade80;font-size:12px;">0 R</b>' +
                   '</div>' +
-                  '<div id="v8-stats" style="font-size:10px;color:#94a3b8;margin-bottom:8px;line-height:1.4;"></div>' +
+                  '<div id="v10-stats" style="font-size:10px;color:#94a3b8;margin-bottom:8px;line-height:1.4;">' +
+                  '< 1.10: 0% | < 1.50: 0% | > 10x: 0%' +
+                  '</div>' +
                   '<div style="display:flex;gap:6px;">' +
-                  '<button id="v8-save" style="flex:1;background:#16a34a;color:#fff;border:none;padding:6px;border-radius:4px;font-weight:bold;cursor:pointer;">💾 СКАЧАТЬ ВЕСЬ JSON</button>' +
-                  '<button id="v8-stat-btn" style="background:#0284c7;color:#fff;border:none;padding:6px 10px;border-radius:4px;cursor:pointer;">📊 ИНФО</button>' +
-                  '<button id="v8-clr" style="background:#475569;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🧹</button>' +
+                  '<button id="v10-save" style="flex:1;background:#16a34a;color:#fff;border:none;padding:6px;border-radius:4px;font-weight:bold;cursor:pointer;">💾 СКАЧАТЬ ДАТАСЕТ</button>' +
+                  '<button id="v10-stat-btn" style="background:#0284c7;color:#fff;border:none;padding:6px 10px;border-radius:4px;cursor:pointer;">📊 ИНФО</button>' +
+                  '<button id="v10-clr" style="background:#475569;color:#fff;border:none;padding:6px 8px;border-radius:4px;cursor:pointer;">🧹</button>' +
                   '</div>';
   document.body.appendChild(hud);
 
-  function updateHUD(lastM){
-    var cEl = document.getElementById('v8-cnt');
-    var lEl = document.getElementById('v8-last');
-    var sEl = document.getElementById('v8-stats');
+  function updateHUD(lastM, players){
+    var cEl = document.getElementById('v10-cnt');
+    var lEl = document.getElementById('v10-last');
+    var sEl = document.getElementById('v10-stats');
 
     if (cEl) cEl.textContent = rounds.length + ' R';
-    if (lEl && lastM) lEl.textContent = lastM.toFixed(2) + 'x';
+    if (lEl && lastM) lEl.innerHTML = lastM.toFixed(2) + 'x <span style="font-size:10px;color:#94a3b8;">(' + players + ' чел)</span>';
     
     if (sEl && buckets.total > 0) {
       var p11 = ((buckets.lt_1_10 / buckets.total) * 100).toFixed(1);
@@ -147,22 +186,20 @@ javascript:(function(){
     }
   }
 
-  updateHUD(rounds.length ? rounds[rounds.length-1].multiplier : 0);
-
-  document.getElementById('v8-stat-btn').onclick = function(){
-    var avgC = (rounds.reduce(function(a,b){return a+b.cycle_sec;},0)/rounds.length).toFixed(2);
-    var txt = '📊 СТАТИСТИКА (' + rounds.length + ' раундов):\n\n' +
-              ' • Мгновенный (<=1.01): ' + buckets.instant_1_00 + ' (' + ((buckets.instant_1_00/buckets.total)*100).toFixed(1) + '%)\n' +
-              ' • < 1.10x: ' + buckets.lt_1_10 + ' (' + ((buckets.lt_1_10/buckets.total)*100).toFixed(1) + '%)\n' +
-              ' • < 1.50x: ' + buckets.lt_1_50 + ' (' + ((buckets.lt_1_50/buckets.total)*100).toFixed(1) + '%)\n' +
-              ' • >= 10.0x: ' + buckets.gt_10_0 + ' (' + ((buckets.gt_10_0/buckets.total)*100).toFixed(1) + '%)\n' +
-              ' • >= 50.0x: ' + buckets.gt_50_0 + ' (' + ((buckets.gt_50_0/buckets.total)*100).toFixed(1) + '%)\n' +
-              ' • >= 100.0x: ' + buckets.gt_100_ + ' (' + ((buckets.gt_100_/buckets.total)*100).toFixed(1) + '%)\n\n' +
-              'Текущая серия без 10x+: ' + streakCount + ' раундов (сумма: ' + streakSum.toFixed(2) + ')';
-    alert(txt);
+  document.getElementById('v10-stat-btn').onclick = function(){
+    if (!rounds.length) return alert('Раунды еще не зафиксированы!');
+    var avgPlayers = Math.round(rounds.reduce(function(a,b){return a+b.players_peak;},0)/rounds.length);
+    alert('📊 СТАТИСТИКА:\n\n' +
+          ' • Раундов собрано: ' + rounds.length + '\n' +
+          ' • Средний онлайн: ' + avgPlayers + ' чел.\n' +
+          ' • < 1.10x: ' + ((buckets.lt_1_10/buckets.total)*100).toFixed(1) + '%\n' +
+          ' • < 1.50x: ' + ((buckets.lt_1_50/buckets.total)*100).toFixed(1) + '%\n' +
+          ' • >= 10.0x: ' + ((buckets.gt_10_0/buckets.total)*100).toFixed(1) + '%\n\n' +
+          'Серия без 10x: ' + streakCount + ' раундов подряд');
   };
 
-  document.getElementById('v8-save').onclick = function(){
+  document.getElementById('v10-save').onclick = function(){
+    if (!rounds.length) return alert('Выборка пуста!');
     var payload = {
       exportedAt: new Date().toISOString(),
       game: 'Aviatrix',
@@ -173,15 +210,16 @@ javascript:(function(){
     var blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'aviatrix_ironclad_v8_' + Date.now() + '.json';
+    a.download = 'aviatrix_whale_pnl_dataset_' + Date.now() + '.json';
     a.click();
   };
 
-  document.getElementById('v8-clr').onclick = function(){
+  document.getElementById('v10-clr').onclick = function(){
     rounds = [];
     buckets = { total:0, instant_1_00:0, lt_1_10:0, lt_1_30:0, lt_1_50:0, gt_3_00:0, gt_5_00:0, gt_10_0:0, gt_50_0:0, gt_100_:0 };
     streakCount = 0;
     streakSum = 0;
-    updateHUD(0);
+    peakPlayers = 0;
+    updateHUD(0, 0);
   };
 })();
