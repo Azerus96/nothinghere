@@ -20,7 +20,6 @@ namespace postflop {
         }                                                                         \
     } while (0)
 
-// ── ЯДРО 1: Проход ВНИЗ (Down Pass) ─────────────────────────────────────
 template <int NUM_PLAYERS>
 __global__
 void kernel_down_pass(
@@ -89,7 +88,6 @@ void kernel_down_pass(
     }
 }
 
-// ── ЯДРО 2: Терминальный Fold ───────────────────────────────────────────
 template <int NUM_PLAYERS>
 __global__ 
 void kernel_terminal_fold(
@@ -165,7 +163,6 @@ void kernel_terminal_fold(
     }
 }
 
-// ── ЯДРО 3: Терминальный Showdown ───────────────────────────────────────
 template <int NUM_PLAYERS>
 __global__ 
 void kernel_terminal_showdown(
@@ -252,7 +249,6 @@ void kernel_terminal_showdown(
     }
 }
 
-// ── ЯДРО 4: Проход ВВЕРХ (Up Pass) ──────────────────────────────────────
 template <int NUM_PLAYERS>
 __global__
 void kernel_up_pass(
@@ -372,7 +368,6 @@ void kernel_up_pass(
     }
 }
 
-// ── Оркестрация с хоста (с поддержкой выбора GPU 0 / 1) ─────────────────
 bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu, int device_id) {
     if (gpu.initialized) return true;
 
@@ -516,7 +511,7 @@ int gpu_solve_step_impl(GpuMemory& gpu, uint32_t current_iter) {
             CUDA_CHECK(cudaGetLastError());
         }
 
-        // РЕАЛЬНЫЙ NODE LOCKING: если игрок p залочен — пропускаем up_pass (стратегия зафиксирована)
+        // Заморозка обучения для залоченных игроков
         if ((gpu.locked_players_mask & (1 << p)) != 0) {
             continue; 
         }
