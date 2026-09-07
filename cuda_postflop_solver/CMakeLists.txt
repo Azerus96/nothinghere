@@ -78,7 +78,11 @@ else()
     )
 endif()
 
-# ── Tests ───────────────────────────────────────────────────────────────
+# ── Бинарник рабочего солвера ───────────────────────────────────────────
+add_executable(live_solver src/live_solver.cpp)
+target_link_libraries(live_solver PRIVATE postflop_core)
+
+# ── Тесты и бенчмарки ───────────────────────────────────────────────────
 enable_testing()
 
 add_executable(test_evaluator tests/test_evaluator.cpp)
@@ -112,12 +116,8 @@ add_test(NAME v6 COMMAND test_v6)
 add_executable(bench_solver bench/bench_solver.cpp)
 target_link_libraries(bench_solver PRIVATE postflop_core)
 
-# ── 4-Way Experiment ────────────────────────────────────────────────────
 add_executable(experiment_4way tests/experiment_4way.cpp)
 target_link_libraries(experiment_4way PRIVATE postflop_core)
 
 add_executable(experiment_2way tests/experiment_2way.cpp)
 target_link_libraries(experiment_2way PRIVATE postflop_core)
-
-add_executable(live_solver src/live_solver.cpp)
-target_link_libraries(live_solver PRIVATE postflop_core)
