@@ -141,15 +141,7 @@ javascript:(function(){
     const STALE_TOURNAMENT_MS = 15 * 60 * 1000;
 
     const TARGET_LIST = [
-        "vesnushka", "bagzik", "nogano777", "dostigatel", "bankiir", 
-        "mushroomless", "xasiknolook", "riverpomojet", "donkmaster", "kavsan", 
-        "deepmind", "biglebowski77", "imbonoob", "badbeat71", "mike_scott", 
-        "foldmi", "fedorav", "grenadinec", "nedenegradi", "legilemens", 
-        "thestudent", "anarhisttt", "belarusftw", "sgeeeee", "master3anosov", 
-        "kirov999", "donskikh", "bumblebee", "karanebesnaya", "anacreosha",
-        "saiyn_belek", "molyavka89", "blancl664", "why__not", "cashmachine", 
-        "vorobyshek", "bar_suk74", "lev_altay", "kastarksn", "borsalino", "suitedjaxx69",
-        "fatpanda", "galiardi", "neochen", "fai1er", "milka8"
+        "legilemens", "saiyn_belek", "avdojkee", "surgut030", "rifat22", "3akonnuk"
     ];
 
     const TARGET_WATCHLIST = new Set(TARGET_LIST.map(n => n.toLowerCase()));
