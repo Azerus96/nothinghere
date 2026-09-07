@@ -85,7 +85,7 @@ Card find_unused_card(uint64_t used_mask, int prefer_rank) {
 
 int main(int argc, char** argv) {
     if (argc < 5) {
-        std::cerr << "Usage: live_solver <hero_cards> <board_cards> <pot> <stack> [locked_mask] [profile_id] [device_id]\n";
+        std::cerr << "Usage: live_solver <hero_cards> <board_cards> <pot> <stack> [locked_mask] [profile_id] [device_id] [num_players]\n";
         return 1;
     }
 
@@ -96,6 +96,11 @@ int main(int argc, char** argv) {
     uint8_t locked_mask = (argc > 5) ? (uint8_t)std::atoi(argv[5]) : 0;
     int profile_id = (argc > 6) ? std::atoi(argv[6]) : 0;
     int device_id = (argc > 7) ? std::atoi(argv[7]) : 0;
+    
+    // Динамическая поддержка от 2 до 6 игроков
+    int num_players = (argc > 8) ? std::atoi(argv[8]) : 4;
+    if (num_players < 2) num_players = 2;
+    if (num_players > 6) num_players = 6;
 
     if (hero.length() != 4 || board.length() < 6) {
         std::cout << "{\"error\": \"Invalid cards input\", \"check\": 1.0, \"bet\": 0.0, \"allin\": 0.0}" << std::endl;
@@ -107,11 +112,23 @@ int main(int argc, char** argv) {
     if (hero_c1 > hero_c2) std::swap(hero_c1, hero_c2);
 
     CardConfig cc;
-    cc.num_players = 4;
-    cc.ranges.push_back(Range::from_string("TT+, AQs+, AKo, KQs, QJs, JTs, 98s, 87s, A2s+, K9s+"));
-    cc.ranges.push_back(Range::from_string("88+, ATs+, KQs, AQo+, QJs, JTs"));
-    cc.ranges.push_back(Range::from_string("55+, A8s+, KJs+, QJs, AJo+"));
-    cc.ranges.push_back(Range::from_string("22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, 87s, ATo+, KTo+"));
+    cc.num_players = num_players;
+
+    // Диапазон Hero ВСЕГДА включает 100% комбинаций (гарантия, что hero_idx всегда будет найден)
+    cc.ranges.push_back(Range::ones());
+
+    // Диапазоны для оппонентов (до 6 игроков)
+    const char* default_opp_ranges[5] = {
+        "22+, A2s+, K8s+, Q9s+, J9s+, T8s+, 97s+, 86s+, 75s, 64s, ATo+, KJo+, QJo", // Игрок 1 (Широкий)
+        "55+, A8s+, KJs+, QJs, AJo+, KTo+, QTo+",                                     // Игрок 2 (Средний)
+        "88+, ATs+, KQs, AQo+, AJs",                                                 // Игрок 3 (Тайтовый)
+        "TT+, AQs+, AKo, KQs",                                                       // Игрок 4 (Очень тайтовый)
+        "JJ+, AKs, AKo"                                                              // Игрок 5 (Ультра-тайт)
+    };
+
+    for (int p = 1; p < num_players; ++p) {
+        cc.ranges.push_back(Range::from_string(default_opp_ranges[p - 1]));
+    }
 
     uint64_t used_mask = 0;
     used_mask |= card_to_bit(hero_c1);
@@ -136,13 +153,13 @@ int main(int argc, char** argv) {
     }
 
     TreeConfig tc;
-    tc.num_players = 4;
+    tc.num_players = num_players;
     tc.initial_state = (board.length() == 6) ? BoardState::Flop : 
                        (board.length() == 8) ? BoardState::Turn : BoardState::River;
     tc.starting_pot = pot;
     tc.effective_stack = stack;
 
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < num_players; ++i) {
         tc.flop_bet_sizes[i]  = { {BetSize::PotRelative(0.50), BetSize::AllIn()}, {} };
         tc.turn_bet_sizes[i]  = { {BetSize::PotRelative(0.50), BetSize::AllIn()}, {} };
         tc.river_bet_sizes[i] = { {BetSize::PotRelative(0.50), BetSize::AllIn()}, {} };
@@ -153,7 +170,7 @@ int main(int argc, char** argv) {
     game.allocate_memory(false);
 
     if (locked_mask != 0 && profile_id > 0) {
-        for (int p = 1; p < 4; ++p) {
+        for (int p = 1; p < num_players; ++p) {
             if (locked_mask & (1 << p)) {
                 apply_node_locking_profile(game, p, static_cast<OpponentProfile>(profile_id));
             }
@@ -171,13 +188,14 @@ int main(int argc, char** argv) {
     gpu_mem->locked_players_mask = locked_mask;
     game.set_gpu_mem(std::move(gpu_mem));
 
-    for (uint32_t iter = 1; iter <= 250; ++iter) {
+    // Ровно 1024 итерации DCFR
+    for (uint32_t iter = 1; iter <= 1024; ++iter) {
         gpu_solve_step_dispatch(game, iter);
     }
 
     gpu_solver_copy_back(game, *game.gpu_mem());
 
-    // ── ПОИСК ТОЧНОЙ СТРАТЕГИИ ДЛЯ РУКИ HERO ───────────────────────────
+    // Точный поиск индекса комбинации Hero
     const auto& hero_hands = game.card_config().private_cards[0];
     int hero_idx = -1;
     for (size_t i = 0; i < hero_hands.size(); ++i) {
