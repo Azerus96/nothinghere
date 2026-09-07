@@ -1,6 +1,3 @@
-// ════════════════════════════════════════════════════════════════════════
-// gpu_solver.h — GPU memory manager + Multiway BFS solver
-// ════════════════════════════════════════════════════════════════════════
 #ifndef GPU_SOLVER_H
 #define GPU_SOLVER_H
 
@@ -53,7 +50,7 @@ struct GpuMemory {
     bool  initialized;
     bool  is_compressed;
     
-    uint8_t locked_players_mask; // Битовая маска залоченных оппонентов
+    uint8_t locked_players_mask;
 
     GpuMemory() : d_nodes(nullptr), d_storage1(nullptr), d_storage2(nullptr),
                   d_storage_ip(nullptr), d_storage_chance(nullptr),
