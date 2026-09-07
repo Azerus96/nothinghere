@@ -2,12 +2,12 @@
     var oldHud = document.getElementById('gto-cuda-hud');
     if (oldHud) oldHud.remove();
 
-    let serverUrl = localStorage.getItem('GTO_SERVER_URL') || "https://f8caa9b826c452.lhr.life";
-    console.log('🚀 GTO CUDA Engine v15.0 (Real HUD Dossier + Real Node Locking) loaded!');
+    let serverUrl = localStorage.getItem('GTO_SERVER_URL') || "https://ВАШ-ТУННЕЛЬ.trycloudflare.com";
+    console.log('🚀 GTO CUDA Engine v17.0 (2-6 Players NLHE + Precise Actions + Multi-Table) loaded!');
 
     var hud = document.createElement('div');
     hud.id = 'gto-cuda-hud';
-    hud.style.cssText = 'position:fixed;top:30px;left:10px;z-index:999999999;background:rgba(10,15,25,0.96);color:#fff;font-family:-apple-system,sans-serif;font-size:12px;padding:10px;border-radius:10px;border:2px solid #6366f1;width:320px;box-shadow:0 10px 30px rgba(0,0,0,0.85);user-select:none;backdrop-filter:blur(6px);';
+    hud.style.cssText = 'position:fixed;top:25px;left:50%;transform:translateX(-50%);width:92vw;max-width:350px;z-index:999999999;background:rgba(10,15,25,0.96);color:#fff;font-family:-apple-system,sans-serif;font-size:12px;padding:10px;border-radius:10px;border:2px solid #6366f1;box-shadow:0 10px 30px rgba(0,0,0,0.85);user-select:none;backdrop-filter:blur(6px);box-sizing:border-box;';
     
     hud.innerHTML = `
         <div id="gto-header" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;border-bottom:1px solid #333;padding-bottom:6px;margin-bottom:8px;">
@@ -16,13 +16,13 @@
                 <strong style="color:#818cf8;font-size:13px;">⚡ GTO CUDA BOT (2x T4)</strong>
             </div>
             <div>
-                <span id="gto-settings-btn" style="font-size:13px;margin-right:6px;cursor:pointer;" title="Настройки туннеля">⚙️</span>
+                <span id="gto-settings-btn" style="font-size:13px;margin-right:6px;cursor:pointer;" title="Настройки">⚙️</span>
                 <span id="gto-arrow" style="font-size:14px;color:#818cf8;">🔼</span>
             </div>
         </div>
 
         <div id="gto-settings-box" style="display:none;background:#0f172a;padding:6px;border-radius:6px;margin-bottom:8px;border:1px solid #334155;">
-            <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">URL туннеля Kaggle:</div>
+            <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">URL туннеля Kaggle (Cloudflare):</div>
             <input type="text" id="gto-url-input" value="${serverUrl}" style="width:100%;background:#1e293b;color:#fde047;border:1px solid #475569;border-radius:4px;padding:4px;font-size:11px;box-sizing:border-box;">
             <button id="gto-save-url" style="margin-top:4px;width:100%;background:#6366f1;color:#fff;border:none;border-radius:4px;padding:4px;font-size:10px;cursor:pointer;font-weight:bold;">Сохранить URL</button>
         </div>
@@ -96,14 +96,17 @@
                     bbSize: 100,
                     myStack: 0,
                     potChips: 0,
+                    toCall: 0, // Размер доплаты для различия Bet и Raise
                     holeCards: [],
                     board: [],
-                    activeSeatsCount: 8,
-                    players: {}, // seat -> {name, uuid, vpip, pfr}
+                    activeSeats: new Set(),
+                    activeSeatsCount: 6,
+                    players: {},
                     stage: 'PREFLOP',
                     lastAdviceHtml: 'Ожидание раздачи...',
                     ws: null,
-                    isHeroTurn: false
+                    isHeroTurn: false,
+                    isHeroSeated: false
                 });
                 this.activeTableId = tableId;
             }
@@ -130,7 +133,6 @@
     function parseXml(xml, ws) {
         if (!xml || typeof xml !== 'string' || !xml.startsWith('<')) return;
 
-        // Фильтрация ТОЛЬКО реальных столов Hero
         let tableMatch = xml.match(/<TableDetails[^>]*id="([^"]+)"/) || 
                          xml.match(/<OpenTournamentTable[^>]*id="([^"]+)"/) ||
                          xml.match(/<EnterTable[^>]*tableId="([^"]+)"/);
@@ -139,18 +141,18 @@
         let table = window.pokerdomMultiTable.getTable(tableId);
         table.ws = ws;
 
-        // Блайнды
         let bbM = xml.match(/highStake="(\d+)"/) || xml.match(/PostBigBlind amount="(\d+)"/);
         if (bbM) table.bbSize = parseInt(bbM[1]);
 
-        // Место героя и Дилер
         let meM = xml.match(/<Seats[^>]*me="(\d+)"/);
-        if (meM) table.mySeat = parseInt(meM[1]);
+        if (meM) {
+            table.mySeat = parseInt(meM[1]);
+            table.isHeroSeated = true;
+        }
 
         let dM = xml.match(/dealer="(\d+)"/);
         if (dM) table.dealerSeat = parseInt(dM[1]);
 
-        // Сбор РЕАЛЬНЫХ UUID игроков за столом
         let playerMatches = xml.matchAll(/<Seat id="(\d+)">.*?<PlayerInfo[^>]*nickname="([^"]+)"[^>]*uuid="([^"]+)"/gs);
         for (let pm of playerMatches) {
             let sId = parseInt(pm[1]);
@@ -159,7 +161,6 @@
             table.players[sId].uuid = pm[3];
         }
 
-        // Стеки
         let chipMatches = xml.matchAll(/<Seat[^>]*id="(\d+)".*?<Chips[^>]*stack-size="(\d+)"/gs);
         for (let cm of chipMatches) {
             let sId = parseInt(cm[1]);
@@ -167,11 +168,25 @@
             if (sId === table.mySeat) table.myStack = st;
         }
 
-        // Банк
+        if (table.mySeat !== -1) {
+            let heroAct = xml.match(new RegExp(`<PlayerAction seat="${table.mySeat}"><(PostAnte|PostSmallBlind|PostBigBlind|Bet|Raise|Call)\\s*(?:amount="(\\d+)")?`, 'i'));
+            if (heroAct && heroAct[2]) {
+                let cost = parseInt(heroAct[2]);
+                table.myStack = Math.max(0, table.myStack - cost);
+            }
+        }
+
         let potM = xml.matchAll(/<Pot change="(\d+)"/g);
         for (let pm of potM) table.potChips += parseInt(pm[1]);
 
-        // Отслеживание VPIP / PFR для HUD базы
+        // Отслеживание фолдов для точного подсчёта активных игроков (2..6)
+        let foldMatches = xml.matchAll(/<PlayerAction seat="(\d+)"><Fold\/>/g);
+        for (let fm of foldMatches) {
+            let sId = parseInt(fm[1]);
+            table.activeSeats.delete(sId);
+            table.activeSeatsCount = Math.max(2, table.activeSeats.size);
+        }
+
         let betActions = xml.matchAll(/<PlayerAction seat="(\d+)"><(Bet|Raise|Call)/g);
         for (let ba of betActions) {
             let sId = parseInt(ba[1]);
@@ -182,13 +197,15 @@
             }
         }
 
-        // Новая раздача
         if (xml.includes('<NewHand')) {
             table.board = [];
             table.holeCards = [];
             table.potChips = 0;
+            table.toCall = 0;
             table.stage = 'PREFLOP';
             table.isHeroTurn = false;
+            table.activeSeats = new Set([0, 1, 2, 3, 4, 5, 6, 7]);
+            table.activeSeatsCount = 6;
             for (let s in table.players) {
                 table.players[s].vpip = false;
                 table.players[s].pfr = false;
@@ -197,7 +214,6 @@
             updateUI();
         }
 
-        // Карты Героя
         if (xml.includes('<DealingCards')) {
             let seatCards = xml.matchAll(/<Seat id="(\d+)"><Cards>(.*?)<\/Cards><\/Seat>/gs);
             for (let sc of seatCards) {
@@ -208,13 +224,13 @@
                     if (cards.length === 2) {
                         table.mySeat = sId;
                         table.holeCards = cards;
+                        table.isHeroSeated = true;
                         updateUI();
                     }
                 }
             }
         }
 
-        // Карты доски
         let boardChanged = false;
         if (xml.includes('<DealingFlop>')) {
             let flopCards = xml.match(/<DealingFlop><Cards>(.*?)<\/Cards><\/DealingFlop>/s);
@@ -223,6 +239,7 @@
                 if (c) { 
                     table.board = c.map(x => x.replace(/<[^>]+>/g, '').trim()); 
                     table.stage = 'FLOP';
+                    table.toCall = 0;
                     boardChanged = true;
                 }
             }
@@ -232,6 +249,7 @@
             if (turnCard && !table.board.includes(turnCard[1])) {
                 table.board.push(turnCard[1]);
                 table.stage = 'TURN';
+                table.toCall = 0;
                 boardChanged = true;
             }
         }
@@ -240,25 +258,30 @@
             if (riverCard && !table.board.includes(riverCard[1])) {
                 table.board.push(riverCard[1]);
                 table.stage = 'RIVER';
+                table.toCall = 0;
                 boardChanged = true;
             }
         }
 
-        // Завершение руки -> отправка статов в базу на Kaggle
         if (xml.includes('<EndHand')) {
             sendHandStatsToDb(table);
             table.board = [];
             table.holeCards = [];
             table.stage = 'PREFLOP';
             table.isHeroTurn = false;
+            table.toCall = 0;
             table.lastAdviceHtml = `<span style="color:#64748b;">Раздача завершена.</span>`;
             updateUI();
         }
 
-        // Ход Героя
+        // Фиксация размера доплаты (toCall) для выбора <Bet> vs <Raise>
         if (table.mySeat !== -1 && xml.includes('<ActiveChange') && xml.includes(`seat="${table.mySeat}"`)) {
             table.isHeroTurn = true;
             window.pokerdomMultiTable.activeTableId = tableId;
+
+            let callAction = xml.match(/<Call\s+amount="(\d+)"/);
+            table.toCall = callAction ? parseInt(callAction[1]) : 0;
+
             requestGtoAdvice(table);
         } else if (boardChanged && table.isHeroTurn) {
             requestGtoAdvice(table);
@@ -306,7 +329,6 @@
 
         let pos = calculatePosition(table.dealerSeat, table.mySeat, table.activeSeatsCount);
 
-        // Собираем РЕАЛЬНЫЕ UUID оппонентов
         let oppUuids = [];
         for (let s in table.players) {
             if (parseInt(s) !== table.mySeat && table.players[s].uuid) {
@@ -322,24 +344,53 @@
                 pot_chips: table.potChips || (table.bbSize * 10),
                 hero_stack_chips: table.myStack || (table.bbSize * 25)
             },
-            structure: { hero_position: pos, active_players_count: 4, opponents_uuids: oppUuids },
+            structure: { 
+                hero_position: pos, 
+                active_players_count: table.activeSeatsCount || 4, // Динамическая передача 2..6 игроков
+                opponents_uuids: oppUuids 
+            },
             exploit_mode: document.getElementById('gto-exploit-toggle')?.checked || false
         };
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
 
         try {
             let currentUrl = localStorage.getItem('GTO_SERVER_URL') || serverUrl;
             let res = await fetch(`${currentUrl}/api/advice`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
+                signal: controller.signal
             });
+            clearTimeout(timeoutId);
             let data = await res.json();
 
             if (data.status === "ok") {
                 let lockBadge = data.mode.includes("Exploit") ? `<span style="color:#ef4444;font-size:10px;">[🎯 Lock: ${data.mode}]</span><br>` : '';
                 let actColor = data.action_type === "BET" || data.action_type === "ALLIN" ? "#f87171" : (data.action_type === "FOLD" ? "#94a3b8" : "#4ade80");
                 
-                table.lastAdviceHtml = `${lockBadge}<span style="color:${actColor};font-size:14px;">👉 ${data.recommended_action}</span> <span style="font-size:10px;color:#64748b;">(${data.calc_time_ms}ms)</span>`;
+                let checkP = data.probabilities?.CHECK_FOLD || 0;
+                let betP   = data.probabilities?.BET_50 || 0;
+                let allinP = data.probabilities?.ALL_IN || 0;
+
+                table.lastAdviceHtml = `
+                    ${lockBadge}
+                    <div style="color:${actColor};font-size:15px;font-weight:bold;margin-bottom:4px;">
+                        👉 ${data.recommended_action}
+                    </div>
+                    <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:4px;background:#334155;">
+                        <div style="width:${checkP}%;background:#4ade80;" title="Чек/Пас: ${checkP}%"></div>
+                        <div style="width:${betP}%;background:#f59e0b;" title="Бет 50%: ${betP}%"></div>
+                        <div style="width:${allinP}%;background:#ef4444;" title="Олл-ин: ${allinP}%"></div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#cbd5e1;">
+                        <span>Чек: <b>${checkP}%</b></span>
+                        <span>Бет: <b>${betP}%</b></span>
+                        <span>Allin: <b>${allinP}%</b></span>
+                        <span style="color:#64748b;">(${data.calc_time_ms}ms)</span>
+                    </div>
+                `;
                 
                 renderDossier(data.dossier);
                 updateUI();
@@ -349,7 +400,8 @@
                 }
             }
         } catch (e) {
-            table.lastAdviceHtml = `<span style="color:#ef4444;">Ошибка связи с Kaggle</span>`;
+            clearTimeout(timeoutId);
+            table.lastAdviceHtml = `<span style="color:#ef4444;">Таймаут / Ошибка туннеля Kaggle</span>`;
             updateUI();
         }
     }
@@ -368,28 +420,38 @@
             let dot = p.status === 'reliable' ? '🟢' : (p.status === 'partial' ? '🟡' : '⚪');
             let leakTag = p.leak !== "None" ? `<span style="color:#f87171;font-weight:bold;">[${p.leak}]</span>` : '';
             html += `<div style="display:flex;justify-content:space-between;margin-bottom:3px;border-bottom:1px solid #1e293b;padding-bottom:2px;">
-                <span>${dot} <b>${p.name.substring(0,9)}</b> ${leakTag}</span>
+                <span>${dot} <b>${p.name}</b> ${leakTag}</span>
                 <span><b>${p.hands}</b>р | V:<b>${p.vpip}%</b> P:<b>${p.pfr}%</b></span>
             </div>`;
         }
         el.innerHTML = html;
     }
 
+    // Автоход: корректное разделение <Bet> и <Raise>
     function executeAction(type, sizingBB, table) {
         if (!table.ws || table.mySeat === -1) return;
-        let xml = `<PlayerAction seat="${table.mySeat}">`;
+        let xml = "";
+        let chips = Math.round(sizingBB * table.bbSize);
+
         if (type === 'FOLD') {
-            xml += `<Fold/>`;
+            xml = "<Fold/>";
         } else if (type === 'CHECK') {
-            xml += `<Check/>`;
+            xml = "<Check/>";
         } else if (type === 'CALL') {
-            xml += `<Call/>`;
+            xml = "<Call/>";
         } else if (type === 'BET' || type === 'ALLIN') {
-            let chips = Math.round(sizingBB * table.bbSize);
-            xml += `<Bet amount="${chips}"/>`;
+            // Если до нас уже была ставка (toCall > 0) или это All-in — шлём Raise, иначе Bet:
+            if (table.toCall > 0 || type === 'ALLIN') {
+                xml = `<Raise amount="${chips}"/>`;
+            } else {
+                xml = `<Bet amount="${chips}"/>`;
+            }
         }
-        xml += `</PlayerAction>`;
-        try { table.ws.send(xml); } catch (e) {}
+        
+        try { 
+            console.log("📤 [Auto-Action OUT]:", xml);
+            table.ws.send(xml); 
+        } catch (e) {}
     }
 
     function updateUI() {
@@ -409,11 +471,16 @@
         if (adviceEl) adviceEl.innerHTML = table.lastAdviceHtml;
 
         if (tablesBar) {
-            if (window.pokerdomMultiTable.tables.size > 1) {
+            let activeHeroTables = [];
+            window.pokerdomMultiTable.tables.forEach((t, tid) => {
+                if (t.isHeroSeated) activeHeroTables.push({ id: tid, name: t.name });
+            });
+
+            if (activeHeroTables.length > 1) {
                 let html = '';
-                window.pokerdomMultiTable.tables.forEach((t, tid) => {
-                    let isAct = (tid === window.pokerdomMultiTable.activeTableId);
-                    html += `<button onclick="window.pokerdomMultiTable.setActiveTable('${tid}')" style="background:${isAct ? '#6366f1' : '#1e293b'};color:#fff;border:1px solid #475569;border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;white-space:nowrap;">${t.name}</button>`;
+                activeHeroTables.forEach(t => {
+                    let isAct = (t.id === window.pokerdomMultiTable.activeTableId);
+                    html += `<button onclick="window.pokerdomMultiTable.setActiveTable('${t.id}')" style="background:${isAct ? '#6366f1' : '#1e293b'};color:#fff;border:1px solid #475569;border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;white-space:nowrap;">${t.name}</button>`;
                 });
                 tablesBar.innerHTML = html;
                 tablesBar.style.display = 'flex';
