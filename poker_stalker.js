@@ -1,6 +1,6 @@
 javascript:(function(){
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v64.2 — APEX-IMPERIOR (HARDENED MONOLITH)
+       ULTIMATE SCALPEL v64.3 — APEX-IMPERIOR (TACTICAL FORENSICS MONOLITH)
        • v64 F1 (BUG-BUYIN-DISTORTION): номинальный бай-ин = buyIn + bounty
          БЕЗ рейка (fee) — эвристика «buyIn уже включает всё» раздувала номинал
          2500+2500+400 → 5400₽; полный вход хранится отдельно (entryCost)
@@ -47,6 +47,23 @@ javascript:(function(){
        • v64.2 Z3: суффикс «#N» ника за СТОЛОМ — счётчик всех покупок
          (входы + ребаи), номер пули берётся из лобби: «Пуля #N» в HUD
          не мигает 7↔14, Zombie-Guard не слабеет
+       • v64.3 P1 (DENSE-AFK): игроки вне игры помечаются в Dense DSL тегом
+         «:AFK» (P:1:u1:118053:AFK) — sit-out больше не нужно выводить из
+         бездействия; JSON уже нёс is_sitting_out, DSL не отличал
+       • v64.3 P2 (DYNAMIC-PKO): денежная выплата <KnockoutPayout> — само
+         доказательство PKO: турниры с нестандартными именами («Вечерний
+         Хайроллер 800 000 р.», «РОПЛ-43 Экипаж…») апгрейдят is_pko динамически
+       • v64.3 P3 (TWIN-HASH): recurring-турниры с одинаковыми именами раз
+         в 1–2 часа различимы в HUD коротким хешем id: «[#8c01]» vs «[#89e6]»
+       • v64.3 P4 (BOARD-TEXTURE): 6-корзинный k-means классификатор флопа
+         (broadway / low_connected / paired / monotone / trips / generic):
+         board_texture в JSON-руке + «:texture» в DSL B:-строке
+       • v64.3 P5 (ARCHETYPES): 7 поведенческих архетипов прямо в HUD
+         ([Телефон], [Маньяк], [Нит-агрессор], [Пассив], [ЛАГ], [Регуляр],
+         [Баланс]); порог выборки 15 рук, ниже — «[Поиск рук...]»
+       • v64.3 P6 (REBUY-x2 + GTO-KEY): двойные ребаи «+N x2 реб.»; канонические
+         O(1) GTO-ключи узлов решений каждой улицы (gto_node_keys в JSON-руке)
+       • v64.3 P7: потолок фоновых спектаторов 80 → 120 столов
        • v62 B1 (BUG-ZOMBIE-TABLE): bust rows без tableId теперь чистят устаревшую
          запись discoveredTargetTables («зомби»-спектаторы больше не держат слот
          80-столового пула весь турнир); записи профиля переключены на ключ cleanNick
@@ -113,14 +130,14 @@ javascript:(function(){
     document.querySelectorAll('[id^="stalker-hud"]').forEach(el => el.remove());
 
     const scoutServerUrl = "https://toofunoff-poker-scout.hf.space";
-    const MAX_BACKGROUND_TABLES = 180;
+    const MAX_BACKGROUND_TABLES = 120;   /* v64.3 P7: 80 → 120 столов */
     const MAX_ARCHIVE_HANDS = 10000;
-    const MAX_OUTBOX_QUEUE = 10000;
-    const MAX_DEBUG_LOGS = 800;
+    const MAX_OUTBOX_QUEUE = 3000;
+    const MAX_DEBUG_LOGS = 300;
     const SCANNER_CONCURRENCY = 3;
-    const MAX_SCANNER_QUEUE = 800;
+    const MAX_SCANNER_QUEUE = 500;
     const MAX_CHAT_LOGS = 2000;
-    const MAX_TOURNAMENT_CACHE = 8000;
+    const MAX_TOURNAMENT_CACHE = 3000;
     const STALE_TOURNAMENT_MS = 15 * 60 * 1000;
 
     const TARGET_LIST = [
@@ -245,6 +262,67 @@ javascript:(function(){
             }
         }
         return bestResult.tag;
+    }
+
+    // v64.3 P4 (BOARD-TEXTURE): нативный 6-корзинный классификатор флопа
+    // (валидированные k-means кластеры, 26M оценок). Приоритет: trips →
+    // paired → monotone → broadway (≥2 бродвея на непарном) → low_connected
+    // (младшая ≤ 6, спан ≤ 4, колесо A-2-3-4-5 учтено) → generic.
+    const CARD_RANK_VALUES = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, 'T': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14 };
+
+    function classifyBoardTexture(boardCards) {
+        if (!boardCards || boardCards.length < 3) return 'preflop';
+        let flop = boardCards.slice(0, 3);
+
+        let ranks = flop.map(c => CARD_RANK_VALUES[c[0] === '1' ? 'T' : c[0].toUpperCase()] || 0).sort((a, b) => a - b);
+        let suits = flop.map(c => c[c.length - 1].toLowerCase());
+
+        let suitCounts = {};
+        suits.forEach(s => suitCounts[s] = (suitCounts[s] || 0) + 1);
+        let maxSuit = Math.max(...Object.values(suitCounts));
+
+        let rankCounts = {};
+        ranks.forEach(r => rankCounts[r] = (rankCounts[r] || 0) + 1);
+        let maxRankCount = Math.max(...Object.values(rankCounts));
+
+        if (maxRankCount === 3) return 'trips';
+        if (maxRankCount === 2) return 'paired';
+        if (maxSuit === 3) return 'monotone';
+
+        let broadwayCount = ranks.filter(r => r >= 10).length;
+        if (broadwayCount >= 2) return 'broadway';
+
+        // Connectivity check (with wheel handling)
+        let minRank = ranks[0];
+        let maxRank = ranks[2];
+        let isWheelSpan = (ranks[2] === 14 && ranks[1] <= 5); // Ace as low wheel card
+        let span = isWheelSpan ? (ranks[1] - 1) : (maxRank - minRank);
+
+        if (minRank <= 6 && span <= 4) return 'low_connected';
+
+        return 'generic';
+    }
+
+    // v64.3 P6 (GTO-KEY, спека 4.2): канонический O(1) ключ узла решения для
+    // мгновенного поиска в GTO-солвере. Позиция / класс банка (SRP/3BP/4BP) /
+    // стек-корзина / IP-OOP / корзина текстуры борда.
+    function buildGTONodeKey(ctx, seatNum) {
+        let handBB = ctx.getActiveHandBB() || 1;
+        let s = ctx.seats.get(seatNum);
+        let stackBB = s && s.stack ? Math.round(s.stack / handBB) : 50;
+
+        let stackBucket = stackBB <= 15 ? '5-15bb' : (stackBB <= 30 ? '15-30bb' : (stackBB <= 60 ? '30-60bb' : (stackBB <= 100 ? '60-100bb' : '100-300bb')));
+        let pos = ctx.positions[seatNum] || 'BTN';
+        let potClass = ctx.preflopRaises <= 1 ? 'SRP' : (ctx.preflopRaises === 2 ? '3BP' : '4BP');
+
+        if (ctx.street === 'PREFLOP') {
+            let facing = ctx.preflopRaises === 0 ? (ctx.preflopCallers === 0 ? 'Unopened' : 'Limped') : (ctx.preflopRaises === 1 ? 'vs_Open' : 'vs_3Bet');
+            return `PF|${pos}|${facing}|${potClass}|${stackBucket}`;
+        } else {
+            let isIP = (pos === 'BTN' || pos === 'CO');
+            let boardBucket = classifyBoardTexture(ctx.board);
+            return `POST|${isIP ? 'IP' : 'OOP'}|${potClass}|${ctx.street.toLowerCase()}|${boardBucket}|${stackBucket}`;
+        }
     }
 
     function logDebug(category, message) {
@@ -394,6 +472,9 @@ javascript:(function(){
                 entries: new Map(),
                 handsCount: 0,
                 sitOutHandsCount: 0,
+                // v64.3 P5: счётчик дошедших до вскрытия (Show/Muck) —
+                // знаменатель архетипа Station (wtsd = showdowns / vpipCount)
+                showdownsCount: 0,
                 vpipCount: 0,
                 pfrCount: 0,
                 aggressiveActions: 0,
@@ -409,6 +490,48 @@ javascript:(function(){
             });
         }
         return state.stalkedPlayers.get(cleanNick);
+    }
+
+    // v64.3 P5 (ARCHETYPES): эмпирическая статистика → тактический архетип
+    // цели. Правила приоритетны (сверху вниз); порог выборки 15 рук —
+    // ниже показываем «[Поиск рук...]». wtsd = показанные вскрытия /
+    // VPIP-руки (по умолчанию 25 = нейтральный, пока выборка копится).
+    function getPlayerArchetype(p) {
+        let h = p.handsCount || 0;
+        if (h < 15) return { tag: 'Analyzing', label: '[Поиск рук...]', color: '#64748b', tip: 'Малая выборка (нужно 15+ рук)' };
+
+        let vpip = p.vpipCount ? (p.vpipCount / h * 100) : 0;
+        let pfr = p.pfrCount ? (p.pfrCount / h * 100) : 0;
+        let agg = p.aggressiveActions || 0;
+        let pass = p.passiveActions || 0;
+        let tot = p.totalActions || (agg + pass);
+        let afq = tot > 0 ? (agg / tot * 100) : 0;
+        let af = pass > 0 ? (agg / pass) : (agg > 0 ? 99.0 : 0.0);
+
+        // Went To Showdown rate (cards shown divided by active VPIP hands)
+        let wtsd = (p.vpipCount > 0 && p.showdownsCount) ? (p.showdownsCount / p.vpipCount * 100) : 25;
+
+        // Archetype Rules (Priority Ranked)
+        if (wtsd >= 45 && afq < 35) {
+            return { tag: 'Station', label: '🛡️ [Телефон]', color: '#38bdf8', tip: 'Не блефовать! Добирать крупно с любой готовой парой' };
+        }
+        if (afq >= 60 || af >= 7.0) {
+            return { tag: 'Maniac', label: '🔥 [Маньяк]', color: '#f97316', tip: 'Не блефовать! Ловить в ловушки, чекать сильные руки' };
+        }
+        if (vpip < 20 && (afq >= 45 || af >= 4.0)) {
+            return { tag: 'NittyAggro', label: '⚡ [Нит-агрессор]', color: '#eab308', tip: 'Падать на его рейзы без натса' };
+        }
+        if (vpip >= 35 && afq < 30) {
+            return { tag: 'PassiveFish', label: '🐟 [Пассив]', color: '#22c55e', tip: 'Изолировать на префлопе, ставить контбеты' };
+        }
+        if (vpip >= 28 && pfr >= 20) {
+            return { tag: 'LAG', label: '⚔️ [ЛАГ]', color: '#ec4899', tip: '3-бетить на вэлью, ловить блефы' };
+        }
+        if (vpip >= 18 && vpip <= 26 && pfr >= 13 && pfr <= 22) {
+            return { tag: 'TightReg', label: '💎 [Регуляр]', color: '#a855f7', tip: 'Играть по солидному GTO-базису' };
+        }
+
+        return { tag: 'Balanced', label: '⚖️ [Баланс]', color: '#94a3b8', tip: 'Сбалансированная игра' };
     }
 
     // v64.1: при перекалибровке базы нумерации мест (0→1) выравнивает
@@ -471,6 +594,11 @@ javascript:(function(){
             this.preflopStealAttempt = false;
             // v63 C7: счётчик лимперов (открытый банк = без лимперов)
             this.preflopCallers = 0;
+            // v64.3 P6 (GTO-KEY): канонические ключи узлов решений по улицам
+            // {STREET: {seat: key}}; gtoKeyedSeats — места с уже снятым
+            // префлоп-ключом (первое реальное решение руки)
+            this.gtoNodeKeys = {};
+            this.gtoKeyedSeats = new Set();
         }
 
         getActiveHandBB() {
@@ -539,6 +667,9 @@ javascript:(function(){
             // v63 C7: сброс счётчика лимперов — БЕЗ него счётчик протекал бы
             // через все последующие руки (фатальный регресс предложенного патча)
             this.preflopCallers = 0;
+            // v64.3 P6: сброс GTO-ключей руки (ключи не протекают между руками)
+            this.gtoNodeKeys = {};
+            this.gtoKeyedSeats.clear();
 
             let currentBB = this.getActiveHandBB();
             this.handLevel = { sb: this.level.sb || Math.round(currentBB / 2), bb: currentBB, ante: this.level.ante || 0, number: this.level.number };
@@ -562,6 +693,15 @@ javascript:(function(){
             let s = this.ensureSeat(seatNum, null);
             let list = this.handActions.get(seatNum) || [];
             let str = `${this.street}_${label}`;
+
+            // v64.3 P6 (GTO-KEY): первое РЕАЛЬНОЕ решение игрока в руке —
+            // фиксируем префлоп-ключ в момент решения: рейзы/лимперы ДО его
+            // действия (что он видел), стек ДО его ставки. Блайнд-посты и
+            // возвраты неколлированных ставок решениями не считаются.
+            if (!['ANTE', 'SB', 'BB', 'UNCALLEDBET'].includes(label) && !this.gtoKeyedSeats.has(seatNum)) {
+                this.gtoKeyedSeats.add(seatNum);
+                this._snapshotGtoKey(seatNum);
+            }
             
             let amtNum = amount || 0;
             let delta = 0;
@@ -693,7 +833,32 @@ javascript:(function(){
             if (this.street !== oldStreet) {
                 this.streetBetsPerSeat.clear();
                 this.currentMaxBet = 0;
+                // v64.3 P6 (GTO-KEY): ключи новой улицы для всех, кто ещё в
+                // руке — борд/класс банка уже известны, стек оценивается на
+                // начало улицы (handStart − вложено)
+                this.activeSeats.forEach(sn => this._snapshotGtoKey(sn));
             }
+        }
+
+        // v64.3 P6 (GTO-KEY): снимок канонического ключа узла для места.
+        // buildGTONodeKey читает s.stack — подменяем его на оценку «стек в
+        // момент решения» (handStart − вложено) и возвращаем обратно:
+        // фактический s.stack до finalize остаётся стартовым.
+        _snapshotGtoKey(seatNum) {
+            try {
+                let s = this.seats.get(seatNum);
+                if (!s || !this.positions[seatNum]) return;
+                let savedStack = s.stack;
+                let invested = this.investedPerSeat.get(seatNum) || 0;
+                let est = (this.handStart[seatNum] !== undefined && this.handStart[seatNum] !== null && this.handStart[seatNum] > 0)
+                    ? (this.handStart[seatNum] - invested) : savedStack;
+                if (est === null || est === undefined || est < 0) est = (savedStack === null || savedStack === undefined) ? 0 : savedStack;
+                s.stack = est;
+                let key = buildGTONodeKey(this, seatNum);
+                s.stack = savedStack;
+                if (!this.gtoNodeKeys[this.street]) this.gtoNodeKeys[this.street] = {};
+                this.gtoNodeKeys[this.street][seatNum] = key;
+            } catch (e) {}
         }
 
         finalizeHand() {
@@ -735,7 +900,7 @@ javascript:(function(){
                 if (TARGET_WATCHLIST.has(s.cleanNick) && !processedNicksThisHand.has(s.cleanNick)) {
                     processedNicksThisHand.add(s.cleanNick);
                     let pStats = this.handPendingStats.get(sn) || { vpip: false, pfr: false, agg: 0, pass: 0, tot: 0, stealBB: 0, stealSB: 0, stealBBOpp: 0, stealSBOpp: 0 };
-                    targetUpdates.push({ cleanNick: s.cleanNick, isSitOut: this.sittingOutSeats.has(sn), pStats });
+                    targetUpdates.push({ cleanNick: s.cleanNick, isSitOut: this.sittingOutSeats.has(sn), pStats, showdown: !!this.showdownCards[sn] });
                 }
 
                 let sd = this.showdownCards[sn];
@@ -766,6 +931,8 @@ javascript:(function(){
                     prof.handsCount++;
                     if (up.pStats.vpip) prof.vpipCount++;
                     if (up.pStats.pfr) prof.pfrCount++;
+                    // v64.3 P5: дошёл до вскрытия (Show/Muck в showdownCards)
+                    if (up.showdown) prof.showdownsCount++;
                     prof.aggressiveActions += up.pStats.agg;
                     prof.passiveActions += up.pStats.pass;
                     prof.totalActions += up.pStats.tot;
@@ -791,8 +958,13 @@ javascript:(function(){
                 tournament_id: this.tournId, tournament_name: tMeta.name, is_pko: tMeta.isPKO,
                 timestamp: new Date().toISOString(), level: this.handLevel, dealer_seat: this.dealer,
                 seat_base: seatBase, table_max: tableMax,
-                board: this.board.join(' '), pot_total: calculatedPotTotal, pot_bb: handBB > 0 ? Math.round(calculatedPotTotal / handBB * 10) / 10 : null,
+                board: this.board.join(' '), board_texture: classifyBoardTexture(this.board),
+                pot_total: calculatedPotTotal, pot_bb: handBB > 0 ? Math.round(calculatedPotTotal / handBB * 10) / 10 : null,
                 winners: this.winners, knockout_bounties: this.knockoutBounties, timeline: this.timeline,
+                // v64.3 P6: канонические GTO-ключи узлов решений по улицам
+                // {PREFLOP/FLOP/TURN/RIVER: {seat: key}} для мгновенного
+                // lookup'а в солвере
+                gto_node_keys: this.gtoNodeKeys || {},
                 players: players, sync_verified: conserved, chip_conservation: { start_total: startTotal, end_total: endTotal, ok: conserved }
             };
         }
@@ -1169,14 +1341,22 @@ javascript:(function(){
                         cardStr = p.is_muck_leak ? `:!${cleanCards}` : `:${cleanCards}`;
                     }
                     let evalStr = p.eval_rank ? `:${p.eval_rank}` : '';
-                    return `${p.seat}:${pId}:${p.stack_start}${cardStr}${evalStr}`;
+                    // v64.3 P1 (DENSE-AFK): явный маркер игрока вне игры —
+                    // «6:u17:16620:AFK»; раньше sit-out был неотличим от
+                    // активного игрока в DSL (JSON нёс is_sitting_out)
+                    let afkStr = p.is_sitting_out ? ':AFK' : '';
+                    return `${p.seat}:${pId}:${p.stack_start}${cardStr}${evalStr}${afkStr}`;
                 }).join('|');
 
                 let boardCards = (h.board || '').trim().split(/\s+/).filter(Boolean);
+                // v64.3 P4 (BOARD-TEXTURE): «B:8h7c8d/Ks/Ad:paired» — корзина
+                // k-means классификатора флопа; префлоп без борда — без суффикса
+                let boardTexture = classifyBoardTexture(boardCards);
                 let boardStr = '';
                 if (boardCards.length >= 3) boardStr += boardCards.slice(0, 3).join('');
                 if (boardCards.length >= 4) boardStr += '/' + boardCards[3];
                 if (boardCards.length >= 5) boardStr += '/' + boardCards[4];
+                if (boardTexture && boardTexture !== 'preflop') boardStr += `:${boardTexture}`;
 
                 let dslStreetBets = {};
                 let currentStreetIndex = 1;
@@ -1255,7 +1435,7 @@ javascript:(function(){
         let url = URL.createObjectURL(blob);
         let a = document.createElement('a');
         a.href = url;
-        a.download = `PokerStars_GTO_v642_${Date.now()}.txt`;
+        a.download = `PokerStars_GTO_v643_${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1274,7 +1454,7 @@ javascript:(function(){
         let url = URL.createObjectURL(blob);
         let a = document.createElement('a');
         a.href = url;
-        a.download = `Scalpel_Dense_AI_v642_${Date.now()}.dsl`;
+        a.download = `Scalpel_Dense_AI_v643_${Date.now()}.dsl`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1311,6 +1491,8 @@ javascript:(function(){
                     cleanNick: p.cleanNick,
                     handsCount: p.handsCount,
                     sitOutHandsCount: p.sitOutHandsCount,
+                    // v64.3 P5: вскрытия — знаменатель wtsd-архетипа
+                    showdownsCount: p.showdownsCount || 0,
                     vpip: vpip,
                     pfr: pfr,
                     af: af,
@@ -1330,7 +1512,7 @@ javascript:(function(){
             let url = URL.createObjectURL(blob);
             let a = document.createElement('a');
             a.href = url;
-            a.download = `pokerdom_v64_2_omni_${Date.now()}.json`;
+            a.download = `pokerdom_v64_3_omni_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1343,14 +1525,14 @@ javascript:(function(){
 
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v642';
+    ui.id = 'stalker-hud-v643';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:470px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v64.2 APEX-IMPERATOR</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v64.3 APEX-IMPERATOR</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
@@ -1455,8 +1637,12 @@ javascript:(function(){
                     let vpip = p.handsCount > 0 ? Math.round((p.vpipCount / p.handsCount) * 100) : 0;
                     let pfr = p.handsCount > 0 ? Math.round((p.pfrCount / p.handsCount) * 100) : 0;
 
+                    // v64.3 P5 (ARCHETYPES): тактический бейдж архетипа рядом со
+                    // статистикой — мгновенная подсказка «как эксплойтить» без
+                    // раскрытия строки (title — для десктопа)
+                    let arch = getPlayerArchetype(p);
                     let statsStr = p.handsCount > 0
-                        ? `<small style="color:#38bdf8;font-weight:bold;margin-left:4px;">[H:${p.handsCount}${p.sitOutHandsCount > 0 ? `+${p.sitOutHandsCount}AFK` : ''} V:${vpip}% P:${pfr}% AF:${afStr} AFq:${afq}%]</small>`
+                        ? `<small style="color:#38bdf8;font-weight:bold;margin-left:4px;">[H:${p.handsCount}${p.sitOutHandsCount > 0 ? `+${p.sitOutHandsCount}AFK` : ''} V:${vpip}% P:${pfr}% AF:${afStr} AFq:${afq}%]</small> <span style="color:${arch.color};font-weight:bold;font-size:10px;" title="${arch.tip}">${arch.label}</span>`
                         : `<small style="color:#64748b;margin-left:4px;">[Поиск рук...]</small>`;
 
                     let isPlayerInGame = Array.from(p.entries.values()).some(isLiveEntry);
@@ -1485,23 +1671,46 @@ javascript:(function(){
                         let liveBB = (liveCtx && liveCtx.getActiveHandBB() > 0) ? liveCtx.getActiveHandBB() : (e.currentBB || 500);
                         let realStackBB = (liveBB > 0 && e.stack > 0 && !isActuallyBusted) ? (Math.round((e.stack / liveBB) * 10) / 10) : 0;
 
+                        // v64.3 P3 (TWIN-HASH): Pokerdom гоняет одинаковые recurring-
+                        // турниры каждые 1–2 часа — активная и выбывшая записи с одним
+                        // tableName выглядели как один «сломанный» турнир. Различаем
+                        // коротким хешем id: «Мультибаунти 10 000 р. [#8c01]».
+                        let shortTournHash = e.tournId ? ` [#${escapeHtml(String(e.tournId).replace(/^f78-/, '').slice(-4))}]` : '';
+                        let displayTournName = `${escapeHtml(e.tableName || 'MTT')}${shortTournHash}`;
+
                         // v64.2 Z2 (HUD-ERGO): явная финансовая раскладка вместо
                         // крипто-бейджа «[#7: 21 000₽]» — номер пули и счётчик
                         // покупок больше не сталкиваются в одной строке 360px.
                         // totalBuys = max(bullets, rebuys+1) — v64 F3-совместимо:
                         // при потере суффикса лобби реальные ре-энтри живут в
                         // e.rebuys, тогда показываем просто «N входов».
+                        // v64.3 P6 (REBUY-x2): покупки = суффикс-производная
+                        // totalBuys (монотонная, Z3). Вывод покупок из суммы денег
+                        // (totalSpent / baseBuyin) отклонён: v62-B4 сделал spent
+                        // детерминированным (bullets × baseBuyin) — деривация
+                        // избыточна, а серверный spent_server (370₽/414₽) породил
+                        // бы фантомные ребаи. Двойной ребай = 2 юнита покупок:
+                        // чётный остаток юнитов помечаем «+N/2 x2 реб.».
                         let baseBuyin = e.baseBuyin || 0;
                         let bulletNum = Math.max(1, e.bullets || 1);
                         let totalBuys = Math.max(bulletNum, (e.rebuys || 0) + 1);
                         let totalSpent = e.spent || (baseBuyin > 0 ? totalBuys * baseBuyin : 0);
                         let finStr = '';
                         if (baseBuyin > 0) {
-                            let tableRebuys = Math.max(0, totalBuys - bulletNum);
+                            let totalPurchases = totalBuys;
+                            let tableRebuys = Math.max(0, totalPurchases - bulletNum);
+                            // v64.3: «1 вход + N реб.» честен только при подтверждённой
+                            // первой пуле — лобби никогда не показывало #N≥2 и выбытий
+                            // не было; иначе (суффикс-лосс) честная метка «N входов».
+                            let everReentered = (Array.isArray(e.bust_places) && e.bust_places.length > 0) || e.everBulletSuffix === true;
                             if (tableRebuys > 0 && bulletNum > 1) {
-                                finStr = `Пуля #${bulletNum} (+${tableRebuys} реб.) • Влито: ${formatRub(totalSpent)}₽`;
-                            } else if (totalBuys > 1) {
-                                finStr = `${totalBuys} ${pluralRu(totalBuys, 'вход', 'входа', 'входов')} • Влито: ${formatRub(totalSpent)}₽`;
+                                let isDoubleRebuy = tableRebuys >= 2 && (tableRebuys % 2 === 0);
+                                let rebSuffix = isDoubleRebuy ? `+${tableRebuys / 2}x2 реб.` : `+${tableRebuys} реб.`;
+                                finStr = `Пуля #${bulletNum} (${rebSuffix}) • Влито: ${formatRub(totalSpent)}₽`;
+                            } else if (tableRebuys > 0 && bulletNum === 1 && !everReentered) {
+                                finStr = `1 вход + ${tableRebuys} реб. • Влито: ${formatRub(totalSpent)}₽`;
+                            } else if (totalPurchases > 1) {
+                                finStr = `${totalPurchases} ${pluralRu(totalPurchases, 'вход', 'входа', 'входов')} • Влито: ${formatRub(totalSpent)}₽`;
                             } else {
                                 finStr = `1 вход • ${formatRub(baseBuyin)}₽`;
                             }
@@ -1511,7 +1720,7 @@ javascript:(function(){
                             // ── АКТИВНАЯ ЗАПИСЬ (живой стол) ──
                             html += `<div style="background:#091322;border-left:3px solid #38bdf8;padding:4px 7px;margin-bottom:3px;border-radius:4px;">
                                 <div style="display:flex;justify-content:space-between;align-items:center;">
-                                    <span style="color:#38bdf8;font-weight:bold;font-size:11px;">🔹 ${escapeHtml(e.tableName || 'MTT')}</span>
+                                    <span style="color:#38bdf8;font-weight:bold;font-size:11px;">🔹 ${displayTournName}</span>
                                     <span style="color:#22c55e;font-weight:bold;font-size:11px;">${chipsStr}${realStackBB > 0 ? ` <small style="color:#94a3b8;font-weight:normal;">(${realStackBB} BB)</small>` : ''}</span>
                                 </div>
                                 <div style="display:flex;justify-content:space-between;color:#94a3b8;font-size:9px;margin-top:2px;">
@@ -1541,7 +1750,7 @@ javascript:(function(){
 
                             html += `<div style="background:#0c0f17;border-left:3px solid #ef4444;padding:3px 7px;margin-bottom:2px;border-radius:4px;opacity:0.8;">
                                 <div style="display:flex;justify-content:space-between;align-items:center;">
-                                    <span style="color:#ef4444;font-size:10px;">✕ <s>${escapeHtml(e.tableName || 'MTT')}</s></span>
+                                    <span style="color:#ef4444;font-size:10px;">✕ <s>${displayTournName}</s></span>
                                     <span style="font-size:10px;color:#f87171;">${placeBadge}${prizeStr}${e.place === 1 ? '' : ' [ВЫБЫЛ]'}</span>
                                 </div>
                                 <div style="display:flex;justify-content:space-between;color:#64748b;font-size:9px;margin-top:1px;">
@@ -1873,6 +2082,11 @@ javascript:(function(){
                             }
                         }
 
+                        // v64.3 P6 (REBUY-x2): липкий признак «лобби уже показывало
+                        // суффикс #N ≥ 2» — номер пули достоверно ≥ 2. При суффикс-
+                        // лоссе (F3) bulletNum падает в 1 — запись НЕ превращается
+                        // в «1 вход + N реб.», честная метка остаётся «N входов».
+                        let everBulletSuffix = (existingEntry && existingEntry.everBulletSuffix === true) || bullets > 1;
                         let serverSpent = fattr(attrs, 'spent');
                         let serverRebuys = (existingEntry && existingEntry.rebuys !== undefined) ? existingEntry.rebuys : Math.max(0, bullets - 1);
                         // v62 B4: детерминированное значение — первичный источник.
@@ -1927,6 +2141,7 @@ javascript:(function(){
                             rank: rank,
                             place: place,
                             bullets: bullets,
+                            everBulletSuffix: everBulletSuffix,
                             rebuys: serverRebuys,
                             regular_prize: regPrize,
                             bounty_prize: bountyPrize,
@@ -2041,7 +2256,7 @@ javascript:(function(){
                             is_target: TARGET_WATCHLIST.has(cleanSender),
                             message: decodeHtml(text)
                         });
-                        // v61 F7: чат ограничен по объёму (раньше рос бесконечно)
+                        // v61 F7: чат ограничен по объему (раньше рос бесконечно)
                         if (state.chatLogs.length > MAX_CHAT_LOGS) state.chatLogs.shift();
                     }
                 }
@@ -2479,6 +2694,23 @@ javascript:(function(){
                         if (winnerSeat === null && ctx.winners.length > 0) winnerSeat = ctx.winners[0].seat;
 
                         let cashReward = payM ? fattr(payM[1], 'amount') : 0;
+                        // v64.3 P2 (DYNAMIC-PKO): денежная выплата <KnockoutPayout> —
+                        // само доказательство PKO. Турниры с нестандартными именами
+                        // («Вечерний Хайроллер 800 000 р.», без ключевых слов
+                        // нокаут/баунти/pko в названии) инициализируют кэш isPKO=false,
+                        // хотя реальные баунти капают (13 365₽ и т.п.). Апгрейд кэша
+                        // немедленно кормит finalizeHand → is_pko в JSON-руке.
+                        if (cashReward > 0 && ctx.tournId) {
+                            let tCache = state.tournamentCache.get(ctx.tournId);
+                            if (tCache) {
+                                if (!tCache.isPKO) {
+                                    tCache.isPKO = true;
+                                    logDebug("PKO_UPGRADE", `Турнир ${ctx.tournId} помечен PKO: денежная выплата ${cashReward}₽`);
+                                }
+                            } else {
+                                state.tournamentCache.set(ctx.tournId, { name: (ctx.getTournamentMeta() || { name: 'MTT' }).name, baseBuyin: 0, isPKO: true });
+                            }
+                        }
                         let bountyGrowth = payM ? fattr(payM[1], 'selfBountyChange') : 0;
                         let newHeadBounty = headBountyM ? fattr(headBountyM[1], 'amount') : 0;
 
@@ -2651,7 +2883,7 @@ javascript:(function(){
         state.scannerQueue.length = 0;
         state.scannerQueued.clear();
         document.querySelectorAll('[id^="stalker-hud"]').forEach(el => el.remove());
-        console.log("%c[SCALPEL] Инстанс v64.2 уничтожен.", "color:#f59e0b;");
+        console.log("%c[SCALPEL] Инстанс v64.3 уничтожен.", "color:#f59e0b;");
     };
 
     // v61 F7: периодическое обслуживание состояния — очистка устаревших/растущих структур
@@ -2939,5 +3171,5 @@ javascript:(function(){
     autoDetectSessionId();
     triggerLobbyTournamentRefresh();
 
-    console.log("%c👑 [SCALPEL v64.2 APEX-IMPERATOR] Запущен. v60 + v61 F1–F8 + v62 B1–B4 + v63 C-раунд устранено; v64 — раунд-4: F1 номинал бай-ина = buyIn + bounty (рейк в entryCost), F2 amount = дельта во всех действиях (chip_conservation восстановлен), F3 бейдж ре-энтрий max(bullets, rebuys+1) из e.spent, F4 formatRub для денег, F5 маркер «!» утекших карт в DSL, F6 строка баунти в GTO SUMMARY; C7-агрессивность олл-ина переведена на итог улицы. v64.1 — polish: кириллические ключи PKO (нокаут|баунти|пко|охотник|hunter|knockout) + фолбэк-имена мест по serverSeatBase. v64.2 — Zombie-Guard: «мёртвая» строка лобби больше не перезаписывает живую запись и не рвёт сокет живого стола (пул самовосстанавливается); HUD-ERGO: живые цели сверху, двухстрочные карточки, «Пуля #N (+R реб.) • Влито: X₽».", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v64.3 APEX-IMPERATOR] Запущен. v60 + v61 F1–F8 + v62 B1–B4 + v63 C-раунд устранено; v64 — раунд-4: F1 номинал бай-ина = buyIn + bounty (рейк в entryCost), F2 amount = дельта во всех действиях (chip_conservation восстановлен), F3 бейдж ре-энтрий max(bullets, rebuys+1) из e.spent, F4 formatRub для денег, F5 маркер «!» утекших карт в DSL, F6 строка баунти в GTO SUMMARY; C7-агрессивность олл-ина переведена на итог улицы. v64.1 — polish: кириллические ключи PKO (нокаут|баунти|пко|охотник|hunter|knockout) + фолбэк-имена мест по serverSeatBase. v64.2 — Zombie-Guard: «мёртвая» строка лобби больше не перезаписывает живую запись и не рвёт сокет живого стола (пул самовосстанавливается); HUD-ERGO: живые цели сверху, двухстрочные карточки, «Пуля #N (+R реб.) • Влито: X₽». v64.3 — P1 :AFK-тег в DSL, P2 динамический PKO по денежной выплате, P3 хеш турниров-близнецов [#8c01], P4 6-корзинный классификатор текстуры борда (JSON + DSL), P5 7 архетипов HUD, P6 «+Nx2 реб.» + GTO-ключи узлов решений, P7 120 фоновых столов.", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
