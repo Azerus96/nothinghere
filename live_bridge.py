@@ -94,6 +94,7 @@ def get_dossier_from_db(uuids: List[str]) -> Dict[str, Any]:
     return dossier
 
 @app.get("/")
+@app.get("/health")
 def health_check():
     return {
         "status": "online",
@@ -118,11 +119,15 @@ async def get_advice(req: Request):
     
     exploit_enabled = data.get("exploit_mode", False)
     opponents_uuids = data.get("structure", {}).get("opponents_uuids", [])
+    
+    # Динамическое число игроков (2..6)
+    active_players = int(data.get("structure", {}).get("active_players_count", 4))
+    if active_players < 2: active_players = 2
+    if active_players > 6: active_players = 6
 
     pot_bb = round(pot_chips / bb_size, 1) if bb_size > 0 else 0
     stack_bb = round(hero_stack_chips / bb_size, 1) if bb_size > 0 else 0
 
-    # 1. ПРЕФЛОП — мгновенный возврат
     if len(board_cards) < 6:
         return {
             "status": "ok",
@@ -136,14 +141,12 @@ async def get_advice(req: Request):
             "calc_time_ms": int((time.time() - t_start) * 1000)
         }
 
-    # 2. ПОЛУЧЕНИЕ РЕАЛЬНОГО ДОСЬЕ ИЗ БАЗЫ
     dossier = get_dossier_from_db(opponents_uuids)
 
     locked_mask = 0
     profile_id = 0
-    lock_info = "GTO (Равновесие Нэша)"
+    lock_info = "GTO (Нэш)"
 
-    # Эксплойт включается ТОЛЬКО если есть подтвержденный лик у реального оппонента
     if exploit_enabled and dossier:
         for idx, u in enumerate(opponents_uuids):
             if u in dossier and dossier[u]["profile_id"] > 0:
@@ -164,7 +167,8 @@ async def get_advice(req: Request):
             str(hero_stack_chips),
             str(locked_mask),
             str(profile_id),
-            str(gpu_id)
+            str(gpu_id),
+            str(active_players) # Передача точного числа игроков (2..6)
         ]
         
         proc = await asyncio.create_subprocess_exec(
@@ -183,8 +187,7 @@ async def get_advice(req: Request):
             except Exception as e:
                 print(f"Solver parse error: {e}")
 
-    # Взвешенная логика решений
-    if p_allin > 0.70 and stack_bb <= 10.0:
+    if p_allin > 0.65 and stack_bb <= 12.0:
         rec_act = f"ALL-IN ({stack_bb} BB)"
         act_type = "ALLIN"
         sizing = stack_bb
