@@ -1,6 +1,3 @@
-// ════════════════════════════════════════════════════════════════════════
-// gpu_solver_stub.cpp — CPU-only stub for GPU solver
-// ════════════════════════════════════════════════════════════════════════
 #include "gpu_solver.h"
 #include <cstdio>
 
@@ -10,8 +7,7 @@ bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu, int device_id) {
     (void)game; 
     (void)gpu; 
     (void)device_id;
-    std::fprintf(stderr, "[GPU] Cannot init GPU solver — built CPU-only. "
-                         "Rebuild with USE_CUDA=ON.\n");
+    std::fprintf(stderr, "[GPU] Cannot init GPU solver — built CPU-only. Rebuild with USE_CUDA=ON.\n");
     return false;
 }
 
