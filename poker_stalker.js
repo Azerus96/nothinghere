@@ -805,40 +805,42 @@ javascript:(function(){
             return { eligible: false, prob: null, distinctNodes: distinctNodes, decisions: totalDec,
                      progress: distinctNodes + '/8 ключей • ' + totalDec + '/32 решений' };
         }
-        let wN = 0, pureW = 0, szNodes = 0, szStickW = 0, tNodes = 0, tStickW = 0;
-        for (let i = 0; i < entries.length; i++) {
-            let e = entries[i];
-            let n = e.n || 0;
-            if (n >= 4) {
-                let mx = Math.max(e.agg || 0, e.pas || 0, e.fld || 0);
-                wN += n;
-                if (mx / n >= 0.9) pureW += n;
-            }
-            if ((e.szN || 0) >= 3) {
-                let mean = e.szSum / e.szN;
-                let varr = Math.max(0, (e.szSq || 0) / e.szN - mean * mean);
-                szNodes++;
-                if (Math.sqrt(varr) < 12) szStickW++;
-            }
-            if ((e.tN || 0) >= 3) {
-                let mean = e.tSum / e.tN;
-                let varr = Math.max(0, (e.tSq || 0) / e.tN - mean * mean);
-                tNodes++;
-                if (Math.sqrt(varr) < 2.0) tStickW++;
-            }
+        // ── КОРРЕКТНЫЙ РАСЧЁТ RTA (СМЕШАННЫЕ СТРАТЕГИИ ВМЕСТО ЧИСТЫХ) ──
+    let wN = 0, mixedW = 0, szNodes = 0, szStickW = 0, tNodes = 0, tStickW = 0;
+    for (let i = 0; i < entries.length; i++) {
+        let e = entries[i];
+        let n = e.n || 0;
+        if (n >= 4) {
+        wN += n;
+        let aggFreq = (e.agg || 0) / n;
+        // GTO-боты балансируют смешанные частоты (55-80% агрессии на текстуре).
+        // Люди поляризованы в крайности (<20% или >90%).
+        if (aggFreq >= 0.55 && aggFreq <= 0.80) {
+            mixedW += n;
         }
-        let pureRate = wN > 0 ? pureW / wN : 0;
-        let sizeStick = szNodes > 0 ? szStickW / szNodes : 0.4;
-        let timeStick = tNodes > 0 ? tStickW / tNodes : 0.35;
-        let z = 1.9 * (pureRate - 0.55) / 0.45
-              + 1.6 * (sizeStick - 0.40) / 0.60
-              + 1.1 * (timeStick - 0.35) / 0.65
-              + 0.9 * ((Math.min(totalDec, 96) / 96) * 2 - 1);
-        let prob = Math.round(100 / (1 + Math.exp(-1.35 * z)));
-        prob = Math.max(1, Math.min(99, prob));
-        return { eligible: true, prob: prob, distinctNodes: distinctNodes, decisions: totalDec,
-                 pureRate: Math.round(pureRate * 100), sizeStick: Math.round(sizeStick * 100), timeStick: Math.round(timeStick * 100),
-                 progress: distinctNodes + ' ключей • ' + totalDec + ' решений' };
+    }
+    if ((e.szN || 0) >= 3) {
+        let mean = e.szSum / e.szN;
+        let varr = Math.max(0, (e.szSq || 0) / e.szN - mean * mean);
+        szNodes++;
+        if (Math.sqrt(varr) < 12) szStickW++;
+    }
+    if ((e.tN || 0) >= 3) {
+        let mean = e.tSum / e.tN;
+        let varr = Math.max(0, (e.tSq || 0) / e.tN - mean * mean);
+        tNodes++;
+        if (Math.sqrt(varr) < 2.0) tStickW++;
+    }
+}
+// mixedRate: высокая доля смешанных узлов -> признак RTA
+let mixedRate = wN > 0 ? mixedW / wN : 0;
+let sizeStick = szNodes > 0 ? szStickW / szNodes : 0.4;
+let timeStick = tNodes > 0 ? tStickW / tNodes : 0.35;
+
+let z = 2.2 * (mixedRate - 0.25) / 0.35
+      + 1.6 * (sizeStick - 0.40) / 0.60
+      + 1.1 * (timeStick - 0.35) / 0.65
+      + 0.9 * ((Math.min(totalDec, 96) / 96) * 2 - 1);
     }
 
     // ── F5 (аудит #5, MODULE 5): π-KL ограниченный эксплойт [0.25, 4.0] ──
