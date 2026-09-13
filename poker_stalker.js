@@ -786,10 +786,10 @@ javascript:(function(){
         } catch (e) { return null; }
     }
 
-    // ── F3 (аудит #3, MODULE 2): RTA-уверенность В ПАМЯТИ ──
+// ── F3 (аудит #3, MODULE 2): RTA-уверенность В ПАМЯТИ ──
     // Спека: микс оценивается по ≥8 РАЗНЫМ ключам узлов (32+ решений на
     // разных текстурах борда), а не по 4 наблюдениям одного узла.
-    //  • pureRate  — взвешенная доля узлов (n≥4), где одно действие ≥90%;
+    //  • mixedRate — доля узлов (n≥4), где агрессия сбалансирована (55-80%);
     //  • sizeStick — доля узлов с n≥3 агрессий, σ(сайз, %пот) < 12 п.п.;
     //  • timeStick — доля узлов с n≥3 замеров, σ(тайминг, с) < 2.0.
     // z-складчина → логистическая сигмоида → [RTA PROB: XX%] в HUD.
@@ -805,42 +805,56 @@ javascript:(function(){
             return { eligible: false, prob: null, distinctNodes: distinctNodes, decisions: totalDec,
                      progress: distinctNodes + '/8 ключей • ' + totalDec + '/32 решений' };
         }
-        // ── КОРРЕКТНЫЙ РАСЧЁТ RTA (СМЕШАННЫЕ СТРАТЕГИИ ВМЕСТО ЧИСТЫХ) ──
-    let wN = 0, mixedW = 0, szNodes = 0, szStickW = 0, tNodes = 0, tStickW = 0;
-    for (let i = 0; i < entries.length; i++) {
-        let e = entries[i];
-        let n = e.n || 0;
-        if (n >= 4) {
-        wN += n;
-        let aggFreq = (e.agg || 0) / n;
-        // GTO-боты балансируют смешанные частоты (55-80% агрессии на текстуре).
-        // Люди поляризованы в крайности (<20% или >90%).
-        if (aggFreq >= 0.55 && aggFreq <= 0.80) {
-            mixedW += n;
-        }
-    }
-    if ((e.szN || 0) >= 3) {
-        let mean = e.szSum / e.szN;
-        let varr = Math.max(0, (e.szSq || 0) / e.szN - mean * mean);
-        szNodes++;
-        if (Math.sqrt(varr) < 12) szStickW++;
-    }
-    if ((e.tN || 0) >= 3) {
-        let mean = e.tSum / e.tN;
-        let varr = Math.max(0, (e.tSq || 0) / e.tN - mean * mean);
-        tNodes++;
-        if (Math.sqrt(varr) < 2.0) tStickW++;
-    }
-}
-// mixedRate: высокая доля смешанных узлов -> признак RTA
-let mixedRate = wN > 0 ? mixedW / wN : 0;
-let sizeStick = szNodes > 0 ? szStickW / szNodes : 0.4;
-let timeStick = tNodes > 0 ? tStickW / tNodes : 0.35;
 
-let z = 2.2 * (mixedRate - 0.25) / 0.35
-      + 1.6 * (sizeStick - 0.40) / 0.60
-      + 1.1 * (timeStick - 0.35) / 0.65
-      + 0.9 * ((Math.min(totalDec, 96) / 96) * 2 - 1);
+        let wN = 0, mixedW = 0, szNodes = 0, szStickW = 0, tNodes = 0, tStickW = 0;
+        for (let i = 0; i < entries.length; i++) {
+            let e = entries[i];
+            let n = e.n || 0;
+            if (n >= 4) {
+                wN += n;
+                let aggFreq = (e.agg || 0) / n;
+                // GTO-боты балансируют смешанные частоты (55-80% агрессии на текстуре).
+                // Люди поляризованы в крайности (<20% или >90%).
+                if (aggFreq >= 0.55 && aggFreq <= 0.80) {
+                    mixedW += n;
+                }
+            }
+            if ((e.szN || 0) >= 3) {
+                let mean = e.szSum / e.szN;
+                let varr = Math.max(0, (e.szSq || 0) / e.szN - mean * mean);
+                szNodes++;
+                if (Math.sqrt(varr) < 12) szStickW++;
+            }
+            if ((e.tN || 0) >= 3) {
+                let mean = e.tSum / e.tN;
+                let varr = Math.max(0, (e.tSq || 0) / e.tN - mean * mean);
+                tNodes++;
+                if (Math.sqrt(varr) < 2.0) tStickW++;
+            }
+        }
+
+        let mixedRate = wN > 0 ? mixedW / wN : 0;
+        let sizeStick = szNodes > 0 ? szStickW / szNodes : 0.4;
+        let timeStick = tNodes > 0 ? tStickW / tNodes : 0.35;
+
+        let z = 2.2 * (mixedRate - 0.25) / 0.35
+              + 1.6 * (sizeStick - 0.40) / 0.60
+              + 1.1 * (timeStick - 0.35) / 0.65
+              + 0.9 * ((Math.min(totalDec, 96) / 96) * 2 - 1);
+
+        // Логистическая сигмоида: перевод z-оценки в вероятность 0..100%
+        let prob = Math.max(1, Math.min(99, Math.round(100 / (1 + Math.exp(-z)))));
+
+        return {
+            eligible: true,
+            prob: prob,
+            distinctNodes: distinctNodes,
+            decisions: totalDec,
+            pureRate: Math.round(mixedRate * 100), // сохраняем поле для обратной совместимости вызовов
+            sizeStick: Math.round(sizeStick * 100),
+            timeStick: Math.round(timeStick * 100),
+            z: Math.round(z * 100) / 100
+        };
     }
 
     // ── F5 (аудит #5, MODULE 5): π-KL ограниченный эксплойт [0.25, 4.0] ──
