@@ -1,0 +1,19 @@
+=== Test V6: Multi-Game State Isolation (BUG#1 fix) ===
+
+  Game A: 40 OOP hands, 723 nodes
+  Game B: 171 OOP hands, 723 nodes
+  PASS: Games A and B have different hand counts
+
+  Solving Game A (10 iterations)...
+  Game A exploit: 0.485776, strategy size: 80
+  Solving Game B (10 iterations)...
+  Game B exploit: 0.549294, strategy size: 342
+  PASS: Game A and B have different exploitability
+  PASS: Game A and B have different strategies
+
+  Re-solving Game A (determinism check)...
+  Game A (re-solve) exploit: 0.485776
+  PASS: Game A deterministic: same exploit on re-solve
+  PASS: Game A and B have independent GpuMemory (no shared state)
+
+=== Summary: 5 passed, 0 failed ===

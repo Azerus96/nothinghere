@@ -1,0 +1,9 @@
+Q1 (MW flop): tier=MW_ROLLOUT nodes=125 status=ok ms=31146
+Q2 (HU turn): tier=HU_FULL_TREE nodes=3237 status=ok ms=437
+Q3 (AA vs KK equity): {'equity': 0.8263661126, 'status': 'ok'} ms=0.2
+Q4 (RVR): should_call=1 equity=0.8125548968 required=0.4
+Q5: 5 sequential lookups total 0.1 ms (persistent process)
+Q6 (malformed): {"error": "JSON parse: bad literal, expected null"}
+Q6: daemon survived malformed input ✓
+daemon terminated cleanly ✓
+ALL DAEMON PROTOCOL TESTS PASSED

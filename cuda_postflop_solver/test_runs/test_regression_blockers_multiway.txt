@@ -1,0 +1,14 @@
+=== [TEST-5] Regression: multiway blocker filtering (Defect 1.7) ===
+
+  PASS: 3-way complete-board showdown terminal located
+  opp1 hands: 4 (blocking with Ah/Kh: 2), opp2 hands: 1
+  PASS: opponent range contains combos blocking Ah/Kh
+  hero AhKh cfv at showdown (mixed blocking reach): 33.000000
+  hero cfv when opp1 range is ENTIRELY Ah/Kh-blockers: 0.000000
+  PASS: blocking combos contribute strictly 0.0 mass to hero's cfv
+  PASS: non-blocking weaker hands contribute positively (control)
+  PASS: mixed-blocking cfv lies between the blocked and unblocked extremes
+  PASS: compat-GPU 3-way pipeline initialized
+  PASS: compat-GPU 3-way solve produces finite regrets
+
+=== [TEST-5] Summary: 7 passed, 0 failed ===

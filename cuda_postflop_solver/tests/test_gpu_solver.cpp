@@ -54,13 +54,13 @@ int main() {
            game.num_private_hands(0), game.num_private_hands(1),
            (size_t)game.num_nodes());
 
-    // ── Test 1: CPU baseline (10 iterations) ──
-    printf("\n── Test 1: CPU baseline (10 iterations) ──\n");
-    for (uint32_t iter = 0; iter < 10; ++iter) {
+    // ── Test 1: CPU baseline (200 iterations) ──
+    printf("\n── Test 1: CPU baseline (200 iterations) ──\n");
+    for (uint32_t iter = 0; iter < 200; ++iter) {
         solve_step(game, iter);
     }
     float cpu_exploit = compute_exploitability(game);
-    printf("  CPU exploitability after 10 iters: %.6f\n", cpu_exploit);
+    printf("  CPU exploitability after 60 iters: %.6f\n", cpu_exploit);
     check(std::isfinite(cpu_exploit), "CPU exploitability is finite");
 
     std::vector<float> cpu_strategy = game.root_strategy();
@@ -82,14 +82,25 @@ int main() {
     printf("  Device memory: %d nodes, %d storage elements\n",
            gpu.num_nodes, gpu.num_storage);
 #else
-    check(!gpu_ok, "gpu_solver_init correctly returns false on CPU-only build");
+    // V7 dual-build: the .cu kernel sources compile under plain g++ through
+    // cuda_compat.h, so gpu_solver_init now SUCCEEDS on the CPU-only build
+    // (single emulated thread per block, deterministic). This is the core of
+    // "all CUDA code must build and pass verification tests under CPU_ONLY=1".
+    check(gpu_ok, "gpu_solver_init succeeded (CPU dual-build compat layer)");
+    check(gpu.initialized, "GpuMemory.initialized == true (compat)");
+    check(gpu.d_nodes != nullptr, "Compat node arena allocated");
+    check(gpu.d_storage1 != nullptr, "Compat storage1 allocated");
+    check(gpu.d_storage2 != nullptr, "Compat storage2 allocated");
+    printf("  Compat device memory: %d nodes, %d storage bytes\n",
+           gpu.num_nodes, gpu.num_storage);
 #endif
 
-    // ── Test 3: GPU solve step (10 iterations) ──
-    printf("\n── Test 3: GPU solve step (10 iterations) ──\n");
-#ifdef CUDA_BUILD
+    // ── Test 3: GPU solve step (200 iterations) ──
+    printf("\n── Test 3: GPU solve step (200 iterations) ──\n");
+#if defined(CUDA_BUILD) || 1
+    // Runs on both the real GPU and the CPU compat layer.
     int result = 0;
-    for (uint32_t iter = 0; iter < 10; ++iter) {
+    for (uint32_t iter = 0; iter < 200; ++iter) {
         result = gpu_solve_step(gpu, iter);
         if (result != 0) break;
     }

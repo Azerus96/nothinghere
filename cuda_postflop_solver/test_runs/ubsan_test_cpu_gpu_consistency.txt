@@ -1,0 +1,19 @@
+=== CPU vs GPU (compat) numerical consistency — Phase 4 ===
+
+── Heads-Up river-dealt game ──
+  1-iteration regret maxdiff = 3.05e-05 over 16910 floats
+  PASS: single-iteration regrets agree within 1e-3 (algorithmic identity)
+  exploit after 300 iters: CPU=0.002332  GPU(compat)=0.002368
+  PASS: both exploitabilities finite
+  PASS: both paths converge below 2% of pot
+  root strategy maxdiff = 0.0219 (86 actions)
+  PASS: root strategies agree within 0.08
+  PASS: CPU path: bit-identical replay (strict determinism)
+  PASS: compat-GPU path: bit-identical replay (strict determinism)
+
+── 3-way river-dealt game (blocker + fold semantics) ──
+  PASS: both 3-way paths produce finite regrets
+  3-way root strategy maxdiff after 60 iters = 0.0297 (74 actions)
+  PASS: 3-way root strategies agree within 0.25 (scale-free)
+
+=== Consistency Summary: 8 passed, 0 failed ===

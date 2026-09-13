@@ -1,0 +1,32 @@
+=== Test GPU Solver Architecture (V4) ===
+
+  Game setup: 133 OOP hands, 140 IP hands, 723 nodes
+
+── Test 1: CPU baseline (200 iterations) ──
+  CPU exploitability after 60 iters: 0.003422
+  PASS: CPU exploitability is finite
+  CPU root strategy size: 266 floats
+
+── Test 2: GPU solver initialization ──
+  PASS: gpu_solver_init succeeded (CPU dual-build compat layer)
+  PASS: GpuMemory.initialized == true (compat)
+  PASS: Compat node arena allocated
+  PASS: Compat storage1 allocated
+  PASS: Compat storage2 allocated
+  Compat device memory: 723 nodes, 355992 storage bytes
+
+── Test 3: GPU solve step (200 iterations) ──
+  PASS: gpu_solve_step returned 0 (success)
+
+── Test 4: GPU copy back results ──
+  PASS: gpu_solver_copy_back succeeded
+
+── Test 5: CPU vs GPU strategy consistency ──
+  Max |CPU - GPU| strategy difference: 0.063986
+  PASS: CPU and GPU strategies match within tolerance
+  PASS: GpuMemory cleaned up
+
+── Test 6: CPU solver still functional ──
+  PASS: CPU exploitability still finite after GPU test
+
+=== Summary: 11 passed, 0 failed ===

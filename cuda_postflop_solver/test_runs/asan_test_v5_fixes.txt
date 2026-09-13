@@ -1,0 +1,19 @@
+── Test BUG#1: ScratchArena chunked growth ──
+  OOP hands: 1081, IP hands: 1081, nodes: 5029
+  After 100 iterations: exploit=0.026039
+  PASS: Arena growth did not cause use-after-free
+
+── Test BUG#2: apply_added_lines pointer integrity ──
+  Arena: 1056 nodes, 1056 reachable, layout OK=504 FAIL=0
+  After 20 iterations with added_lines: exploit=0.424464
+  PASS: apply_added_lines produces valid tree
+
+── Test BUG#3: solve_step GPU dispatch check ──
+  Test 3a: CPU path (is_gpu_enabled=false)
+  CPU exploit: 1.512356
+  Test 3b: GPU path (is_gpu_enabled=true)
+  After GPU attempt on CPU-only dual-build: is_gpu_enabled=1 (compat path ran: yes)
+  Final exploit: 1.512356
+  PASS: solve_step GPU dispatch check
+
+=== Summary: 3 passed, 0 failed ===

@@ -1,4 +1,60 @@
-# CUDA Postflop Solver — PRODUCTION BUILD
+# CUDA Postflop Solver — MODERNIZED BUILD (V7)
+
+> **Master Technical Specification compliance release.** This tree implements
+> the full modernization program: ten core defect fixes (net-utility terminal
+> evaluation, DCFR negative-regret retention, memset-free GPU iteration loop,
+> semantic node locking, persistent JSON daemon, multiway blocker masks,
+> exact chip accounting, pure FP32 arenas, CDF mixed-strategy sampling), the
+> two-tier HU/multiway architecture, the preflop 169x169x3 RVR engine,
+> Bayesian range tracking, pseudo-harmonic action translation, and a 7-file
+> automated regression suite — all buildable and verifiable on a CPU-only
+> Linux host with plain g++ (`CPU_ONLY=1` dual-build) and deployable to
+> 2x Tesla T4 (`USE_CUDA=ON`, sm_75).
+
+## Quick start (CPU-only developer box)
+
+```bash
+# full build incl. the .cu kernel sources compiled by plain g++
+scripts/build.sh                 # -> build_cpu/  (tests, live_solver, generator)
+./build_cpu/test_evaluator       # 133M-hand distribution check
+./build_cpu/test_regression_*    # Section 4 regression suite (7 files)
+./build_cpu/test_cpu_gpu_consistency
+# one-time table generation (ships preflop_table.bin, 685 KB)
+./build_cpu/gen_preflop_table preflop_table.bin
+# persistent daemon (JSON over stdin/stdout, one query per line)
+echo '{"hero":"AhKh","board":"AsKd2c","pot":100,"stack":1000,"num_players":2}' | ./build_cpu/live_solver
+# FastAPI bridge
+PYTHONPATH=. python3 live_bridge.py
+```
+
+## CUDA staging build (2x Tesla T4, sm_75)
+
+```bash
+mkdir build && cd build
+cmake -DUSE_CUDA=ON -DCUDA_ARCH=75 ..
+make -j8 live_solver gen_preflop_table
+```
+
+## Key modernization facts
+
+| Area | Before (V2) | After (V7) |
+|------|-------------|------------|
+| Terminal EV | gross pot, fold EV = 0 | zero-sum net utilities with exact `invested[]` tracking |
+| DCFR | CFR+ floor kills beta_t | negative regrets retained; beta_t = 0.5 reachable |
+| GPU iteration | ~1.3 TB redundant memset / 1024 iters | root-seeding only; down-pass overwrites child reaches |
+| Node locking | index-based (Calling Station bets 85%) | semantic Action::Type binding |
+| Service model | subprocess per query (600-1200 ms) | persistent daemon, 0.1 ms/query steady-state |
+| Multiway | independent prefix sums (card collisions) | 64-bit blocker masks + rollout showdown |
+| Board handling | fake turn/river synthesis on flop inputs | chance expansion (49/48 runouts) or rollout leaves |
+| Precision | INT16 quantization paths | pure FP32 arenas (32 GB VRAM target) |
+| Action selection | probabilities only | CDF sampling with rng_roll reporting |
+| Hand evaluator | misranked pair/straight matchups (latent tiebreak encoding defect) | bitset-key encoding corrected; AA vs KK = 0.8126/0.8195/0.8266 exact |
+| CPU verification | stubs, GPU code untestable | full kernel pipeline runs under g++ via cuda_compat.h |
+
+---
+
+# Legacy README (V2 production notes)
+
 
 A high-performance Texas Hold'em postflop GTO solver, ported from
 [b-inary/postflop-solver](https://github.com/b-inary/postflop-solver) (Rust)

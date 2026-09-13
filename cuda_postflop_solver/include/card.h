@@ -31,8 +31,11 @@ int card_suit(Card c) { return c & 3; }
 __device__ __host__ __forceinline__
 Card make_card(int rank, int suit) { return (Card)((rank << 2) | (suit & 3)); }
 
+// NOTE: hardened against sentinel values — card_to_bit(NOT_DEALT) and any
+// invalid card yield 0 instead of invoking undefined shift behavior
+// (UBSan-clean; library call sites are additionally guarded).
 __device__ __host__ __forceinline__
-uint64_t card_to_bit(Card c) { return 1ULL << c; }
+uint64_t card_to_bit(Card c) { return (c < 52) ? (1ULL << c) : 0ULL; }
 
 __device__ __host__ __forceinline__
 uint64_t cards_to_bitmask(Card c0, Card c1) {

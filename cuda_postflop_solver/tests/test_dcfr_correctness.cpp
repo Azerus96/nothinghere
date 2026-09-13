@@ -214,12 +214,12 @@ int main() {
     std::vector<Card> hands(7 * 10000000);
     for (size_t i = 0; i < hands.size(); ++i) hands[i] = (Card)((i * 7919) % 52);
     auto te0 = std::chrono::high_resolution_clock::now();
-    int32_t sum = 0;
+    int64_t sum = 0;
     for (int i = 0; i < 10000000; ++i) sum += evaluate(&hands[i * 7], 7);
     auto te1 = std::chrono::high_resolution_clock::now();
     double esec = std::chrono::duration<double>(te1 - te0).count();
-    printf("  10M evals in %.3fs = %.0f evals/sec (sum=%d)\n",
-           esec, 10000000.0 / esec, sum);
+    printf("  10M evals in %.3fs = %.0f evals/sec (sum=%lld)\n",
+           esec, 10000000.0 / esec, (long long)sum);
     check(10000000.0 / esec > 1000000, "Evaluator > 1M/sec");
 
     printf("\n=== Summary: %d passed, %d failed ===\n", pass, fail);

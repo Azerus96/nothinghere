@@ -1,0 +1,22 @@
+=== [TEST-7] Regression: preflop 169x169x3 RVR engine (Module 3.1) ===
+
+  PASS: preflop_table.bin loads (169*169*3 doubles, 685 KB)
+  PASS: class_index is a bijection onto [0,168] (169 classes)
+  PASS: pair classes map AA->0, KK->1, 22->12 (collision-free block [0..12])
+  PASS: classify_suit_variant: 0 shared suits
+  PASS: classify_suit_variant: 1 shared suit
+  PASS: classify_suit_variant: offsuit disjoint (0)
+  PASS: classify_suit_variant: identical hands (2)
+  AA vs KK: v0=0.812555 v1=0.819461 v2=0.826366 (spec asserts 0.825+/-0.001)
+  PASS: AA vs KK variant 0 == 0.8126 (exact)
+  PASS: AA vs KK variant 1 == 0.8195 (exact)
+  PASS: AA vs KK variant 2 == 0.8264 (exact)
+  PASS: nearest variant (2 shared suits) within 0.002 of the spec's 0.825
+  PASS: equity_cards(AhAs, KhKs) == 0.8264 (variant routing correct)
+  PASS: eq(A,B,v) + eq(B,A,v) == 1 exactly
+  lookup latency: 0.0022 us per query (100k queries)
+  PASS: lookup time < 1 microsecond
+  RVR call decision (AA vs rep, risk 200 into 100): eq=0.8126 req=0.4000 call=1
+  PASS: AA calls a shove with a large equity edge
+
+=== [TEST-7] Summary: 15 passed, 0 failed ===

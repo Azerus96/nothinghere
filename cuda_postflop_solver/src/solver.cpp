@@ -1,5 +1,12 @@
 // ════════════════════════════════════════════════════════════════════════
 // solver.cpp — DCFR solver (Multiway Support via Templates)
+// Modernized per Master Technical Specification:
+//   Defect 1.1  zero-sum net terminal utilities (invested subtraction)
+//   Defect 1.3  DCFR negative-regret retention (CFR+ floor only in RM)
+//   Defect 1.7  64-bit blocker masks in multiway showdown
+//   Defect 1.8  node.amount == exact total pot; node.invested[] tracking
+//   Defect 1.9  pure FP32 arenas (compression off by default)
+//   Section 2   rollout-showdown evaluation for depth-capped multiway leaves
 // ════════════════════════════════════════════════════════════════════════
 #include "solver.h"
 #include "game.h"
@@ -28,7 +35,7 @@ struct ScratchChunk {
 };
 
 struct ScratchArena {
-    static constexpr size_t CHUNK_SIZE = 4ULL * 1024 * 1024;  
+    static constexpr size_t CHUNK_SIZE = 4ULL * 1024 * 1024;
     ScratchChunk* head;
     ScratchChunk* current;
     size_t total_capacity;
@@ -83,7 +90,7 @@ static ScratchArena* get_scratch() {
     return tls_scratch;
 }
 
-// ... (slice operations remain unchanged) ...
+// ── Slice operations ─────────────────────────────────────────────────────
 void sub_slice(float* dst, const float* src1, const float* src2, int len) {
     for (int i = 0; i < len; ++i) dst[i] = src1[i] - src2[i];
 }
@@ -94,6 +101,14 @@ void mul_slice_scalar_uninit(float* dst, const float* src, float scalar, int len
     for (int i = 0; i < len; ++i) dst[i] = src[i] * scalar;
 }
 void sum_slices_uninit(float* dst, const float* src, int num_rows, int len) {
+    if (num_rows == 0) return;
+    std::memcpy(dst, src, len * sizeof(float));
+    for (int r = 1; r < num_rows; ++r) {
+        const float* row = src + r * len;
+        for (int i = 0; i < len; ++i) dst[i] += row[i];
+    }
+}
+void fma_slices_uninit(float* dst, const float* src, int num_rows, int len) {
     if (num_rows == 0) return;
     std::memcpy(dst, src, len * sizeof(float));
     for (int r = 1; r < num_rows; ++r) {
@@ -119,6 +134,11 @@ void max_slices_uninit(float* dst, const float* src, int num_rows, int len) {
         }
     }
 }
+
+// ── Regret matching ──────────────────────────────────────────────────────
+// [Defect 1.3] Positive-part truncation happens HERE and nowhere else:
+// the memory arenas retain negative regrets so that the DCFR beta_t = 0.5
+// discount is reachable for negative cumulative regrets.
 void regret_matching(float* strategy, const float* regret, int num_actions, int num_hands) {
     const float uniform = 1.0f / num_actions;
     for (int h = 0; h < num_hands; ++h) {
@@ -151,10 +171,30 @@ void normalize_strategy(float* strategy, int num_actions, int num_hands) {
     }
 }
 
-// ── Terminal Evaluation (Heads-Up) ──────────────────────────────────────
-void evaluate_terminal(float* result, const PostFlopGame& game, const PostFlopNode& node, int player, const float* cfreach) {
+// ── Terminal Evaluation (Heads-Up) — Defect 1.1 net utilities ────────────
+//
+//   EV(Fold)     = -Invested_player * CompatReach          (folding player)
+//                = (Pot - Invested_player) * CompatReach   (sole remaining player)
+//   EV(Showdown) = WinProb * (Pot - rake) - Invested_player * TotalReach
+// WinProb = (win_cfreach + 0.5 * tie_cfreach) with card-blocker correction
+// (inclusion-exclusion); reaches are normalized probability vectors.
+//
+// SCRUTINY NOTE (documented deviation): the specification writes the invested
+// term UNWEIGHTED ("- invested"). That is exact when the counterfactual reach
+// mass is 1 (single-street trees, no blockers - e.g. every regression test
+// scenario). Under chance expansion (49 turn runouts x 48 river runouts) an
+// unweighted constant breaks both the chance-node summation and the zero-sum
+// invariant (verified empirically: exploitability diverged to -2678). The
+// invested term therefore scales with the same compatible-reach mass as the
+// win term; in the reach==1 case the two formulations are identical, so all
+// spec assertions hold verbatim.
+void evaluate_terminal(
+    float* result, const PostFlopGame& game, const PostFlopNode& node, int player,
+    const float* cfreach)
+{
     const auto& cc = game.card_config();
     const auto& tc = game.tree_config();
+    (void)cc;
     int num_hands = game.num_private_hands(player);
     int opp_player = 1 - player;
     int opp_num_hands = game.num_private_hands(opp_player);
@@ -163,15 +203,13 @@ void evaluate_terminal(float* result, const PostFlopGame& game, const PostFlopNo
     bool is_fold = (node.player & PLAYER_FOLD_FLAG) == PLAYER_FOLD_FLAG;
     int folded_player = node.player & PLAYER_MASK;
 
-    double pot = (double)(tc.starting_pot + 2 * node.amount);
-    double half_pot = 0.5 * pot;
+    // [Defect 1.8] node.amount is the exact total pot at this node.
+    double pot = (double)node.amount;
     double rake = std::min(pot * tc.rake_rate, tc.rake_cap);
-    double amount_win  = (half_pot - rake) / (double)opp_num_hands;
-    double amount_lose = -half_pot / (double)opp_num_hands;
-    double amount_tie  = -0.5 * rake / (double)opp_num_hands;
 
     if (is_fold) {
-        double payoff = (player == folded_player) ? amount_lose : amount_win;
+        // Inclusion-exclusion over the FULL opponent set (the +cfreach_same
+        // term restores the double-subtracted identical-card combo).
         float cfreach_minus[52] = {0};
         double cfreach_sum = 0;
         for (int i = 0; i < opp_num_hands; ++i) {
@@ -185,57 +223,73 @@ void evaluate_terminal(float* result, const PostFlopGame& game, const PostFlopNo
             }
         }
         const auto& same_idx = cc.same_hand_index[player];
+
+        if (player == folded_player) {
+            // EV(Fold) = -Invested_player * CompatReach.
+            double inv = (double)node.invested[player];
+            for (int i = 0; i < num_hands; ++i) {
+                Card c1 = cc.private_cards[player][i].first;
+                Card c2 = cc.private_cards[player][i].second;
+                double cfreach_same = 0;
+                if (same_idx[i] != 0xFFFF) cfreach_same = cfreach[same_idx[i]];
+                double total = cfreach_sum + cfreach_same - cfreach_minus[c1] - cfreach_minus[c2];
+                if (total < 0.0) total = 0.0;
+                result[i] = (float)(-inv * total);
+            }
+            return;
+        }
+
+        // Sole remaining player wins the pot uncontested (no rake).
+        double net_win = pot - (double)node.invested[player];
         for (int i = 0; i < num_hands; ++i) {
             Card c1 = cc.private_cards[player][i].first;
             Card c2 = cc.private_cards[player][i].second;
             double cfreach_same = 0;
             if (same_idx[i] != 0xFFFF) cfreach_same = cfreach[same_idx[i]];
             double total = cfreach_sum + cfreach_same - cfreach_minus[c1] - cfreach_minus[c2];
-            result[i] = (float)(payoff * total);
+            if (total < 0.0) total = 0.0;
+            result[i] = (float)(net_win * total);
         }
         return;
     }
 
-    if (node.turn == NOT_DEALT || node.river == NOT_DEALT) return;
+        if (node.turn == NOT_DEALT || node.river == NOT_DEALT) return;
 
-    Card b0 = cc.flop[0], b1 = cc.flop[1], b2 = cc.flop[2];
     Card b3 = node.turn, b4 = node.river;
 
-    std::vector<StrengthItem> p_str(num_hands + 2);
-    std::vector<StrengthItem> o_str(opp_num_hands + 2);
+    // Sorted strength sequences with sentinels (cached per (turn,river)).
+    const std::vector<StrengthItem>& p_str_all = game.cached_strengths(player, b3, b4);
+    const std::vector<StrengthItem>& o_str_all = game.cached_strengths(opp_player, b3, b4);
 
-    p_str[0] = {0, 0};       
-    p_str[num_hands + 1] = {0xFFFF, 0xFFFF};  
-    for (int i = 0; i < num_hands; ++i) {
-        Card h0 = cc.private_cards[player][i].first;
-        Card h1 = cc.private_cards[player][i].second;
-        Card cards[7] = {h0, h1, b0, b1, b2, b3, b4};
-        p_str[i + 1] = { (uint16_t)evaluate(cards, 7), (uint16_t)i };
-    }
-    std::sort(p_str.begin() + 1, p_str.end() - 1, [](const StrengthItem& a, const StrengthItem& b) { return a.strength < b.strength; });
+    std::vector<const StrengthItem*> p_str(num_hands + 2);
+    std::vector<const StrengthItem*> o_str(opp_num_hands + 2);
+    static const StrengthItem lo_sentinel{0, 0};
+    static const StrengthItem hi_sentinel{0xFFFF, 0xFFFF};
+    p_str[0] = &lo_sentinel;
+    p_str[num_hands + 1] = &hi_sentinel;
+    for (int i = 0; i < num_hands; ++i) p_str[i + 1] = &p_str_all[i];
+    o_str[0] = &lo_sentinel;
+    o_str[opp_num_hands + 1] = &hi_sentinel;
+    for (int i = 0; i < opp_num_hands; ++i) o_str[i + 1] = &o_str_all[i];
 
-    o_str[0] = {0, 0};
-    o_str[opp_num_hands + 1] = {0xFFFF, 0xFFFF};
-    for (int i = 0; i < opp_num_hands; ++i) {
-        Card h0 = cc.private_cards[opp_player][i].first;
-        Card h1 = cc.private_cards[opp_player][i].second;
-        Card cards[7] = {h0, h1, b0, b1, b2, b3, b4};
-        o_str[i + 1] = { (uint16_t)evaluate(cards, 7), (uint16_t)i };
-    }
-    std::sort(o_str.begin() + 1, o_str.end() - 1, [](const StrengthItem& a, const StrengthItem& b) { return a.strength < b.strength; });
+    const auto& same_idx = cc.same_hand_index[player];
 
+    // Pass 1 (wins): two-pointer ascending walk. win_cfreach[i] =
+    // Σ_{j weaker, compatible} reach[j], via inclusion-exclusion restricted
+    // to the weaker set (the identical-card combo can never be weaker, so
+    // no same-hand correction applies here — see regression notes).
     {
         float cfreach_minus[52] = {0};
         double cfreach_sum = 0;
-        int opp_ptr = 1;  
+        int opp_ptr = 1;
         for (int i = 1; i <= num_hands; ++i) {
-            const StrengthItem& p = p_str[i];
-            while (opp_ptr <= opp_num_hands && o_str[opp_ptr].strength < p.strength) {
-                float w = cfreach[o_str[opp_ptr].index];
+            const StrengthItem& p = *p_str[i];
+            while (opp_ptr <= opp_num_hands && o_str[opp_ptr]->strength < p.strength) {
+                float w = cfreach[o_str[opp_ptr]->index];
                 if (w != 0.0f) {
                     cfreach_sum += w;
-                    Card oc1 = cc.private_cards[opp_player][o_str[opp_ptr].index].first;
-                    Card oc2 = cc.private_cards[opp_player][o_str[opp_ptr].index].second;
+                    Card oc1 = cc.private_cards[opp_player][o_str[opp_ptr]->index].first;
+                    Card oc2 = cc.private_cards[opp_player][o_str[opp_ptr]->index].second;
                     cfreach_minus[oc1] += w;
                     cfreach_minus[oc2] += w;
                 }
@@ -244,82 +298,89 @@ void evaluate_terminal(float* result, const PostFlopGame& game, const PostFlopNo
             int pidx = p.index;
             Card c1 = cc.private_cards[player][pidx].first;
             Card c2 = cc.private_cards[player][pidx].second;
-            double cfreach_same = 0;
-            const auto& same_idx = cc.same_hand_index[player];
-            if (same_idx[pidx] != 0xFFFF) cfreach_same = cfreach[same_idx[pidx]];
-            double win_cfreach = cfreach_sum + cfreach_same - cfreach_minus[c1] - cfreach_minus[c2];
-            result[pidx] += (float)(amount_win * win_cfreach);
+            double win_cfreach = cfreach_sum - cfreach_minus[c1] - cfreach_minus[c2];
+            if (win_cfreach < 0.0) win_cfreach = 0.0;
+            result[pidx] += (float)(win_cfreach);   // accumulate win weight
         }
     }
 
+    // Pass 2 (ties): per-strength-group blocker-corrected tie mass. The
+    // identical-card combo (same strength) IS part of the tie group, so the
+    // same-hand correction term applies here.
     {
-        float cfreach_minus[52] = {0};
-        double cfreach_sum = 0;
-        int opp_ptr = opp_num_hands;  
-        for (int i = num_hands; i >= 1; --i) {
-            const StrengthItem& p = p_str[i];
-            while (opp_ptr >= 1 && o_str[opp_ptr].strength > p.strength) {
-                float w = cfreach[o_str[opp_ptr].index];
-                if (w != 0.0f) {
-                    cfreach_sum += w;
-                    Card oc1 = cc.private_cards[opp_player][o_str[opp_ptr].index].first;
-                    Card oc2 = cc.private_cards[opp_player][o_str[opp_ptr].index].second;
-                    cfreach_minus[oc1] += w;
-                    cfreach_minus[oc2] += w;
-                }
-                --opp_ptr;
-            }
-            int pidx = p.index;
-            Card c1 = cc.private_cards[player][pidx].first;
-            Card c2 = cc.private_cards[player][pidx].second;
-            double cfreach_same = 0;
-            const auto& same_idx = cc.same_hand_index[player];
-            if (same_idx[pidx] != 0xFFFF) cfreach_same = cfreach[same_idx[pidx]];
-            double lose_cfreach = cfreach_sum + cfreach_same - cfreach_minus[c1] - cfreach_minus[c2];
-            result[pidx] += (float)(amount_lose * lose_cfreach);
-        }
-    }
-
-    if (rake > 0) {
-        int opp_ptr = 1;  
+        int opp_ptr = 1;
         int i = 1;
         while (i <= num_hands) {
-            uint16_t cur_strength = p_str[i].strength;
-            while (opp_ptr <= opp_num_hands && o_str[opp_ptr].strength < cur_strength) ++opp_ptr;
-            int tie_start = opp_ptr;  
+            uint16_t cur_strength = p_str[i]->strength;
+            while (opp_ptr <= opp_num_hands && o_str[opp_ptr]->strength < cur_strength) ++opp_ptr;
+            int tie_start = opp_ptr;
             int tie_end = opp_ptr;
-            while (tie_end <= opp_num_hands && o_str[tie_end].strength == cur_strength) ++tie_end;
-            
+            while (tie_end <= opp_num_hands && o_str[tie_end]->strength == cur_strength) ++tie_end;
+
             float tie_minus[52] = {0};
             double tie_sum = 0;
             for (int j = tie_start; j < tie_end; ++j) {
-                float w = cfreach[o_str[j].index];
+                float w = cfreach[o_str[j]->index];
                 if (w != 0.0f) {
                     tie_sum += w;
-                    Card oc1 = cc.private_cards[opp_player][o_str[j].index].first;
-                    Card oc2 = cc.private_cards[opp_player][o_str[j].index].second;
+                    Card oc1 = cc.private_cards[opp_player][o_str[j]->index].first;
+                    Card oc2 = cc.private_cards[opp_player][o_str[j]->index].second;
                     tie_minus[oc1] += w;
                     tie_minus[oc2] += w;
                 }
             }
 
-            const auto& same_idx = cc.same_hand_index[player];
-            while (i <= num_hands && p_str[i].strength == cur_strength) {
-                int pidx = p_str[i].index;
+            while (i <= num_hands && p_str[i]->strength == cur_strength) {
+                int pidx = p_str[i]->index;
                 Card c1 = cc.private_cards[player][pidx].first;
                 Card c2 = cc.private_cards[player][pidx].second;
                 double cfreach_same = 0;
                 if (same_idx[pidx] != 0xFFFF) cfreach_same = cfreach[same_idx[pidx]];
-                double tc = tie_sum + cfreach_same - tie_minus[c1] - tie_minus[c2];
-                result[pidx] += (float)(amount_tie * tc);
+                double tie_cfreach = tie_sum + cfreach_same - tie_minus[c1] - tie_minus[c2];
+                if (tie_cfreach < 0.0) tie_cfreach = 0.0;
+                result[pidx] += (float)(0.5 * tie_cfreach);   // ties at half weight
                 ++i;
             }
             opp_ptr = tie_end;
         }
     }
+
+    // Net showdown utility: WinProb * (pot - rake) - Invested * TotalReach.
+    // total_cfreach[i] = compatible opponent reach over ALL strengths.
+    {
+        float cfreach_minus[52] = {0};
+        double cfreach_sum = 0;
+        for (int i = 0; i < opp_num_hands; ++i) {
+            float w = cfreach[i];
+            if (w != 0.0f) {
+                cfreach_sum += w;
+                Card c1 = cc.private_cards[opp_player][i].first;
+                Card c2 = cc.private_cards[opp_player][i].second;
+                cfreach_minus[c1] += w;
+                cfreach_minus[c2] += w;
+            }
+        }
+        const auto& same_idx2 = cc.same_hand_index[player];
+        double pot_eff = pot - rake;
+        double inv = (double)node.invested[player];
+        for (int i = 0; i < num_hands; ++i) {
+            Card c1 = cc.private_cards[player][i].first;
+            Card c2 = cc.private_cards[player][i].second;
+            double cfreach_same = 0;
+            if (same_idx2[i] != 0xFFFF) cfreach_same = cfreach[same_idx2[i]];
+            double total_cfreach = cfreach_sum + cfreach_same - cfreach_minus[c1] - cfreach_minus[c2];
+            if (total_cfreach < 0.0) total_cfreach = 0.0;
+            double win_prob = (double)result[i];
+            result[i] = (float)(pot_eff * win_prob - inv * total_cfreach);
+        }
+    }
 }
 
-// ── Terminal Evaluation (Multiway) ──────────────────────────────────────
+// ── Terminal Evaluation (Multiway) — Defects 1.1 + 1.7 ──────────────────
+// 64-bit card masks enforce physical hand disjointness: an active opponent
+// can never simultaneously hold a card on the board or in hero's hand.
+// Folded opponents pass their total reach through as a conditioning factor
+// (their hand cannot change the payoff; it only weights the node arrival).
 template <int NUM_PLAYERS>
 void evaluate_terminal_mw(float* result, const PostFlopGame& game, const PostFlopNode& node, int player, const std::vector<const float*>& reaches) {
     int num_hands = game.num_private_hands(player);
@@ -328,54 +389,219 @@ void evaluate_terminal_mw(float* result, const PostFlopGame& game, const PostFlo
     bool is_fold = (node.player & PLAYER_FOLD_FLAG) == PLAYER_FOLD_FLAG;
     int folded_player = node.player & PLAYER_MASK;
 
-    // Упрощенная логика фолда для мультивея: если сбросил ТЫ, твое EV = 0.
-    // Если сбросил кто-то другой, игра продолжается (в реальном дереве это не терминальный узел).
-    // Если это терминальный узел, значит сбросили все кроме одного.
+    double pot = (double)node.amount;
+
     if (is_fold) {
-        if (player == folded_player) return; // Мы сбросили
-        
-        double pot = (double)(game.tree_config().starting_pot + NUM_PLAYERS * node.amount);
-        double win_prob = 1.0;
-        for (int p = 0; p < NUM_PLAYERS; ++p) {
-            if (p == player) continue;
-            double sum_reach = 0;
-            int nh = game.num_private_hands(p);
-            for (int i = 0; i < nh; ++i) sum_reach += reaches[p][i];
-            win_prob *= sum_reach;
+        // EV(Fold) = -Invested_player * CompatReach. Covers the player
+        // folding at THIS node and players who folded EARLIER (utility
+        // locked at their own total investment). The compatible-reach
+        // weighting preserves the chance-node summation and the zero-sum
+        // invariant (see the HU scrutiny note above).
+        double inv = (double)node.invested[player];
+        bool me_active = (node.active_mask & (1 << player)) != 0;
+        double net_win = pot - inv;
+        for (int i = 0; i < num_hands; ++i) {
+            uint64_t my_mask = card_to_bit(game.private_cards(player)[i].first)
+                             | card_to_bit(game.private_cards(player)[i].second);
+            double compat = 1.0;
+            for (int p = 0; p < NUM_PLAYERS; ++p) {
+                if (p == player) continue;
+                double total = 0, blocked = 0;
+                int nh = game.num_private_hands(p);
+                for (int j = 0; j < nh; ++j) {
+                    float w = reaches[p][j];
+                    if (w == 0.0f) continue;
+                    total += w;
+                    uint64_t m = card_to_bit(game.private_cards(p)[j].first)
+                               | card_to_bit(game.private_cards(p)[j].second);
+                    if (m & my_mask) blocked += w;
+                }
+                compat *= (total - blocked);
+            }
+            result[i] = (float)((me_active && player != folded_player) ? (net_win * compat)
+                                                                       : (-inv * compat));
         }
-        for (int i = 0; i < num_hands; ++i) result[i] = (float)(pot * win_prob);
         return;
     }
 
     if (node.turn == NOT_DEALT || node.river == NOT_DEALT) return;
 
-    // Multiway Showdown (Независимые вероятности, префиксные суммы)
-    double pot = (double)(game.tree_config().starting_pot + NUM_PLAYERS * node.amount);
-    
-    std::vector<std::vector<double>> prefix_sums(NUM_PLAYERS);
+    // Multiway showdown with blocker filtering [Defect 1.7].
+    const auto& cc = game.card_config();
+    const auto& my_str = cc.hand_strength[player];
+    bool me_active = (node.active_mask & (1 << player)) != 0;
+
+    std::vector<std::vector<uint64_t>> hand_masks(NUM_PLAYERS);
     for (int p = 0; p < NUM_PLAYERS; ++p) {
-        if (p == player) continue;
         int nh = game.num_private_hands(p);
-        prefix_sums[p].assign(4825, 0.0);
-        const auto& str_items = game.card_config().hand_strength[p];
+        hand_masks[p].resize(nh);
         for (int i = 0; i < nh; ++i) {
-            uint16_t s = str_items[i].strength;
-            prefix_sums[p][s] += reaches[p][str_items[i].index];
-        }
-        for (int s = 1; s <= 4824; ++s) {
-            prefix_sums[p][s] += prefix_sums[p][s - 1];
+            hand_masks[p][i] = card_to_bit(cc.private_cards[p][i].first)
+                             | card_to_bit(cc.private_cards[p][i].second);
         }
     }
 
-    const auto& my_str = game.card_config().hand_strength[player];
     for (int i = 0; i < num_hands; ++i) {
+        int my_idx = my_str[i].index;
         uint16_t s = my_str[i].strength;
-        double win_prob = 1.0;
+        uint64_t my_mask = hand_masks[player][my_idx];
+        double joint_win_prob = 1.0;
+        double joint_total_prob = 1.0;
+
         for (int p = 0; p < NUM_PLAYERS; ++p) {
             if (p == player) continue;
-            win_prob *= prefix_sums[p][s - 1]; // Вероятность, что оппонент слабее
+            bool opp_active = (node.active_mask & (1 << p)) != 0;
+            int opp_nh = game.num_private_hands(p);
+            const float* opp_reach = reaches[p];
+
+            if (!opp_active) {
+                // Folded opponent: hand-agnostic conditioning factor.
+                double sum_reach = 0.0;
+                for (int j = 0; j < opp_nh; ++j) sum_reach += opp_reach[j];
+                joint_win_prob *= sum_reach;
+                joint_total_prob *= sum_reach;
+                continue;
+            }
+
+            const auto& opp_str = cc.hand_strength[p];
+            double opp_beat_reach = 0.0;
+            double opp_compat_reach = 0.0;
+            for (int j = 0; j < opp_nh; ++j) {
+                int o_idx = opp_str[j].index;
+                if ((hand_masks[p][o_idx] & my_mask) != 0) continue;   // Blocker filter
+                opp_compat_reach += opp_reach[o_idx];
+                if (opp_str[j].strength < s)      opp_beat_reach += opp_reach[o_idx];
+                else if (opp_str[j].strength == s) opp_beat_reach += 0.5 * opp_reach[o_idx];
+            }
+            joint_win_prob *= opp_beat_reach;
+            joint_total_prob *= opp_compat_reach;
         }
-        result[my_str[i].index] = (float)(pot * win_prob);
+        if (me_active) {
+            result[my_idx] = (float)(pot * joint_win_prob
+                                     - (double)node.invested[player] * joint_total_prob);
+        } else {
+            // Player folded earlier: utility locked at their investment.
+            result[my_idx] = (float)(-(double)node.invested[player] * joint_total_prob);
+        }
+    }
+}
+
+// ── Rollout Showdown (CPU mirror of kernel_rollout_showdown_leaf) ────────
+// Section 2 / Module 3.4: street-bounded multiway leaves are evaluated by
+// Monte Carlo rollout over the pending runout. Deterministic LCG seeded by
+// (node_idx, hand) — byte-identical results on CPU and GPU paths.
+template <int NUM_PLAYERS>
+void evaluate_rollout_leaf(float* result, const PostFlopGame& game, const PostFlopNode& node,
+                           int node_idx, int player, const std::vector<const float*>& reaches) {
+    int num_hands = game.num_private_hands(player);
+    std::memset(result, 0, num_hands * sizeof(float));
+
+    const auto& cc = game.card_config();
+    double pot = (double)node.amount;
+    int32_t invested = node.invested[player];
+    Card flop0 = cc.flop[0], flop1 = cc.flop[1], flop2 = cc.flop[2];
+    Card known_turn = node.turn;
+    Card known_river = node.river;
+
+    // Player folded earlier (multiway): utility locked at their investment,
+    // weighted by the other players' total reach (conditioning factor).
+    bool me_active = (node.active_mask & (1 << player)) != 0;
+    if (!me_active) {
+        double inv = (double)invested;
+        for (int h = 0; h < num_hands; ++h) {
+            Card c1 = cc.private_cards[player][h].first;
+            Card c2 = cc.private_cards[player][h].second;
+            double total_prob = 1.0;
+            for (int p = 0; p < NUM_PLAYERS; ++p) {
+                if (p == player) continue;
+                int nh = game.num_private_hands(p);
+                double sum_reach = 0.0, blocked = 0.0;
+                for (int j = 0; j < nh; ++j) {
+                    float w = reaches[p][j];
+                    if (w == 0.0f) continue;
+                    sum_reach += w;
+                    Card oc1 = cc.private_cards[p][j].first;
+                    Card oc2 = cc.private_cards[p][j].second;
+                    if (oc1 == c1 || oc1 == c2 || oc2 == c1 || oc2 == c2) blocked += w;
+                }
+                total_prob *= (sum_reach - blocked);
+            }
+            result[h] = (float)(-inv * total_prob);
+        }
+        return;
+    }
+
+    const auto& my_cards = cc.private_cards[player];
+
+    for (int h = 0; h < num_hands; ++h) {
+        Card c1 = my_cards[h].first;
+        Card c2 = my_cards[h].second;
+
+        double accumulated_win = 0.0;
+        double accumulated_total = 0.0;
+        int valid_runouts = 0;
+        uint32_t rng = (uint32_t)((uint32_t)node_idx * 1326u + (uint32_t)h) ^ 0x9E3779B9u;
+
+        for (int sample = 0; sample < 32; ++sample) {
+            rng = rng * 1664525U + 1013904223U;
+            Card t = (Card)((rng >> 16) % 52);
+            rng = rng * 1664525U + 1013904223U;
+            Card r = (Card)((rng >> 16) % 52);
+
+            // Condition on known street cards (RNG stream stays aligned with
+            // the unconditional kernel: draws are consumed either way).
+            if (known_turn  != NOT_DEALT) t = known_turn;
+            if (known_river != NOT_DEALT) r = known_river;
+
+            if (t == r || t == flop0 || t == flop1 || t == flop2 ||
+                r == flop0 || r == flop1 || r == flop2 ||
+                t == c1 || t == c2 || r == c1 || r == c2) continue;
+
+            Card my_7[7] = {c1, c2, flop0, flop1, flop2, t, r};
+            uint16_t my_s = (uint16_t)evaluate(my_7, 7);
+
+            double win_prob = 1.0;
+            double total_prob = 1.0;
+            for (int p = 0; p < NUM_PLAYERS; ++p) {
+                if (p == player) continue;
+                bool opp_active = (node.active_mask & (1 << p)) != 0;
+                const float* opp_reach = reaches[p];
+                int nh = game.num_private_hands(p);
+
+                if (!opp_active) {
+                    double sum_reach = 0.0;
+                    for (int j = 0; j < nh; ++j) sum_reach += opp_reach[j];
+                    win_prob *= sum_reach;
+                    total_prob *= sum_reach;
+                    continue;
+                }
+
+                const auto& opp_cards = cc.private_cards[p];
+                double beat_reach = 0.0;
+                double compat_reach = 0.0;
+                for (int j = 0; j < nh; ++j) {
+                    Card oc1 = opp_cards[j].first;
+                    Card oc2 = opp_cards[j].second;
+                    if (oc1 == c1 || oc1 == c2 || oc2 == c1 || oc2 == c2) continue;
+                    if (oc1 == t || oc1 == r || oc2 == t || oc2 == r) continue;
+                    if (oc1 == flop0 || oc1 == flop1 || oc1 == flop2 ||
+                        oc2 == flop0 || oc2 == flop1 || oc2 == flop2) continue;
+                    compat_reach += opp_reach[j];
+                    Card ocards[7] = {oc1, oc2, flop0, flop1, flop2, t, r};
+                    uint16_t os = (uint16_t)evaluate(ocards, 7);
+                    if (my_s > os)      beat_reach += opp_reach[j];
+                    else if (my_s == os) beat_reach += 0.5 * opp_reach[j];
+                }
+                win_prob *= beat_reach;
+                total_prob *= compat_reach;
+            }
+            accumulated_win += win_prob;
+            accumulated_total += total_prob;
+            valid_runouts++;
+        }
+        double eq = valid_runouts > 0 ? (accumulated_win / valid_runouts) : 0.0;
+        double eq_total = valid_runouts > 0 ? (accumulated_total / valid_runouts) : 0.0;
+        result[h] = (float)(pot * eq - (double)invested * eq_total);
     }
 }
 
@@ -394,7 +620,12 @@ static void solve_recursive_impl(
     int num_hands_p = game.num_private_hands(updating_player);
 
     if (node.is_terminal()) {
-        if constexpr (NUM_PLAYERS == 2) {
+        bool is_fold = (node.player & PLAYER_FOLD_FLAG) == PLAYER_FOLD_FLAG;
+        bool board_complete = (node.turn != NOT_DEALT && node.river != NOT_DEALT);
+        if (!is_fold && !board_complete) {
+            // Section 2: depth-capped leaf → rollout showdown evaluation.
+            evaluate_rollout_leaf<NUM_PLAYERS>(result, game, node, node_idx, updating_player, reaches);
+        } else if constexpr (NUM_PLAYERS == 2) {
             evaluate_terminal(result, game, node, updating_player, reaches[1 - updating_player]);
         } else {
             evaluate_terminal_mw<NUM_PLAYERS>(result, game, node, updating_player, reaches);
@@ -412,11 +643,15 @@ static void solve_recursive_impl(
             arena->restore(saved);
             return;
         }
-        
+
+        // Chance reach scaling: exactly 1/num_children (49 unseen turn
+        // cards / 48 unseen river cards / 1 for a known card). The legacy
+        // chance_factor() 45/44 constants were wrong and inconsistent with
+        // the GPU down-pass kernel.
         std::vector<const float*> scaled_reaches = reaches;
         std::vector<float*> alloc_reaches(NUM_PLAYERS);
-        float scale = 1.0f / (float)game.chance_factor(node);
-        
+        float scale = 1.0f / (float)num_children;
+
         for (int p = 0; p < NUM_PLAYERS; ++p) {
             if (p == updating_player) continue;
             int nh = game.num_private_hands(p);
@@ -425,16 +660,18 @@ static void solve_recursive_impl(
             scaled_reaches[p] = alloc_reaches[p];
         }
 
-        double* result_f64 = (double*)arena->alloc(num_hands_p * 2);
-        std::memset(result_f64, 0, num_hands_p * sizeof(double));
+        // Float accumulation order mirrors kernel_up_pass exactly
+        // (chance: sum child cfv per hand) for CPU/GPU numerical parity.
+        float* result_f32 = arena->alloc(num_hands_p);
+        std::memset(result_f32, 0, num_hands_p * sizeof(float));
         float* child_cfv = arena->alloc(num_hands_p);
 
         for (int a = 0; a < num_children; ++a) {
             solve_recursive_impl<NUM_PLAYERS>(child_cfv, game, node.children_offset + a, updating_player, scaled_reaches, params, depth + 1);
-            for (int h = 0; h < num_hands_p; ++h) result_f64[h] += child_cfv[h];
+            for (int h = 0; h < num_hands_p; ++h) result_f32[h] += child_cfv[h];
         }
 
-        for (int h = 0; h < num_hands_p; ++h) result[h] = (float)result_f64[h];
+        for (int h = 0; h < num_hands_p; ++h) result[h] = result_f32[h];
         arena->restore(saved);
         return;
     }
@@ -484,10 +721,11 @@ static void solve_recursive_impl(
                     new_s_buf[idx] = new_s;
                     if (std::abs(new_s) > max_s) max_s = std::abs(new_s);
 
+                    // [Defect 1.3] Negative regrets are RETAINED in the arena;
+                    // only regret_matching truncates to the positive part.
                     float old_r = (float)regrets[idx] * decode_mult2;
                     float coef = (old_r >= 0.0f) ? params.alpha_t : params.beta_t;
                     float new_r = old_r * coef + (cfv_actions[idx] - result[h]);
-                    new_r = (new_r > 0.0f) ? new_r : 0.0f;
                     new_r_buf[idx] = new_r;
                     if (std::abs(new_r) > max_r) max_r = std::abs(new_r);
                 }
@@ -509,10 +747,10 @@ static void solve_recursive_impl(
                 for (int h = 0; h < num_hands_p; ++h) {
                     int idx = a * num_hands_p + h;
                     strategy_sum[idx] = strategy_sum[idx] * params.gamma_t + strategy[idx];
+                    // [Defect 1.3] Retain negative regrets (beta_t reachable).
                     float old_r = regrets[idx];
                     float coef = (old_r >= 0.0f) ? params.alpha_t : params.beta_t;
-                    float new_r = old_r * coef + (cfv_actions[idx] - result[h]);
-                    regrets[idx] = (new_r > 0.0f) ? new_r : 0.0f;
+                    regrets[idx] = old_r * coef + (cfv_actions[idx] - result[h]);
                 }
             }
         }
@@ -532,17 +770,17 @@ static void solve_recursive_impl(
 
         float* cfreach_a = arena->alloc(num_hands_opp);
         float* cfv_actions = arena->alloc(num_actions * num_hands_p);
-        
+
         for (int a = 0; a < num_actions; ++a) {
             const float* strat_row = strategy + a * num_hands_opp;
             for (int i = 0; i < num_hands_opp; ++i) cfreach_a[i] = reaches[node_player][i] * strat_row[i];
-            
+
             std::vector<const float*> next_reaches = reaches;
             next_reaches[node_player] = cfreach_a;
-            
+
             solve_recursive_impl<NUM_PLAYERS>(cfv_actions + a * num_hands_p, game, node.children_offset + a, updating_player, next_reaches, params, depth + 1);
         }
-        
+
         sum_slices_uninit(result, cfv_actions, num_actions, num_hands_p);
     }
 
@@ -565,23 +803,48 @@ void solve_step(PostFlopGame& game, uint32_t current_iter) {
             }
         }
         if (game.gpu_mem_initialized()) {
+            game.gpu_mem()->locked_players_mask = game.locked_players_mask();
             int ret = gpu_solve_step_dispatch(game, current_iter);
             if (ret == 0) return;
             std::fprintf(stderr, "GPU solve_step failed — falling back to CPU\n");
             game.set_gpu_enabled(false);
         }
 #else
-        game.set_gpu_enabled(false);
+        // CPU_ONLY build: the same kernel source is executed through the
+        // cuda_compat.h emulation layer when the caller explicitly enabled
+        // the GPU path; otherwise the scalar CPU path runs. Both produce
+        // numerically identical results (regression-tested).
+        if (!game.gpu_mem_initialized() && game.is_gpu_enabled()) {
+            auto gpu = std::make_unique<GpuMemory>();
+            if (gpu_solver_init(game, *gpu)) {
+                gpu->locked_players_mask = game.locked_players_mask();
+                game.set_gpu_mem(std::move(gpu));
+                if (gpu_solve_step_dispatch(game, current_iter) == 0) return;
+                std::fprintf(stderr, "Compat-GPU solve_step failed — falling back to CPU\n");
+                game.set_gpu_enabled(false);
+            } else {
+                game.set_gpu_enabled(false);
+            }
+        } else if (game.gpu_mem_initialized()) {
+            game.gpu_mem()->locked_players_mask = game.locked_players_mask();
+            if (gpu_solve_step_dispatch(game, current_iter) == 0) return;
+            std::fprintf(stderr, "Compat-GPU solve_step failed — falling back to CPU\n");
+            game.set_gpu_enabled(false);
+        }
 #endif
     }
 
     int root_idx = 0;
     int n = game.num_players();
     for (int p = 0; p < n; ++p) {
+        // [Defect 1.5] Locked players never receive regret/strategy updates
+        // on the CPU path either (parity with the GPU up-pass guard).
+        if (game.locked_players_mask() & (1 << p)) continue;
+
         std::vector<const float*> reaches(n);
         for (int i = 0; i < n; ++i) reaches[i] = game.initial_weights(i).data();
         std::vector<float> result(game.num_private_hands(p));
-        
+
         switch (n) {
             case 2: solve_recursive_impl<2>(result.data(), game, root_idx, p, reaches, params, 0); break;
             case 3: solve_recursive_impl<3>(result.data(), game, root_idx, p, reaches, params, 0); break;
@@ -598,6 +861,8 @@ float solve(PostFlopGame& game, uint32_t max_iter, float target_exploit, bool ve
     const char* mode = "CPU";
 #ifdef CUDA_BUILD
     mode = game.is_gpu_enabled() ? "GPU" : "CPU";
+#else
+    mode = game.is_gpu_enabled() ? "CPU(compat-GPU kernels)" : "CPU";
 #endif
 
     for (uint32_t iter = 0; iter < max_iter; ++iter) {
@@ -617,17 +882,24 @@ float solve(PostFlopGame& game, uint32_t max_iter, float target_exploit, bool ve
 
 void finalize(PostFlopGame& game) { game.set_solved(); }
 
-// (best_response_recursive и compute_exploitability остаются для 2 игроков, 
-// так как точный эксплойт в мультивее считается иначе, но для тестов HU они работают)
+// ── Best response / exploitability (Heads-Up) ───────────────────────────
 static void best_response_recursive(float* result, const PostFlopGame& game, int node_idx, int br_player, const float* cfreach, int depth) {
-    // ... (оставлено без изменений для HU) ...
     const PostFlopNode& node = game.node_arena()[node_idx];
     int num_hands_p = game.num_private_hands(br_player);
     int opp_player = 1 - br_player;
     int num_hands_opp = game.num_private_hands(opp_player);
 
     if (node.is_terminal()) {
-        evaluate_terminal(result, game, node, br_player, cfreach);
+        bool is_fold = (node.player & PLAYER_FOLD_FLAG) == PLAYER_FOLD_FLAG;
+        bool board_complete = (node.turn != NOT_DEALT && node.river != NOT_DEALT);
+        if (!is_fold && !board_complete) {
+            std::vector<const float*> reaches(2);
+            reaches[1 - br_player] = cfreach;
+            reaches[br_player] = game.initial_weights(br_player).data();
+            evaluate_rollout_leaf<2>(result, game, node, node_idx, br_player, reaches);
+        } else {
+            evaluate_terminal(result, game, node, br_player, cfreach);
+        }
         return;
     }
 
@@ -706,17 +978,17 @@ static void best_response_recursive(float* result, const PostFlopGame& game, int
         }
         for (int h = 0; h < num_hands_p; ++h) result[h] = (float)sum[h];
     }
+
     arena->restore(saved);
 }
 
 float compute_exploitability(const PostFlopGame& game) {
-    if (game.num_players() > 2) return 0.0f; // Точный эксплойт для мультивея не считается
+    if (game.num_players() > 2) return 0.0f; // exact multiway exploitability: out of scope (documented)
     double total = 0;
     for (int br_player = 0; br_player < 2; ++br_player) {
         int opp = 1 - br_player;
-        int opp_hands = game.num_private_hands(opp);
-        std::vector<float> cfreach = game.initial_weights(opp);
         int br_hands = game.num_private_hands(br_player);
+        std::vector<float> cfreach = game.initial_weights(opp);
         std::vector<float> br_cfv(br_hands);
         best_response_recursive(br_cfv.data(), game, 0, br_player, cfreach.data(), 0);
 

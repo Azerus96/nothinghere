@@ -1,0 +1,15 @@
+=== [TEST-2] Regression: no dummy card falsification (Defect 1.2) ===
+
+  PASS: cc.turn == 255 && cc.river == 255 after prepare() on flop input
+  chance nodes: 1232 (49-child turn: 7, 48-child river: 1225)
+  PASS: HU flop input routes to CHANCE NODE expansion (Tier 1)
+  PASS: turn chance nodes enumerate exactly 49 runouts
+  PASS: river chance nodes enumerate exactly 48 runouts
+  PASS: showdown terminals receive concrete turn/river from chance actions
+  PASS: multiway tree forced to max_depth = 1 (Tier 2)
+  3-way flop tree: 25 nodes, 10 rollout leaves, 0 chance nodes
+  PASS: multiway street-ends become ROLLOUT leaves (no synthetic board cards)
+  PASS: rollout leaf evaluation produces finite regrets
+  PASS: multiway solve leaves the pending streets undealt (no fake cards)
+
+=== [TEST-2] Summary: 9 passed, 0 failed ===

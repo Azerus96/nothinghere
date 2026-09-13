@@ -1,0 +1,33 @@
+=== Test BFS Arena Layout (BUG #1 fix) ===
+
+  Arena size: 7472 nodes
+
+  Checking BFS layout invariants...
+  Nodes with children: 3058, layout OK: 3058, layout FAIL: 0
+  PASS: All nodes have valid contiguous children (BFS layout)
+  PASS: Tree has at least one multi-child node
+
+  Checking root node children...
+  Root: player=0, num_children=4, children_offset=1
+  PASS: Root has at least 2 children (Check + Bet)
+  PASS: Root's children start at index 1 (BFS)
+  Root child 0: arena[1].player=1
+  PASS: Child 0 at index 1
+  Root child 1: arena[2].player=1
+  PASS: Child 1 at index 2
+  Root child 2: arena[3].player=1
+  PASS: Child 2 at index 3
+  Root child 3: arena[4].player=1
+  PASS: Child 3 at index 4
+
+  Running 50 DCFR iterations to verify solver correctness...
+  After 50 iterations: exploitability = 0.138876
+  PASS: Exploitability is real (not NaN, not 0.5 stub)
+  Initial exploitability (fresh game): 2.198828
+  After-50-iter exploitability:         0.138876
+
+  Deep tree walk: verifying every node is reachable from root...
+  Reachable from root: 7472 / 7472
+  PASS: All nodes reachable from root (no orphaned subtrees)
+
+=== Summary: 10 passed, 0 failed ===

@@ -1,0 +1,12 @@
+=== [TEST-3] Regression: DCFR negative regret retention (Defect 1.3) ===
+
+  storage2: 9434 floats, 3743 negative, min = -171.9790
+  PASS: presence of negative floating-point values in storage2
+  PASS: beta_t == 0.5 (constant negative discount)
+  PASS: negative-regret branch is exercised => beta discount reachable
+  PASS: update preserves negative regrets (no CFR+ floor in arena)
+  PASS: positive regrets stay positive
+  PASS: regret_matching applies max(0, r) strictly inside strategy computation
+  PASS: compat-GPU up-pass also retains negative regrets
+
+=== [TEST-3] Summary: 7 passed, 0 failed ===

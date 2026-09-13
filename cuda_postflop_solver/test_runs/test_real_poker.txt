@@ -1,0 +1,58 @@
+=== Test 1: Hand evaluator on real poker hands ===
+  PASS: Royal flush strength > 4800
+  PASS: Quad aces strength in range
+  PASS: Full house aces full of kings
+  PASS: Ace flush
+  PASS: 9-high straight
+
+=== Test 2: Range parsing ===
+  PASS: AA weight = 1.0
+  PASS: KK weight = 1.0
+  PASS: QQ weight = 1.0
+  PASS: AKs weight = 1.0
+  PASS: AKo weight = 0 (not in range)
+  PASS: 22 not in range
+  PASS: 88 in 88+
+  PASS: 99 in 88+
+  PASS: AA in 88+
+  PASS: 77 not in 88+
+  PASS: A2s in A2s+
+  PASS: AKs in A2s+
+  PASS: KQo in KQ
+  PASS: KQs in KQ
+
+=== Test 3: Suit isomorphism ===
+  PASS: Uniform range: clubs ~ diamonds
+  PASS: Uniform range: clubs ~ hearts
+  PASS: Uniform range: clubs ~ spades
+
+=== Test 4: Gosper's hack (k-subset enumeration) ===
+  PASS: C(13,5) = 1287
+
+=== Test 5: Zobrist hashing (deterministic) ===
+  PASS: Same seed → same keys
+
+=== Test 6: Action tree construction ===
+  Action nodes: flop=12 turn=3224 river=519792
+  PASS: Flop action nodes > 0
+
+=== Test 7: PostFlopGame setup ===
+  OOP private hands: 49
+  IP  private hands: 70
+  Total nodes: 723
+  PASS: OOP has private hands
+  PASS: IP has private hands
+  Memory: uncompressed=0 bytes, compressed=0 bytes
+
+=== Test 8: Run DCFR solver (10 iterations) ===
+  iter 0 done
+  iter 2 done
+  iter 4 done
+  iter 6 done
+  iter 8 done
+  10 iterations in 0.010s (953.1 iter/sec)
+
+=== Test 9: Hand evaluator benchmark ===
+  1M evaluations in 0.031s = 32234240 evals/sec (sum=246768968)
+
+=== Summary: 27 passed, 0 failed ===

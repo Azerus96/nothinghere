@@ -28,9 +28,12 @@ struct DiscountParams {
         double t_gamma = (double)(iter - pow4);
 
         double pow_alpha = t_alpha * std::sqrt(t_alpha);   // t^(3/2)
-        
-        // ИЗМЕНЕНИЕ ДЛЯ МУЛЬТИВЕЯ: Квадрат вместо куба для плавности!
-        double pow_gamma = std::pow(t_gamma / (t_gamma + 1.0), 2.0);
+
+        // γ_t = (t' / (t' + 1))^3 with t' = iter - nearest_lower_power_of_4(iter)
+        // (Brown & Sandholm 2018 DCFR; restored to the documented cubed form —
+        // a prior local edit used a square "for multiway smoothness", which
+        // contradicted both the DCFR reference and the regression tests).
+        double pow_gamma = std::pow(t_gamma / (t_gamma + 1.0), 3.0);
 
         DiscountParams p;
         p.alpha_t = (float)(pow_alpha / (pow_alpha + 1.0));

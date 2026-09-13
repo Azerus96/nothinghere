@@ -1,0 +1,20 @@
+=== [TEST-6] Regression: two-tier subgame architecture (Section 2) ===
+
+  Scenario A: Heads-Up full Flop->Turn->River tree
+    HU total nodes = 1129544 (decision: 16/2744/395136 by street) built in 0.32s
+  PASS: HU full tree: total nodes >= 300,000
+  PASS: HU tree spans flop, turn and river decision nodes
+  PASS: HU tree is NOT depth-capped (full expansion)
+
+  Scenario B: Multiway (3 players) street-bounded search
+    MW nodes = 46, memory = 0.04 MB (FP32 uncompressed)
+  PASS: MW tree: max_depth == 1
+  PASS: MW tree: total nodes <= 500
+  PASS: MW tree: memory <= 20 MB
+    chance nodes = 0, rollout leaves = 19
+  PASS: MW tree contains no chance transitions (street-bounded)
+  PASS: MW street-ends are rollout showdown leaves
+  PASS: FP32 precision: compression disabled by default
+  PASS: storage arenas are exactly FP32-sized (no INT16 quantization)
+
+=== [TEST-6] Summary: 10 passed, 0 failed ===

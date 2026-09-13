@@ -1,0 +1,26 @@
+[bridge] solver daemon started (pid=8435)
+== health ==
+  PASS: health: daemon alive after startup
+== preflop GTO chart (SQLite) ==
+  PASS: GTO 100BB chart served from SQLite
+  PASS: is_hand_in_range: AhKh in UTG open range
+  PASS: is_hand_in_range: 72o not in UTG open range
+== preflop advice (> 12 BB) ==
+  PASS: preflop advice: RAISE (BTN GTO open)
+== preflop RVR (<= 12 BB) ==
+  PASS: RVR decision: equity=0.9235 -> PUSH (RVR)
+== postflop multiway (Tier 2 rollout) ==
+  PASS: multiway advice routes to Tier 2 rollout
+  PASS: MW nodes <= 500 (got 46)
+  PASS: CDF sampling reported (rng_roll + sampled_action_type)
+== postflop with pseudo-harmonic bet injection ==
+  PASS: pseudo-harmonic: 250 into 300 stays on-grid (no injection)
+  PASS: pseudo-harmonic: 430 into 300 deviates (d=0.356 > 0.15) -> inject exact size
+  PASS: pseudo_harmonic_distance formula d(x,y)=2|x-y|/(x+y)
+== HUD dossier + exploit locking ==
+  PASS: HUD dossier: u1 VPIP=100.0
+  PASS: exploit mode locks Calling Station profile: Exploit: Whale (Calling Station)
+== daemon persistence (Defect 1.6) ==
+  PASS: persistent daemon served 3 queries, restarts=0
+
+=== Bridge test summary: 15 passed, 0 failed ===

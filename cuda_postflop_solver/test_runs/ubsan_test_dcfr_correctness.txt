@@ -1,0 +1,46 @@
+=== Test 1: DCFR regret matching on toy example ===
+  PASS: Hand 0: action 1 prob = 1.0
+  PASS: Hand 1: action 1 prob = 1.0
+  PASS: Hand 0: actions 0 and 2 = 0
+  PASS: All-zero → uniform 1/3
+  PASS: Negative regret ignored, hand 0
+  PASS: Negative regret ignored, hand 1
+
+=== Test 2: DCFR discount parameters ===
+  PASS: Iter 0: α = 0
+  PASS: Iter 0: β = 0.5
+  PASS: Iter 0: γ = 0 (full reset)
+  PASS: Iter 1: γ = 0 (power of 4 reset)
+  PASS: Iter 4: γ = 0 (power of 4 reset)
+  PASS: Iter 5: γ = 0.125
+  PASS: Iter 100: α = 99^1.5 / (99^1.5 + 1)
+  PASS: Iter 100: γ = (36/37)^3
+
+=== Test 3: Terminal fold eval with inclusion-exclusion ===
+  OOP hands: 12, IP hands: 18
+  Initial exploitability: 0.000000 (should be finite)
+  PASS: Exploitability is finite
+
+=== Test 4: DCFR convergence on simple spot ===
+  After 100 iterations: exploit=0.000000 (initial=0.000000)
+  Time: 0.000s (260516.4 iter/sec)
+  PASS: Exploitability did not increase significantly
+
+=== Test 5: Real poker setup (3betpot-like) ===
+  OOP private hands: 179
+  IP  private hands: 198
+  Total nodes: 2693
+  Memory: 4036 KB uncompressed, 2018 KB compressed
+  PASS: OOP has substantial range
+  PASS: IP has substantial range
+  iter  10  exploit=0.623239  t=0.37s  27.2 iter/s
+  iter  20  exploit=0.416002  t=0.75s  26.6 iter/s
+  iter  30  exploit=0.155565  t=1.14s  26.3 iter/s
+  iter  40  exploit=0.094019  t=1.52s  26.2 iter/s
+  iter  50  exploit=0.061525  t=1.91s  26.2 iter/s
+
+=== Test 6: Hand evaluator performance ===
+  10M evals in 0.646s = 15490523 evals/sec (sum=2467692184)
+  PASS: Evaluator > 1M/sec
+
+=== Summary: 19 passed, 0 failed ===

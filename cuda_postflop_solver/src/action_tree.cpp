@@ -76,7 +76,7 @@ ActionTree::ActionTree(const TreeConfig& cfg,
       removed_lines_(std::move(removed_lines))
 {
     root_ = std::make_unique<ActionTreeNode>();
-    root_->player = 0; 
+    root_->player = 0;
     root_->board_state = cfg.initial_state;
     root_->amount = 0;
 
@@ -84,6 +84,18 @@ ActionTree::ActionTree(const TreeConfig& cfg,
     if (num_players < 2 || num_players > 6) {
         throw std::invalid_argument("num_players must be between 2 and 6");
     }
+
+    // ── Section 2: Two-Tier routing ──────────────────────────────────────
+    // Tier 1 (exactly 2 players): full Flop→Turn→River tree with chance
+    // expansion over unseen runout cards.
+    // Tier 2 (3-6 players): street-bounded search, max_depth = 1; street-end
+    // leaves are evaluated by (GPU) rollout showdown instead of expansion.
+    if (num_players > 2 && config_.max_depth > 1) {
+        config_.max_depth = 1;
+    }
+
+    // Defect 1.8: seed exact pot / investment bookkeeping at the root.
+    seed_root_invested();
 
     BuildInfo info;
     info.stacks.assign(num_players, cfg.effective_stack);
@@ -94,6 +106,8 @@ ActionTree::ActionTree(const TreeConfig& cfg,
     info.current_bet = 0;
     info.num_raises = 0;
     info.actions_this_street = 0;
+    info.ctx_turn = config_.board[3];
+    info.ctx_river = config_.board[4];
 
     build_recursive(*root_, cfg.initial_state, 0, info);
 
@@ -101,12 +115,70 @@ ActionTree::ActionTree(const TreeConfig& cfg,
     if (!removed_lines_.empty()) apply_removed_lines();
 }
 
+void ActionTree::seed_root_invested() {
+    root_->total_pot = config_.starting_pot;
+
+    bool explicit_split = false;
+    int64_t sum = 0;
+    for (int i = 0; i < config_.num_players; ++i) {
+        if (config_.initial_invested[i] >= 0) { explicit_split = true; }
+        sum += (config_.initial_invested[i] >= 0) ? config_.initial_invested[i] : 0;
+    }
+    if (explicit_split) {
+        if (sum != (int64_t)config_.starting_pot) {
+            throw std::invalid_argument(
+                "TreeConfig::initial_invested must sum to starting_pot exactly (zero-sum invariant)");
+        }
+        for (int i = 0; i < config_.num_players; ++i)
+            root_->invested[i] = config_.initial_invested[i];
+    } else {
+        // Default convention: equal split of the starting pot (including
+        // remainder chips handed to the earliest positions). CFR regrets are
+        // invariant to per-player constant EV offsets; the split only fixes
+        // the absolute EV reference frame. Sum == starting_pot guarantees
+        // the terminal utilities are exactly zero-sum.
+        int32_t base = config_.starting_pot / config_.num_players;
+        int32_t rem  = config_.starting_pot - base * config_.num_players;
+        for (int i = 0; i < config_.num_players; ++i)
+            root_->invested[i] = base + (i < rem ? 1 : 0);
+    }
+}
+
+std::vector<Action> ActionTree::enumerate_chance_actions(BoardState target_state, Card ctx_turn) const {
+    std::vector<Action> acts;
+    Card known = NOT_DEALT;
+    uint64_t dead = 0;
+    for (int i = 0; i < 3; ++i) dead |= card_to_bit(config_.board[i]);
+
+    if (target_state == BoardState::Turn) {
+        known = config_.board[3];
+    } else if (target_state == BoardState::River) {
+        known = config_.board[4];
+        // Exclude the path-effective turn card: either the configured board
+        // card or the card dealt by the preceding chance expansion.
+        if (ctx_turn != NOT_DEALT) dead |= card_to_bit(ctx_turn);
+    }
+
+    if (known != NOT_DEALT) {
+        acts.push_back({Action::Type::Chance, 0, known});
+        return acts;
+    }
+
+    for (Card c = 0; c < NUM_CARDS; ++c) {
+        if (dead & card_to_bit(c)) continue;
+        acts.push_back({Action::Type::Chance, 0, c});
+    }
+    return acts;
+}
+
 void ActionTree::push_actions(ActionTreeNode& node, int player, BoardState state, BuildInfo& info) {
     const auto& bet_options = (state == BoardState::Flop) ? config_.flop_bet_sizes[player]
                               : (state == BoardState::Turn) ? config_.turn_bet_sizes[player]
                               : config_.river_bet_sizes[player];
 
-    int32_t pot = config_.starting_pot + node.amount; 
+    // Defect 1.8: pot is the EXACT tracked total (starting pot + all chips
+    // from every street), no symmetric-investment assumption.
+    int32_t pot = node.total_pot;
     int32_t to_call = info.current_bet - info.invested_this_street[player];
     int32_t my_stack = info.stacks[player];
 
@@ -115,7 +187,7 @@ void ActionTree::push_actions(ActionTreeNode& node, int player, BoardState state
         int32_t actual_call = std::min(to_call, my_stack);
         node.actions.push_back({Action::Type::Call, actual_call, NOT_DEALT});
 
-        int max_raises = (config_.num_players > 2) ? 1 : 3; 
+        int max_raises = (config_.num_players > 2) ? 1 : 3;
 
         if (info.num_raises < max_raises && my_stack > actual_call) {
             for (const auto& bs : bet_options.raise) {
@@ -141,6 +213,16 @@ void ActionTree::push_actions(ActionTreeNode& node, int player, BoardState state
         }
     }
 
+    // ── Module 3.3: exact off-grid bet injection (pseudo-harmonic local
+    // expansion). The CALLER decides (via pseudo_harmonic_distance > 0.15)
+    // which observed sizes belong here; the tree injects them verbatim.
+    for (int32_t bet_amt : config_.custom_injected_bets) {
+        if (bet_amt > info.current_bet && bet_amt > 0 && bet_amt <= my_stack) {
+            Action::Type t = (to_call > 0) ? Action::Type::Raise : Action::Type::Bet;
+            node.actions.push_back({t, bet_amt, NOT_DEALT});
+        }
+    }
+
     std::sort(node.actions.begin(), node.actions.end());
     node.actions.erase(std::unique(node.actions.begin(), node.actions.end()), node.actions.end());
 
@@ -154,7 +236,7 @@ int32_t ActionTree::compute_bet_size(const BetSize& bs, int32_t pot, int32_t cur
     switch (bs.kind) {
         case BetSize::Kind::PotRelative:
             return std::max(1, std::min((int32_t)(bs.pot_rel * (pot + to_call)) + current_bet, my_stack));
-        case BetSize::Kind::PrevBetRelative: 
+        case BetSize::Kind::PrevBetRelative:
             return std::max(1, std::min((int32_t)(current_bet * bs.prev_rel), my_stack));
         case BetSize::Kind::Additive:
             return std::max(1, std::min(bs.additive_base + current_bet, my_stack));
@@ -198,8 +280,6 @@ void ActionTree::merge_bet_actions(std::vector<Action>& actions, int32_t pot,
 }
 
 void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int player, BuildInfo info) {
-    if (state > config_.initial_state && (int)state > 2) return; 
-
     uint8_t mask = 0;
     for (int i = 0; i < config_.num_players; ++i) {
         if (!info.folded[i]) mask |= (1 << i);
@@ -211,7 +291,8 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
         return;
     }
 
-    // --- ИСПРАВЛЕНИЕ: ПРОВЕРКА ЕСЛИ ВСЕ В ОЛЛ-ИНЕ (УБИВАЕМ БЕСКОНЕЧНЫЙ ЦИКЛ) ---
+    // All remaining active players are all-in: no further betting. Run out
+    // the board (chance expansion) to the showdown.
     bool all_active_allin = true;
     for (int i = 0; i < config_.num_players; ++i) {
         if (!info.folded[i] && !info.allin[i]) {
@@ -220,26 +301,59 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
         }
     }
 
-    if (all_active_allin) {
-        // Если все в олл-ине, торгов нет — переходим сразу на следующую улицу к шоудауну!
+    // Shared helper: what happens when the current street ends.
+    auto street_transition = [&](void) {
         BoardState next_state = (BoardState)((int)state + 1);
-        if ((int)next_state > 2) {
+        int next_index = (int)next_state;
+        bool beyond_board = next_index > 2;
+        // Section 2: Tier 2 depth cap — street-end leaf becomes a rollout
+        // terminal instead of expanding into the next street.
+        bool depth_capped = (next_index - (int)config_.initial_state) >= config_.max_depth;
+
+        if (beyond_board || depth_capped) {
+            // Terminal leaf: complete-board showdown (River inputs) or a
+            // rollout-showdown leaf evaluated over sampled runouts.
             node.player = player | PLAYER_TERMINAL_FLAG;
-        } else {
-            node.player = PLAYER_CHANCE | PLAYER_CHANCE_FLAG;
-            node.board_state = next_state;
-            
+            return;
+        }
+
+        node.player = PLAYER_CHANCE | PLAYER_CHANCE_FLAG;
+        node.board_state = next_state;
+
+        int next_p = 0;
+        for (int i = 0; i < config_.num_players; ++i) {
+            if (!info.folded[i] && !info.allin[i]) { next_p = i; break; }
+        }
+
+        // Defect 1.2 / Section 2: chance expansion. Unknown street cards are
+        // enumerated (49 turn / 48 river runouts); known cards yield a single
+        // deterministic child. Reach scaling is 1/num_children in both the
+        // CPU and GPU traversal code.
+        std::vector<Action> chance_acts = enumerate_chance_actions(next_state, info.ctx_turn);
+        node.actions = chance_acts;
+
+        for (const Action& cact : chance_acts) {
             auto child = std::make_unique<ActionTreeNode>();
             child->amount = node.amount;
+            child->total_pot = node.total_pot;              // chance adds no chips
+            for (int i = 0; i < 6; ++i) child->invested[i] = node.invested[i];
+            child->board_state = next_state;
+
             BuildInfo child_info = info;
             child_info.current_bet = 0;
             child_info.num_raises = 0;
             child_info.actions_this_street = 0;
             child_info.invested_this_street.assign(config_.num_players, 0);
-            
-            build_recursive(*child, next_state, 0, child_info);
+            if (next_state == BoardState::Turn)  child_info.ctx_turn  = cact.card;
+            if (next_state == BoardState::River) child_info.ctx_river = cact.card;
+
+            build_recursive(*child, next_state, next_p, child_info);
             node.children.push_back(std::move(child));
         }
+    };
+
+    if (all_active_allin) {
+        street_transition();
         return;
     }
 
@@ -255,33 +369,12 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
     }
 
     if (street_ended) {
-        BoardState next_state = (BoardState)((int)state + 1);
-        if ((int)next_state > 2) {
-            node.player = player | PLAYER_TERMINAL_FLAG;
-        } else {
-            node.player = PLAYER_CHANCE | PLAYER_CHANCE_FLAG;
-            node.board_state = next_state;
-            
-            int next_p = 0;
-            for (int i = 0; i < config_.num_players; ++i) {
-                if (!info.folded[i] && !info.allin[i]) { next_p = i; break; }
-            }
-
-            auto child = std::make_unique<ActionTreeNode>();
-            child->amount = node.amount;
-            BuildInfo child_info = info;
-            child_info.current_bet = 0;
-            child_info.num_raises = 0;
-            child_info.actions_this_street = 0;
-            child_info.invested_this_street.assign(config_.num_players, 0);
-            
-            build_recursive(*child, next_state, next_p, child_info);
-            node.children.push_back(std::move(child));
-        }
+        street_transition();
         return;
     }
 
-    // Если текущий игрок в олл-ине/фолде, увеличиваем счетчик действий и передаем ход
+    // If the current player is all-in or folded, bump the action counter and
+    // pass the turn along without generating decision actions.
     if (info.folded[player] || info.allin[player]) {
         BuildInfo skip_info = info;
         skip_info.actions_this_street++;
@@ -307,7 +400,7 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
             case Action::Type::Fold:
                 child_info.folded[player] = true;
                 child_info.active_players--;
-                child->player = (uint8_t)(player | PLAYER_FOLD_FLAG); 
+                child->player = (uint8_t)(player | PLAYER_FOLD_FLAG);
                 break;
             case Action::Type::Check:
                 child->player = (uint8_t)next_p;
@@ -330,13 +423,18 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
                 if (act.type == Action::Type::AllIn || child_info.stacks[player] == 0) {
                     child_info.allin[player] = true;
                 }
-                child_info.actions_this_street = 1; 
+                child_info.actions_this_street = 1;
                 child->player = (uint8_t)next_p;
                 break;
             default: break;
         }
 
+        // ── Defect 1.8: exact chip flow bookkeeping ──────────────────────
         child->amount = node.amount + added_to_pot;
+        child->total_pot = node.total_pot + added_to_pot;
+        for (int i = 0; i < 6; ++i) child->invested[i] = node.invested[i];
+        child->invested[player] += added_to_pot;
+
         child->board_state = state;
         build_recursive(*child, state, next_p, child_info);
         node.children.push_back(std::move(child));
@@ -353,14 +451,21 @@ void ActionTree::apply_added_lines() {
             if (!action_existed) {
                 node->actions.push_back(act);
                 auto child = std::make_unique<ActionTreeNode>();
-                
+
                 int current_player = node->player & PLAYER_MASK;
                 int next_p = (current_player + 1) % config_.num_players;
                 child->player = (uint8_t)next_p;
-                
+
                 child->board_state = node->board_state;
                 child->amount = node->amount;
-                
+                // Defect 1.8 bookkeeping for injected lines (approximation:
+                // assumes the line enters at a fresh-street bet context).
+                int32_t added = (act.type == Action::Type::Bet || act.type == Action::Type::Raise ||
+                                 act.type == Action::Type::AllIn) ? act.amount : 0;
+                child->total_pot = node->total_pot + added;
+                for (int i = 0; i < 6; ++i) child->invested[i] = node->invested[i];
+                child->invested[current_player] += added;
+
                 BuildInfo info;
                 info.stacks.assign(config_.num_players, config_.effective_stack);
                 info.invested_this_street.assign(config_.num_players, 0);
@@ -370,6 +475,8 @@ void ActionTree::apply_added_lines() {
                 info.current_bet = act.amount;
                 info.num_raises = (act.type == Action::Type::Bet || act.type == Action::Type::Raise) ? 1 : 0;
                 info.actions_this_street = 1;
+                info.ctx_turn = config_.board[3];
+                info.ctx_river = config_.board[4];
 
                 build_recursive(*child, child->board_state, child->player, info);
                 node->children.push_back(std::move(child));
@@ -403,7 +510,7 @@ void ActionTree::apply_removed_lines() {
         for (size_t i = 0; i + 1 < line.size(); ++i) {
             const Action& act = line[i];
             auto it = std::find(node->actions.begin(), node->actions.end(), act);
-            if (it == node->actions.end()) break;  
+            if (it == node->actions.end()) break;
             size_t idx = std::distance(node->actions.begin(), it);
             node = node->children[idx].get();
         }
@@ -420,26 +527,20 @@ void ActionTree::apply_removed_lines() {
 }
 
 std::array<uint64_t, 3> ActionTree::count_num_action_nodes() const {
-    // FIX (побочная находка): раньше `if (n.player >= PLAYER_CHANCE) return;`
-    // полагался на то, что PLAYER_CHANCE=254 — максимально возможное значение
-    // байта, поэтому под это условие НЕ попадали terminal-узлы (16..53), но
-    // при этом рекурсия обрывалась НАВСЕГДА на первом chance-узле, ни разу не
-    // спускаясь в поддерево turn/river (они просто не подсчитывались).
-    // Это чисто диагностическая функция (используется только в
-    // tests/test_real_poker.cpp и bench/bench_solver.cpp для печати
-    // статистики), в CFR-обучении не участвует. Переписано на явные
-    // битовые проверки, с корректным продолжением рекурсии в детей.
+    // Explicit bit-flag checks with correct recursion into chance subtrees
+    // (the legacy `n.player >= PLAYER_CHANCE` early-return never descended
+    // into turn/river subtrees, undercounting them).
     std::array<uint64_t, 3> counts = {0, 0, 0};
     std::function<void(const ActionTreeNode&, BoardState)> visit =
         [&](const ActionTreeNode& n, BoardState state) {
-        bool node_is_chance   = (n.player & PLAYER_CHANCE_FLAG) != 0;
-        bool node_is_terminal = (n.player & PLAYER_TERMINAL_FLAG) != 0;
-        if (!node_is_chance && !node_is_terminal) counts[(int)state]++;
-        for (const auto& c : n.children) {
-            BoardState cs = node_is_chance ? n.board_state : state;
-            visit(*c, cs);
-        }
-    };
+            bool node_is_chance   = (n.player & PLAYER_CHANCE_FLAG) != 0;
+            bool node_is_terminal = (n.player & PLAYER_TERMINAL_FLAG) != 0;
+            if (!node_is_chance && !node_is_terminal) counts[(int)state]++;
+            for (const auto& c : n.children) {
+                BoardState cs = node_is_chance ? n.board_state : state;
+                visit(*c, cs);
+            }
+        };
     visit(*root_, config_.initial_state);
     return counts;
 }

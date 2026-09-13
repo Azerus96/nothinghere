@@ -31,6 +31,8 @@ struct GpuMemory {
     int*          d_showdown_nodes;
     int           num_fold_nodes;
     int           num_showdown_nodes;
+    int*          d_rollout_nodes;      // Module 3.4: depth-capped multiway leaves
+    int           num_rollout_nodes;
 
     int*          d_num_hands;
     Card**        d_private_cards_ptrs;
@@ -52,11 +54,16 @@ struct GpuMemory {
     
     uint8_t locked_players_mask;
 
+    // RAII: releases all device (or compat host) buffers on destruction.
+    ~GpuMemory();
+
     GpuMemory() : d_nodes(nullptr), d_storage1(nullptr), d_storage2(nullptr),
                   d_storage_ip(nullptr), d_storage_chance(nullptr),
                   d_node_cfreach(nullptr), d_node_cfv(nullptr), d_all_reaches(nullptr),
                   d_levels(nullptr), level_sizes(nullptr),
                   d_fold_nodes(nullptr), d_showdown_nodes(nullptr),
+                  num_fold_nodes(0), num_showdown_nodes(0),
+                  d_rollout_nodes(nullptr), num_rollout_nodes(0),
                   d_num_hands(nullptr), d_private_cards_ptrs(nullptr),
                   num_nodes(0), num_storage(0), num_storage_ip(0),
                   num_storage_chance(0), starting_pot(0), rake_rate(0.0f), rake_cap(0.0f),
@@ -72,6 +79,8 @@ struct GpuMemory {
 };
 
 bool gpu_solver_init(const PostFlopGame& game, GpuMemory& gpu, int device_id = 0);
+// Frees every buffer and resets the structure to a safe empty state
+// (idempotent; called by the GpuMemory destructor).
 int gpu_solve_step(GpuMemory& gpu, uint32_t current_iter);
 int gpu_solve_step_dispatch(PostFlopGame& game, uint32_t current_iter);
 bool gpu_solver_copy_back(PostFlopGame& game, GpuMemory& gpu);

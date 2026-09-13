@@ -1,0 +1,16 @@
+=== [TEST-1] Regression: terminal net payoffs (Defect 1.1) ===
+
+  PASS: hero fold/call decision node located
+  PASS: invested[0]+invested[1] == amount (exact zero-sum bookkeeping)
+  CFV(Fold) = -50.000000 (expected -invested = -50.000000), pot=1100 inv1=50
+  PASS: CFV(Fold) == -node.invested (CPU evaluator)
+  CFV(Call) = -1050.000000 (0% equity: pot*0 - invested_total)
+  PASS: CFV(Call) < CFV(Fold)
+  PASS: CFV(Call) reflects the full 1000-chip call investment
+  PASS: compat-GPU pipeline initialized
+  PASS: Strategy(Fold) == 1.0 (CPU solve)
+  PASS: Strategy(Fold) == 1.0 (compat-GPU solve)
+  PASS: CPU and compat-GPU fold strategies agree
+  PASS: call regret strictly negative (negative retention, Defect 1.3)
+
+=== [TEST-1] Summary: 10 passed, 0 failed ===

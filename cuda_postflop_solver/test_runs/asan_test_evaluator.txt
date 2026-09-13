@@ -1,0 +1,29 @@
+=== Hand Evaluator Validation ===
+Enumerating all C(52,7) = 133,784,560 7-card hands...
+  progress: c0=0/51, total=18009460
+  progress: c0=5/51, total=80259880
+  progress: c0=10/51, total=111302620
+  progress: c0=15/51, total=125436880
+  progress: c0=20/51, total=131154985
+  progress: c0=25/51, total=133126760
+  progress: c0=30/51, total=133668280
+  progress: c0=35/51, total=133773120
+  progress: c0=40/51, total=133784230
+  progress: c0=45/51, total=133784560
+  progress: c0=50/51, total=133784560
+
+Results (11.65s, 11487785 evals/sec):
+Category                   Actual     Expected   Status
+--------                   ------     --------   ------
+High Card                23294460     23294460       OK
+One Pair                 58627800     58627800       OK
+Two Pair                 31433400     31433400       OK
+Three of Kind             6461620      6461620       OK
+Straight                  6180020      6180020       OK
+Flush                     4047644      4047644       OK
+Full House                3473184      3473184       OK
+Four of Kind               224848       224848       OK
+Straight Flush              41584        41584       OK
+TOTAL                   133784560    133784560
+
+✓ Evaluator PASSES all distribution tests.

@@ -14,7 +14,7 @@
 #endif
 
 #ifdef __CUDACC__
-// Глобальное объявление внешнего символа для всех .cu файлов
+// Global declaration of the external symbol for all .cu files
 extern __constant__ int32_t g_hand_table_device[4824];
 #endif
 
@@ -33,12 +33,12 @@ constexpr int32_t CATEGORY_STRAIGHT_FLUSH  = 8;
 constexpr int32_t CATEGORY_SHIFT = 26;
 constexpr int32_t WHEEL_BITMASK = 0b1'0000'0000'1111;  
 
-// Таблица на CPU (в RAM)
+// Table on CPU (in RAM)
 extern const int32_t HAND_TABLE[4824];
 
-#ifdef __CUDACC__
+// Copies HAND_TABLE into __constant__ device memory (no-op on the CPU
+// dual-build, where evaluate() reads the host table directly).
 int init_hand_table_on_gpu(const int32_t* host_table = nullptr);
-#endif
 
 __device__ __host__ __forceinline__
 int host_device_clz(unsigned int x) {
@@ -120,14 +120,18 @@ int32_t evaluate_internal(const Card* cards, int n) {
         straight_flush_high = find_straight(rankset_suit[flush_suit]);
     }
     if (straight_flush_high) {
-        return (CATEGORY_STRAIGHT_FLUSH << CATEGORY_SHIFT) | straight_flush_high;
+        // straight-flush high-rank bitset.
+        return (CATEGORY_STRAIGHT_FLUSH << CATEGORY_SHIFT) | (1 << straight_flush_high);
     }
 
     if (rankset_of_count[4]) {
         int32_t quad_rank = 31 - host_device_clz((unsigned int)rankset_of_count[4]);
         int32_t kicker = 31 - host_device_clz((unsigned int)(rankset & ~(1 << quad_rank)));
+        // HAND_TABLE tiebreak format: rank BITSETS, not rank numbers
+        // (quad bitset << 13 | kicker bitset). Single-shift idiom
+        // 1 << (rank + 13): rank <= 12 => shift <= 25, safe to fold.
         return (CATEGORY_FOUR_OF_KIND << CATEGORY_SHIFT)
-             | (quad_rank << 13) | kicker;
+             | (1 << (quad_rank + 13)) | (1 << kicker);
     }
 
     if (rankset_of_count[3]) {
@@ -136,8 +140,9 @@ int32_t evaluate_internal(const Card* cards, int n) {
         int32_t candidate_pairs = rankset_of_count[2] | remaining_trips;
         if (candidate_pairs) {
             int32_t pair_rank = 31 - host_device_clz((unsigned int)candidate_pairs);
+            // trips bitset << 13 | pair bitset.
             return (CATEGORY_FULL_HOUSE << CATEGORY_SHIFT)
-                 | (trips_rank << 13) | pair_rank;
+                 | (1 << (trips_rank + 13)) | (1 << pair_rank);
         }
     }
 
@@ -147,15 +152,17 @@ int32_t evaluate_internal(const Card* cards, int n) {
     }
 
     if (straight_high) {
-        return (CATEGORY_STRAIGHT << CATEGORY_SHIFT) | straight_high;
+        // straight high-rank bitset.
+        return (CATEGORY_STRAIGHT << CATEGORY_SHIFT) | (1 << straight_high);
     }
 
     if (rankset_of_count[3]) {
         int32_t trips_rank = 31 - host_device_clz((unsigned int)rankset_of_count[3]);
         int32_t rest = rankset & ~(1 << trips_rank);
         int32_t top2 = keep_n_msb(rest, 2);
+        // trips bitset << 13 | top-2 kickers bitset.
         return (CATEGORY_THREE_OF_KIND << CATEGORY_SHIFT)
-             | (trips_rank << 13) | top2;
+             | (1 << (trips_rank + 13)) | top2;
     }
 
     if (host_device_popc((unsigned int)rankset_of_count[2]) >= 2) {
@@ -163,16 +170,18 @@ int32_t evaluate_internal(const Card* cards, int n) {
         int32_t p2 = 31 - host_device_clz((unsigned int)(rankset_of_count[2] & ~(1 << p1)));
         int32_t pair_mask = (1 << p1) | (1 << p2);
         int32_t kicker = 31 - host_device_clz((unsigned int)(rankset & ~pair_mask));
+        // pair bitset << 13 | kicker bitset.
         return (CATEGORY_TWO_PAIR << CATEGORY_SHIFT)
-             | (pair_mask << 13) | kicker;
+             | (pair_mask << 13) | (1 << kicker);
     }
 
     if (host_device_popc((unsigned int)rankset_of_count[2]) == 1) {
         int32_t pair_rank = 31 - host_device_clz((unsigned int)rankset_of_count[2]);
         int32_t rest = rankset & ~(1 << pair_rank);
         int32_t top3 = keep_n_msb(rest, 3);
+        // pair bitset << 13 | top-3 kickers bitset.
         return (CATEGORY_ONE_PAIR << CATEGORY_SHIFT)
-             | (pair_rank << 13) | top3;
+             | (1 << (pair_rank + 13)) | top3;
     }
 
     int32_t top5 = keep_n_msb(rankset, 5);
