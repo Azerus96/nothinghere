@@ -201,7 +201,7 @@ javascript:(function(){
         "kirov999", "donskikh", "bumblebee", "karanebesnaya", "anacreosha",
         "saiyn_belek", "molyavka89", "blancl664", "why__not", "cashmachine", 
         "vorobyshek", "bar_suk74", "lev_altay", "kastarksn", "borsalino", "suitedjaxx69",
-        "fatpanda", "galiardi", "neochen", "fai1er", "milka8"
+        "fatpanda", "galiardi", "neochen", "fai1er", "milka8", "neverfolda7", "barabulca", "ev_lover", "strannik94", "ylitkomafia"
     ];
 
     const TARGET_WATCHLIST = new Set(TARGET_LIST.map(n => n.toLowerCase()));
@@ -1983,9 +1983,8 @@ javascript:(function(){
                 if (!isParticipant) continue;
                 
                 // ИСПРАВЛЕНИЕ: Безопасный расчет стека фолдеров без отбрасывания раздач
-                let startStack = (this.handStart[sn] !== undefined && this.handStart[sn] !== null && this.handStart[sn] > 0) 
-                    ? this.handStart[sn] 
-                    : Math.max(investedInPot, (s.stack !== null ? s.stack : 0) + investedInPot);
+                let recordedStart = (this.handStart[sn] !== undefined && this.handStart[sn] !== null && this.handStart[sn] > 0) ? this.handStart[sn] : 0;
+                let startStack = Math.max(recordedStart, investedInPot);
 
                 if (!startStack || startStack <= 0) {
                     startStack = Math.max(investedInPot, handBB);
