@@ -1,6 +1,41 @@
 javascript:(function(){
     /* ══════════════════════════════════════════════════════════════════
-       ULTIMATE SCALPEL v64.3 — APEX-IMPERIOR (TACTICAL FORENSICS MONOLITH)
+       ULTIMATE SCALPEL v65.1 — REALTIME NUTS + RTA/ICM/EXPLOIT (AUDIT-FIX)
+       • v65.1 F1 (MODULE-4-LIVE, аудит #1): computeBoardNuts / hs_percen-
+         tile / flop_outs больше НЕ только пост-мортем в finalizeHand —
+         оценка зацеплена в updateBoardFromXml и рендерится В РУКЕ на
+         активных столах игрока (state.sockets.userTables): натс борда,
+         перцентиль HS героя, терн-ауты (панель «🃏 LIVE»); приватные карты
+         пользователя парсятся из PrivateCards/PocketCards/YourCards/HoleCards
+       • v65.1 F2 (FREEZE-HAZARD, аудит #2): computeBoardNutsFast — натс
+         определяется РАНГОВЫМИ/МАСТЕВЫМИ БИТОВЫМИ МАСКАМИ (прямой разбор
+         категорий SF→каре→фулл→флеш→стрит→сет), НОЛЬ переборов C(47,2)×
+         C(7,5) и НОЛЬ вызовов eval5CardSet в горячем пути ривера
+         (20 790 → 0); evalCardsFast — 7-карточный оценщик на масках с
+         точной семантикой eval5CardSet (эквивалентность доказана бенчем);
+         всё тяжёлое — через чанк-шедулер ≤6мс/слот (createChunkQueue),
+         hs_percentile архива считается лениво в чанках (queueLazyHandMath)
+       • v65.1 F3 (MODULE-2-RESTORED, аудит #3): evaluateRTAConfidence — В
+         ПАМЯТИ, по ≥8 РАЗНЫМ ключам узлов (32+ решений, разные текстуры):
+         pure-rate / σ-сайзинг / σ-тайминг → z-логист → бейдж «⚠️ [RTA
+         PROB: XX%]» прямо в карточке цели; TSV остаётся бонусом, не заменой
+       • v65.1 F4 (MODULE-3-RESTORED, аудит #4): N_alive из <GetPlayers
+         total="X"> (парсился и выбрасывался) + N_ITM из <Prizes>/<Prize>
+         (+ <GetPrizes/> в сканере, средний стек поля из всех строк);
+         P(ITM|SitOut) — double-up-aware монте-карло (принудительный олл-ин
+         на блайндах 44% удвоение); ICM FREEZE — бабл-фактор (p/2 vs p×2)
+       • v65.1 F5 (MODULE-5-RESTORED, аудит #5): π-KL ограниченный эксплойт-
+         движок: утечки fold-to-cbet / fold-to-steal-BB / postflop-fold
+         против GTO-базовых, значимость по Кульбаку-Лейблеру (D>0.08),
+         odds-clamp [0.25, 4.0], вес w=1−e^(−(n−8)/12); строка «⚔️ ЭКСПЛОЙТ»
+       • v65.1 F6 (CBET-FIX, аудит #6): префлоп-олл-ин-пуш = РЕЙЗ (агрессия
+         ALLIN по street_bet_after vs максимум улицы ДО действия); контбет =
+         ПЕРВАЯ агрессия флопа от префлоп-агрессора в НЕРАСКРЫТОМ раунде;
+         донк = первая агрессия от не-рейзера ДО его действия на флопе
+         (classifyFlopAggression — единый стейт-машина прохода таймлайна)
+       • v65.1 BENCH: runBenchCore — эквивалентность быстрый-vs-перебор,
+         скорость (µs), стресс «120 одновременных риверов» через чанки +
+         longtask-обсервер; вызов: window.__stalkerBench()
        • v64 F1 (BUG-BUYIN-DISTORTION): номинальный бай-ин = buyIn + bounty
          БЕЗ рейка (fee) — эвристика «buyIn уже включает всё» раздувала номинал
          2500+2500+400 → 5400₽; полный вход хранится отдельно (entryCost)
@@ -64,6 +99,23 @@ javascript:(function(){
        • v64.3 P6 (REBUY-x2 + GTO-KEY): двойные ребаи «+N x2 реб.»; канонические
          O(1) GTO-ключи узлов решений каждой улицы (gto_node_keys в JSON-руке)
        • v64.3 P7: потолок фоновых спектаторов 80 → 120 столов
+       • v65.0 M0 (GTO-KEYS-EXPORT): гистограмма решений по GTO-узлам для
+         каждой цели (ключ узла → n/agg/pas/fld, первое действие на улице)
+         + компактный TSV-экспорт «🧠 GTO Keys (.txt)» (4-я кнопка) + gtoNodes
+         в JSON; сырые ключи — по-прежнему в gto_node_keys каждой JSON-руки
+       • v65.0 M1 (2D-PROFILER): развязанные измерения — 7 префлоп-архетипов
+         (Нит/Тайт-Пассив/ТАГ-Рег/ЛАГ/Пассив-Фиш/Кит/Маньяк) × 4 постфлоп-
+         модификатора (Телефон/Агро-Баррелер/Оверфолдер/—) с эмпирическим
+         байесом M=25 к пулу (VPIP 26 / PFR 18 / AFq 38) — ярлыки стабильны
+         с 10+ рук; fold-to-cbet считается из таймлайна (SRP-контбет, opp≥3)
+       • v65.0 M3 (SURVIVAL): орбиты/минуты жизни стека при чистом фолде —
+         кривая блайндов из GetSchedule (levelCurve/levelDetails), walk 0.30,
+         70 рук/час, AA/премиум (TT+AK+AQs) за жизнь стека; строка «⏳ N орб»
+         в живой карточке. ITM%/ICM-фриз ОТКЛОНЕНЫ: nAlive/nITM не наблюдаемы
+       • v65.0 M4 (NUT-LADDER): board_nuts по улицам (перебор C(живых,2)),
+         hs_percentile и flop_outs (категорийные ауты) для показанных карт —
+         в JSON-руке. RTA-«вероятность» в HUD ОТКЛОНЕНА — описательная
+         mix-статистика живёт в TSV-заголовке игрока (НЕ вердикт)
        • v62 B1 (BUG-ZOMBIE-TABLE): bust rows без tableId теперь чистят устаревшую
          запись discoveredTargetTables («зомби»-спектаторы больше не держат слот
          80-столового пула весь турнир); записи профиля переключены на ключ cleanNick
@@ -141,7 +193,15 @@ javascript:(function(){
     const STALE_TOURNAMENT_MS = 15 * 60 * 1000;
 
     const TARGET_LIST = [
-        "legilemens", "saiyn_belek", "avdojkee", "surgut030", "rifat22", "3akonnuk"
+        "vesnushka", "bagzik", "nogano777", "dostigatel", "bankiir", 
+        "mushroomless", "xasiknolook", "riverpomojet", "donkmaster", "kavsan", 
+        "deepmind", "biglebowski77", "imbonoob", "badbeat71", "mike_scott", 
+        "foldmi", "fedorav", "grenadinec", "nedenegradi", "legilemens", 
+        "thestudent", "anarhisttt", "belarusftw", "sgeeeee", "master3anosov", 
+        "kirov999", "donskikh", "bumblebee", "karanebesnaya", "anacreosha",
+        "saiyn_belek", "molyavka89", "blancl664", "why__not", "cashmachine", 
+        "vorobyshek", "bar_suk74", "lev_altay", "kastarksn", "borsalino", "suitedjaxx69",
+        "fatpanda", "galiardi", "neochen", "fai1er", "milka8"
     ];
 
     const TARGET_WATCHLIST = new Set(TARGET_LIST.map(n => n.toLowerCase()));
@@ -181,6 +241,8 @@ javascript:(function(){
     };
 
     let state = window.__SCALPEL.state;
+    /* ==== ENGINE-CORE-START (v65.1): чистое ядро без DOM/state — весь кусок
+       до маркера PURE-CORE-END извлекается в Node-тесты (scripts/test_v651.js) ==== */
     const CARD_RANKS = "23456789TJQKA";
 
     // ── БАЗОВЫЙ 13-ПОЛИНОМИАЛЬНЫЙ 7-КАРТОЧНЫЙ ОЦЕНЩИК (BASE-13) ────────
@@ -237,24 +299,879 @@ javascript:(function(){
         });
         let n = cards.length;
         if (n < 5) return "";
+        // v65.1 F2: битовый оценщик — 1 проход по картам вместо 21 подмножества
+        return evalCardsFast(cards).tag;
+    }
 
-        let bestResult = { score: -1, tag: "" };
-        if (n === 5) return eval5CardSet(cards).tag;
-
-        for (let i = 0; i < n - 4; i++) {
-            for (let j = i + 1; j < n - 3; j++) {
-                for (let k = j + 1; k < n - 2; k++) {
-                    for (let l = k + 1; l < n - 1; l++) {
-                        for (let m = l + 1; m < n; m++) {
+    // ── v65 M4 (NUT-LADDER): комбинаторика борда для JSON-руки ─────────
+    // v65.1 F2: рабочий путь — computeBoardNuts (маски, ниже в PURE-CORE);
+    // переборный вариант v65.0 сохранён как ЭТАЛОН для бенчмарка
+    // эквивалентности (bruteNutsStreet/computeBoardNutsBrute).
+    const ALL_CARDS = (() => { let out = []; for (let r of "23456789TJQKA") for (let s of "shdc") out.push(r + s); return out; })();
+    const CATEGORY_RANKS = { HC: 0, '1P': 1, '2P': 2, '3K': 3, ST: 4, FL: 5, FH: 6, '4K': 7, SF: 8 };
+    function categoryRankOfTag(tag) {
+        return CATEGORY_RANKS[String(tag || '').split('_')[0]] || 0;
+    }
+    // лучший расклад из 5–7 карт (полный перебор 5-подмножеств — та же
+    // семантика, что у evaluate7Cards, но возвращает {score, tag})
+    function evalBestCards(cards) {
+        if (cards.length === 5) return eval5CardSet(cards);
+        let best = { score: -1, tag: '' };
+        for (let i = 0; i < cards.length - 4; i++)
+            for (let j = i + 1; j < cards.length - 3; j++)
+                for (let k = j + 1; k < cards.length - 2; k++)
+                    for (let l = k + 1; l < cards.length - 1; l++)
+                        for (let m = l + 1; m < cards.length; m++) {
                             let res = eval5CardSet([cards[i], cards[j], cards[k], cards[l], cards[m]]);
-                            if (res.score > bestResult.score) bestResult = res;
+                            if (res.score > best.score) best = res;
                         }
+        return best;
+    }
+    function liveCardsFor(dead) {
+        let deadSet = new Set(dead);
+        return ALL_CARDS.filter(c => !deadSet.has(c));
+    }
+    // ЭТАЛОН v65.0 (только для бенча): полный перебор C(живых,2) рук
+    // оппонента — ривер = 990 пар × 21 подмножество = 20 790 вызовов
+    // eval5CardSet. В рабочем пути НЕ вызывается (см. computeBoardNutsFast).
+    function computeBoardNutsBrute(board, dead) {
+        if (!board || board.length < 3) return null;
+        let names = { 3: 'flop', 4: 'turn', 5: 'river' };
+        let out = null;
+        for (let end = 3; end <= Math.min(5, board.length); end++) {
+            let b = board.slice(0, end);
+            let live = liveCardsFor(b.concat(dead || []));
+            let best = { score: -1, tag: '' };
+            for (let i = 0; i < live.length; i++) {
+                for (let j = i + 1; j < live.length; j++) {
+                    let res = (end === 3) ? eval5CardSet([b[0], b[1], b[2], live[i], live[j]])
+                                          : evalBestCards(b.concat([live[i], live[j]]));
+                    if (res.score > best.score) best = res;
+                }
+            }
+            if (out === null) out = {};
+            out[names[end]] = best.tag;
+        }
+        return out;
+    }
+    // v65.1 F2: рабочий натс-лестница JSON-руки — O(1) масок на улицу,
+    // НОЛЬ eval5-вызовов. Формат выхода идентичен v65.0 ({flop,turn,river: tag}).
+    function computeBoardNuts(board) {
+        if (!board || board.length < 3) return null;
+        let names = { 3: 'flop', 4: 'turn', 5: 'river' };
+        let out = null;
+        for (let end = 3; end <= Math.min(5, board.length); end++) {
+            let r = computeBoardNutsFast(board.slice(0, end), null);
+            if (out === null) out = {};
+            out[names[end]] = r ? r.tag : null;
+        }
+        return out;
+    }
+    function computeHsPercentile(holeCardsStr, board) {
+        try {
+            let hole = String(holeCardsStr).split(/\s+/).filter(c => c && c.length >= 2);
+            if (hole.length !== 2 || !board || board.length < 3) return null;
+            let b = board.slice(0, 5);
+            let live = liveCardsFor(b.concat(hole));
+            // v65.1 F2: битовый оценщик score-only (без аллокаций на комбинацию);
+            // вызывается лениво в чанках (queueLazyHandMath)
+            let heroScore = evalScorePair(hole[0], hole[1], b);
+            let worse = 0, tie = 0, total = 0;
+            for (let i = 0; i < live.length; i++) {
+                for (let j = i + 1; j < live.length; j++) {
+                    let sc = evalScorePair(live[i], live[j], b);
+                    total++;
+                    if (sc < heroScore) worse++;
+                    else if (sc === heroScore) tie++;
+                }
+            }
+            return total > 0 ? ((worse + 0.5 * tie) / total * 100).toFixed(1) : null;
+        } catch (e) { return null; }
+    }
+    function computeFlopOuts(holeCardsStr, board) {
+        try {
+            let hole = String(holeCardsStr).split(/\s+/).filter(c => c && c.length >= 2);
+            if (hole.length !== 2 || !board || board.length < 3) return null;
+            let flop = board.slice(0, 3);
+            // v65.1 F2: score-only оценка + категория из score (без аллокаций)
+            let baseCat = categoryFromScore(evalScorePair(hole[0], hole[1], flop));
+            let live = liveCardsFor(flop.concat(hole));
+            let outs = 0;
+            for (let c of live) {
+                let sc = evalScorePair(hole[0], hole[1], [flop[0], flop[1], flop[2], c]);
+                if (categoryFromScore(sc) > baseCat) outs++;
+            }
+            return outs;
+        } catch (e) { return null; }
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+       v65.1 PURE CORE (F2/F3/F4/F5/F6 + BENCH) — без DOM и state.
+       Весь блок до маркера PURE-CORE-END извлекается целиком в Node-тесты.
+       Соглашения: ранг r = индекс 0..12 ('2'..'A'), бит 1<<r; масть s = 0..3.
+       ══════════════════════════════════════════════════════════════════ */
+    const SUIT_CHARS = 'shdc';
+    function cardIdx(c) {
+        let r = (c[0] === '1' && c[1] === '0') ? 'T' : c[0].toUpperCase();
+        let s = c[c.length - 1].toLowerCase();
+        return [CARD_RANKS.indexOf(r), SUIT_CHARS.indexOf(s)];
+    }
+    // Окна стритов от старшего к младшему + колесо A2345 (старшая = '5')
+    const STRAIGHT_WINDOWS = (() => {
+        let out = [];
+        for (let top = 12; top >= 4; top--) {
+            let m = 0;
+            for (let i = top; i >= top - 4; i--) m |= (1 << i);
+            out.push({ top: top, m: m });
+        }
+        out.push({ top: 3, m: (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 12) });
+        return out;
+    })();
+    function straightTopFromMask(mask) {
+        for (let i = 0; i < STRAIGHT_WINDOWS.length; i++) {
+            let w = STRAIGHT_WINDOWS[i];
+            if ((mask & w.m) === w.m) return w.top;
+        }
+        return -1;
+    }
+    function topBitsOf(mask, n) {
+        let out = [];
+        for (let r = 12; r >= 0 && out.length < n; r--) if (mask & (1 << r)) out.push(r);
+        while (out.length < n) out.push(-1);
+        return out;
+    }
+    function popcount16(m) { let c = 0; while (m) { m &= (m - 1); c++; } return c; }
+
+    // ── F2: 7-карточный оценщик на масках — семантика eval5CardSet ──
+    // (score/tag побитово-точно совпадают с перебором 5-подмножеств; это
+    // доказывается эквивалентным тестом бенчмарка на сотнях случайных бордов)
+    // Горячий путь БЕЗ АЛЛОКАЦИЙ: скретч-буферы уровня модуля — однопоточный
+    // синхронный JS не реентерабелен, общие буферы безопасны. МК-перцентиль
+    // и точные перечисления не плодят мусор → нет GC-пауз в слотах шедулера.
+    const _EVAL_RC = new Int8Array(13);
+    const _EVAL_SM = [0, 0, 0, 0], _EVAL_SC = [0, 0, 0, 0];
+    const _EVAL_TRIPS = [], _EVAL_PAIRS = [], _EVAL_SINGLES = [];
+    const _EVAL_D = { cat: 0, a: -1, b: -1, c: -1, d: -1, t5: [-1, -1, -1, -1, -1] };
+    function _evalReset() {
+        for (let i = 0; i < 13; i++) _EVAL_RC[i] = 0;
+        _EVAL_SM[0] = 0; _EVAL_SM[1] = 0; _EVAL_SM[2] = 0; _EVAL_SM[3] = 0;
+        _EVAL_SC[0] = 0; _EVAL_SC[1] = 0; _EVAL_SC[2] = 0; _EVAL_SC[3] = 0;
+        _EVAL_TRIPS.length = 0; _EVAL_PAIRS.length = 0; _EVAL_SINGLES.length = 0;
+    }
+    function _evalAcc(c) {
+        let r = (c.length > 2 && c[0] === '1' && c[1] === '0') ? 8 : CARD_RANKS.indexOf(c[0].toUpperCase());
+        let s = SUIT_CHARS.indexOf(c[c.length - 1].toLowerCase());
+        if (r < 0 || s < 0) return 0;
+        _EVAL_RC[r]++;
+        _EVAL_SM[s] |= (1 << r);
+        _EVAL_SC[s]++;
+        return (1 << r);
+    }
+    // ядро: score по накопленным скретч-буферам; детали категории — в _EVAL_D
+    function _evalCore() {
+        let fs = -1;
+        for (let s = 0; s < 4; s++) if (_EVAL_SC[s] >= 5) { fs = s; break; }
+        if (fs >= 0) {
+            let st = straightTopFromMask(_EVAL_SM[fs]);
+            if (st >= 0) { _EVAL_D.cat = 8; _EVAL_D.a = st; return 8000000 + st; }
+            let t5 = topBitsOf(_EVAL_SM[fs], 5);
+            _EVAL_D.cat = 5;
+            _EVAL_D.t5[0] = t5[0]; _EVAL_D.t5[1] = t5[1]; _EVAL_D.t5[2] = t5[2]; _EVAL_D.t5[3] = t5[3]; _EVAL_D.t5[4] = t5[4];
+            return 5000000 + t5[0] * 28561 + t5[1] * 2197 + t5[2] * 169 + t5[3] * 13 + t5[4];
+        }
+        let quads = -1;
+        for (let r = 12; r >= 0; r--) {
+            let c = _EVAL_RC[r];
+            if (c === 4) quads = r;
+            else if (c === 3) _EVAL_TRIPS.push(r);
+            else if (c === 2) _EVAL_PAIRS.push(r);
+            else if (c === 1) _EVAL_SINGLES.push(r);
+        }
+        if (quads >= 0) {
+            let k = Math.max(_EVAL_TRIPS.length ? _EVAL_TRIPS[0] : -1, _EVAL_PAIRS.length ? _EVAL_PAIRS[0] : -1, _EVAL_SINGLES.length ? _EVAL_SINGLES[0] : -1);
+            _EVAL_D.cat = 7; _EVAL_D.a = quads; _EVAL_D.b = k;
+            return 7000000 + quads * 13 + k;
+        }
+        if (_EVAL_TRIPS.length && (_EVAL_PAIRS.length || _EVAL_TRIPS.length >= 2)) {
+            let t = _EVAL_TRIPS[0];
+            let p = Math.max(_EVAL_PAIRS.length ? _EVAL_PAIRS[0] : -1, _EVAL_TRIPS.length >= 2 ? _EVAL_TRIPS[1] : -1);
+            _EVAL_D.cat = 6; _EVAL_D.a = t; _EVAL_D.b = p;
+            return 6000000 + t * 13 + p;
+        }
+        let rankMask = 0;
+        for (let r = 12; r >= 0; r--) if (_EVAL_RC[r] > 0) rankMask |= (1 << r);
+        let st = straightTopFromMask(rankMask);
+        if (st >= 0) { _EVAL_D.cat = 4; _EVAL_D.a = st; return 4000000 + st; }
+        if (_EVAL_TRIPS.length) {
+            let t = _EVAL_TRIPS[0];
+            _EVAL_D.cat = 3; _EVAL_D.a = t; _EVAL_D.b = _EVAL_SINGLES[0]; _EVAL_D.c = _EVAL_SINGLES[1];
+            return 3000000 + t * 169 + _EVAL_SINGLES[0] * 13 + _EVAL_SINGLES[1];
+        }
+        if (_EVAL_PAIRS.length >= 2) {
+            let a = _EVAL_PAIRS[0], b = _EVAL_PAIRS[1];
+            let k = _EVAL_SINGLES.length ? _EVAL_SINGLES[0] : -1;
+            if (_EVAL_PAIRS.length >= 3 && _EVAL_PAIRS[2] > k) k = _EVAL_PAIRS[2];
+            _EVAL_D.cat = 2; _EVAL_D.a = a; _EVAL_D.b = b; _EVAL_D.c = k;
+            return 2000000 + a * 169 + b * 13 + k;
+        }
+        if (_EVAL_PAIRS.length === 1) {
+            let a = _EVAL_PAIRS[0];
+            _EVAL_D.cat = 1; _EVAL_D.a = a; _EVAL_D.b = _EVAL_SINGLES[0]; _EVAL_D.c = _EVAL_SINGLES[1]; _EVAL_D.d = _EVAL_SINGLES[2];
+            return 1000000 + a * 2197 + _EVAL_SINGLES[0] * 169 + _EVAL_SINGLES[1] * 13 + _EVAL_SINGLES[2];
+        }
+        let t5 = topBitsOf(rankMask, 5);
+        _EVAL_D.cat = 0;
+        _EVAL_D.t5[0] = t5[0]; _EVAL_D.t5[1] = t5[1]; _EVAL_D.t5[2] = t5[2]; _EVAL_D.t5[3] = t5[3]; _EVAL_D.t5[4] = t5[4];
+        return t5[0] * 28561 + t5[1] * 2197 + t5[2] * 169 + t5[3] * 13 + t5[4];
+    }
+    function _evalTag() {
+        let R = CARD_RANKS;
+        switch (_EVAL_D.cat) {
+            case 8: return 'SF_' + R[_EVAL_D.a];
+            case 7: return '4K_' + R[_EVAL_D.a] + '_' + (_EVAL_D.b >= 0 ? R[_EVAL_D.b] : R[0]);
+            case 6: return 'FH_' + R[_EVAL_D.a] + '_' + (_EVAL_D.b >= 0 ? R[_EVAL_D.b] : R[0]);
+            case 5: return 'FL_' + R[_EVAL_D.t5[0]] + R[_EVAL_D.t5[1]] + R[_EVAL_D.t5[2]] + R[_EVAL_D.t5[3]] + R[_EVAL_D.t5[4]];
+            case 4: return 'ST_' + R[_EVAL_D.a];
+            case 3: return '3K_' + R[_EVAL_D.a] + '_' + R[_EVAL_D.b] + R[_EVAL_D.c];
+            case 2: return '2P_' + R[_EVAL_D.a] + '_' + R[_EVAL_D.b] + '_' + (_EVAL_D.c >= 0 ? R[_EVAL_D.c] : R[0]);
+            case 1: return '1P_' + R[_EVAL_D.a] + '_' + R[_EVAL_D.b] + R[_EVAL_D.c] + R[_EVAL_D.d];
+            default: return 'HC_' + R[_EVAL_D.t5[0]] + R[_EVAL_D.t5[1]] + R[_EVAL_D.t5[2]] + R[_EVAL_D.t5[3]] + R[_EVAL_D.t5[4]];
+        }
+    }
+    function evalCardsFast(cards) {
+        _evalReset();
+        for (let i = 0; i < cards.length; i++) _evalAcc(cards[i]);
+        let score = _evalCore();
+        return { score: score, tag: _evalTag() };
+    }
+    // score-only оценка «2 карты + борд» — для МК и точных перечислений:
+    // ноль аллокаций на вызов (категорию даёт categoryFromScore)
+    function evalScorePair(c1, c2, boardArr) {
+        _evalReset();
+        _evalAcc(c1);
+        _evalAcc(c2);
+        for (let i = 0; i < boardArr.length; i++) _evalAcc(boardArr[i]);
+        return _evalCore();
+    }
+    // категории упакованы в млн-разряды score (семантика CATEGORY_RANKS)
+    function categoryFromScore(score) {
+        return score >= 8000000 ? 8 : Math.floor(score / 1000000);
+    }
+
+    // ── F2 (аудит #2): НАТС БОРДА НА БИТОВЫХ МАСКАХ — НОЛЬ eval5-вызовов ──
+    // Прямой разбор категорий: SF → каре → фулл → флеш → стрит → сет.
+    // dead — карты, недоступные оппонентам (рука героя в LIVE-режиме).
+    // Возвращает {tag, score, cat, holes, label} одной улицы.
+    function computeBoardNutsFast(board, dead) {
+        if (!board || board.length < 3) return null;
+        dead = dead || [];
+        let rankCount = new Int8Array(13), deadRank = new Int8Array(13);
+        let suitMask = [0, 0, 0, 0], deadSuitMask = [0, 0, 0, 0], suitCount = [0, 0, 0, 0];
+        let rankMask = 0;
+        for (let i = 0; i < board.length; i++) {
+            let ci = cardIdx(board[i]);
+            if (ci[0] < 0 || ci[1] < 0) continue;
+            rankCount[ci[0]]++;
+            suitMask[ci[1]] |= (1 << ci[0]);
+            rankMask |= (1 << ci[0]);
+            suitCount[ci[1]]++;
+        }
+        for (let i = 0; i < dead.length; i++) {
+            let ci = cardIdx(dead[i]);
+            if (ci[0] < 0 || ci[1] < 0) continue;
+            deadRank[ci[0]]++;
+            deadSuitMask[ci[1]] |= (1 << ci[0]);
+        }
+        function availRank(r) { return 4 - rankCount[r] - deadRank[r]; }
+        function availRS(r, s) { return ((suitMask[s] | deadSuitMask[s]) & (1 << r)) ? 0 : 1; }
+        function bestBoardSide(x) { for (let r = 12; r >= 0; r--) if (r !== x && rankCount[r] >= 1) return r; return -1; }
+        function bestAvailSide(x) { for (let r = 12; r >= 0; r--) if (r !== x && availRank(r) >= 1) return r; return -1; }
+        let mk = function (tag, score, cat, holes, label) {
+            return { tag: tag, score: score, cat: cat, holes: holes || [], label: label || tag };
+        };
+
+        // (1) STRAIGHT FLUSH / ROYAL: окно из 5 рангов ОДНОЙ масти, дырок ≤2
+        let sfTop = -1, sfSuit = -1, sfHoleRanks = [];
+        for (let s = 0; s < 4; s++) {
+            if (suitCount[s] < 3) continue;
+            for (let wi = 0; wi < STRAIGHT_WINDOWS.length; wi++) {
+                let w = STRAIGHT_WINDOWS[wi];
+                let missing = w.m & ~suitMask[s];
+                let mc = popcount16(missing);
+                if (mc > 2) continue;
+                let ok = true, hRanks = [];
+                for (let r = 12; r >= 0; r--) {
+                    if (missing & (1 << r)) { hRanks.push(r); if (!availRS(r, s)) { ok = false; break; } }
+                }
+                if (!ok) continue;
+                if (w.top > sfTop) { sfTop = w.top; sfSuit = s; sfHoleRanks = hRanks; }
+                break;
+            }
+        }
+        if (sfTop >= 0) return mk('SF_' + CARD_RANKS[sfTop], 8000000 + sfTop, 'SF',
+            sfHoleRanks.map(r => CARD_RANKS[r] + SUIT_CHARS[sfSuit]),
+            (sfTop === 12 ? 'royal flush' : 'straight flush, старшая ' + CARD_RANKS[sfTop]));
+
+        // (2) QUADS: борд-пара/борд-трипс + дырки ранга
+        for (let r = 12; r >= 0; r--) {
+            let c = rankCount[r];
+            if (c === 4) {
+                let k = Math.max(bestBoardSide(r), bestAvailSide(r));
+                if (k >= 0) return mk('4K_' + CARD_RANKS[r] + '_' + CARD_RANKS[k], 7000000 + r * 13 + k, '4K', [], 'каре ' + CARD_RANKS[r] + ' на борде');
+            }
+            if (c === 3 && availRank(r) >= 1) {
+                let k = Math.max(bestBoardSide(r), bestAvailSide(r));
+                if (k >= 0) return mk('4K_' + CARD_RANKS[r] + '_' + CARD_RANKS[k], 7000000 + r * 13 + k, '4K', [CARD_RANKS[r] + '*'], 'каре ' + CARD_RANKS[r] + ' (дырка ' + CARD_RANKS[r] + ')');
+            }
+            if (c === 2 && availRank(r) >= 2) {
+                let k = bestBoardSide(r);
+                if (k >= 0) return mk('4K_' + CARD_RANKS[r] + '_' + CARD_RANKS[k], 7000000 + r * 13 + k, '4K', [CARD_RANKS[r] + '*', CARD_RANKS[r] + '*'], 'каре ' + CARD_RANKS[r] + ' (покет-пара)');
+            }
+        }
+
+        // (3) FULL HOUSE: трипс-кандидат X↓ (борд-трипс / пара+дырка / сингл+
+        // покет-пара) + лучшая пара Y из (борд-пара / второй борд-трипс /
+        // сингл+дырка / покет-пара). Первый найденный X — максимальный.
+        for (let X = 12; X >= 0; X--) {
+            let cx = rankCount[X];
+            if (cx === 4) continue;
+            let holesForX = (cx === 3) ? 0 : ((cx === 2 && availRank(X) >= 1) ? 1 : ((cx === 1 && availRank(X) >= 2) ? 2 : -1));
+            if (holesForX < 0) continue;
+            let holesLeft = 2 - holesForX;
+            for (let Y = 12; Y >= 0; Y--) {
+                if (Y === X) continue;
+                let cy = rankCount[Y];
+                if (cy === 4) continue;
+                let holesForY = (cy === 2 || cy === 3) ? 0 : ((cy === 1 && holesLeft >= 1 && availRank(Y) >= 1) ? 1 : ((cy === 0 && holesLeft >= 2 && availRank(Y) >= 2) ? 2 : -1));
+                if (holesForY < 0) continue;
+                let holes = [];
+                if (holesForX === 1) holes.push(CARD_RANKS[X] + '*');
+                if (holesForX === 2) { holes.push(CARD_RANKS[X] + '*'); holes.push(CARD_RANKS[X] + '*'); }
+                if (holesForY === 1) holes.push(CARD_RANKS[Y] + '*');
+                if (holesForY === 2) { holes.push(CARD_RANKS[Y] + '*'); holes.push(CARD_RANKS[Y] + '*'); }
+                return mk('FH_' + CARD_RANKS[X] + '_' + CARD_RANKS[Y], 6000000 + X * 13 + Y, 'FH', holes, 'фулл-хаус ' + CARD_RANKS[X] + '/' + CARD_RANKS[Y]);
+            }
+        }
+
+        // (4) FLUSH: масть с ≥3 картами борда; ОБЕ дырки могут быть той же
+        // масти — добираем топ-2 доступные (вторая дырка поднимает 5-ю карту
+        // флеша: борд AKT73s + QsJs в дырках → натс AKQJT). SF веткой 1 уже
+        // отвергнут: окно из топ-2 доступных не могло бы собрать стрит-флеш.
+        for (let s = 0; s < 4; s++) {
+            if (suitCount[s] < 3) continue;
+            let need = 5 - suitCount[s];
+            let availSuit = (~(suitMask[s] | deadSuitMask[s])) & 0x1FFF;
+            if (popcount16(availSuit) < need) continue;
+            let fill = topBitsOf(availSuit, 2);
+            let union = suitMask[s];
+            for (let fi = 0; fi < fill.length; fi++) union |= (1 << fill[fi]);
+            let t5 = topBitsOf(union, 5);
+            let score = 5000000 + t5[0] * 28561 + t5[1] * 2197 + t5[2] * 169 + t5[3] * 13 + t5[4];
+            return mk('FL_' + t5.map(i => CARD_RANKS[i]).join(''), score, 'FL',
+                fill.map(r => CARD_RANKS[r] + SUIT_CHARS[s]),
+                'флеш ' + SUIT_CHARS[s].toUpperCase() + ', старшая ' + CARD_RANKS[t5[0]]);
+        }
+
+        // (5) STRAIGHT: окно на общей маске рангов, дырок ≤2, ранги доступны
+        for (let wi = 0; wi < STRAIGHT_WINDOWS.length; wi++) {
+            let w = STRAIGHT_WINDOWS[wi];
+            let missing = w.m & ~rankMask;
+            let mc = popcount16(missing);
+            if (mc === 0) return mk('ST_' + CARD_RANKS[w.top], 4000000 + w.top, 'ST', [], 'стрит до ' + CARD_RANKS[w.top] + ' на борде');
+            if (mc <= 2) {
+                let ok = true, hRanks = [];
+                for (let r = 12; r >= 0; r--) {
+                    if (missing & (1 << r)) { hRanks.push(r); if (availRank(r) < 1) { ok = false; break; } }
+                }
+                if (ok) return mk('ST_' + CARD_RANKS[w.top], 4000000 + w.top, 'ST',
+                    hRanks.map(r => CARD_RANKS[r] + '*'),
+                    'стрит до ' + CARD_RANKS[w.top] + ' (дырки ' + hRanks.map(r => CARD_RANKS[r]).join(',') + ')');
+            }
+        }
+
+        // (6) TRIPS: лучший достижимый трипс (борд-сингл + покет-пара и т.д.)
+        for (let X = 12; X >= 0; X--) {
+            let cx = rankCount[X];
+            if (cx === 4) continue;
+            let holesForX = (cx === 3) ? 0 : ((cx === 2 && availRank(X) >= 1) ? 1 : ((cx === 1 && availRank(X) >= 2) ? 2 : -1));
+            if (holesForX < 0) continue;
+            let holesLeft = 2 - holesForX;
+            let holes = [];
+            if (holesForX === 1) holes.push(CARD_RANKS[X] + '*');
+            if (holesForX === 2) { holes.push(CARD_RANKS[X] + '*'); holes.push(CARD_RANKS[X] + '*'); }
+            let bsAll = [];
+            for (let r = 12; r >= 0; r--) if (r !== X && rankCount[r] >= 1) bsAll.push(r);
+            let asAll = [];
+            for (let r = 12; r >= 0 && asAll.length < 3; r--) if (r !== X && availRank(r) >= 1) asAll.push(r);
+            let k1 = -1, k2 = -1;
+            if (holesLeft === 0) {
+                k1 = bsAll.length > 0 ? bsAll[0] : -1;
+                k2 = bsAll.length > 1 ? bsAll[1] : -1;
+            } else if (holesLeft === 1) {
+                let b0 = bsAll.length > 0 ? bsAll[0] : -1;
+                let b1 = bsAll.length > 1 ? bsAll[1] : -1;
+                let a0 = asAll.length > 0 ? asAll[0] : -1;
+                if (a0 > b0) { k1 = a0; k2 = b0; }
+                else { k1 = b0; k2 = Math.max(b1, a0); }
+            } else {
+                let u = [];
+                let seen = {};
+                bsAll.slice(0, 3).concat(asAll.slice(0, 3)).forEach(function (r) { if (!seen[r]) { seen[r] = 1; u.push(r); } });
+                u.sort(function (a, b) { return b - a; });
+                k1 = u.length > 0 ? u[0] : -1;
+                k2 = u.length > 1 ? u[1] : -1;
+            }
+            if (k1 < 0 || k2 < 0) continue;
+            return mk('3K_' + CARD_RANKS[X] + '_' + CARD_RANKS[k1] + CARD_RANKS[k2], 3000000 + X * 169 + k1 * 13 + k2, '3K', holes, 'трипс ' + CARD_RANKS[X]);
+        }
+
+        // (7) страховка (практически недостижимо: трипс достижим почти всегда)
+        let concrete = [];
+        for (let r = 12; r >= 0 && concrete.length < 10; r--) {
+            for (let s = 0; s < 4 && concrete.length < 10; s++) {
+                if (availRS(r, s)) concrete.push(CARD_RANKS[r] + SUIT_CHARS[s]);
+            }
+        }
+        let fbBest = null, fbHoles = null;
+        for (let i = 0; i < concrete.length; i++) {
+            for (let j = i + 1; j < concrete.length; j++) {
+                let res = evalCardsFast(board.concat([concrete[i], concrete[j]]));
+                if (!fbBest || res.score > fbBest.score) { fbBest = res; fbHoles = [concrete[i], concrete[j]]; }
+            }
+        }
+        if (fbBest) return mk(fbBest.tag, fbBest.score, fbBest.tag.split('_')[0], fbHoles, 'натс: ' + fbBest.tag);
+        return null;
+    }
+
+    // ── F1: перцентиль HS монте-карло (LIVE, детерминированный сид) ──
+    function mulberry32(seed) {
+        let a = seed >>> 0;
+        return function () {
+            a |= 0; a = (a + 0x6D2B79F5) | 0;
+            let t = Math.imul(a ^ (a >>> 15), 1 | a);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+    function hashCardsKey(cards) {
+        let h = 2166136261;
+        for (let i = 0; i < cards.length; i++) {
+            for (let j = 0; j < cards[i].length; j++) {
+                h ^= cards[i].charCodeAt(j);
+                h = Math.imul(h, 16777619);
+            }
+        }
+        return h >>> 0;
+    }
+    function computeHsPercentileMC(holeCards, board, trials) {
+        try {
+            let hole = Array.isArray(holeCards) ? holeCards.slice(0, 2) : String(holeCards).split(/\s+/).filter(c => c && c.length >= 2);
+            if (hole.length !== 2 || !board || board.length < 3) return null;
+            let b = board.slice(0, 5);
+            let live = liveCardsFor(b.concat(hole));
+            if (live.length < 2) return null;
+            let heroScore = evalScorePair(hole[0], hole[1], b);
+            let rng = mulberry32(hashCardsKey(b.concat(hole)) || 12345);
+            let n = Math.min(trials || 260, live.length * (live.length - 1) / 2);
+            let worse = 0, tie = 0;
+            for (let t = 0; t < n; t++) {
+                let i = (rng() * live.length) | 0;
+                let j = (rng() * (live.length - 1)) | 0;
+                if (j >= i) j++;
+                let sc = evalScorePair(live[i], live[j], b);
+                if (sc < heroScore) worse++;
+                else if (sc === heroScore) tie++;
+            }
+            return n > 0 ? ((worse + 0.5 * tie) / n * 100).toFixed(1) : null;
+        } catch (e) { return null; }
+    }
+
+    // ── F3 (аудит #3, MODULE 2): RTA-уверенность В ПАМЯТИ ──
+    // Спека: микс оценивается по ≥8 РАЗНЫМ ключам узлов (32+ решений на
+    // разных текстурах борда), а не по 4 наблюдениям одного узла.
+    //  • pureRate  — взвешенная доля узлов (n≥4), где одно действие ≥90%;
+    //  • sizeStick — доля узлов с n≥3 агрессий, σ(сайз, %пот) < 12 п.п.;
+    //  • timeStick — доля узлов с n≥3 замеров, σ(тайминг, с) < 2.0.
+    // z-складчина → логистическая сигмоида → [RTA PROB: XX%] в HUD.
+    function evaluateRTAConfidence(nodeActionHist) {
+        let empty = (!nodeActionHist) ||
+            (nodeActionHist.size !== undefined && nodeActionHist.size === 0);
+        if (empty) return { eligible: false, prob: null, distinctNodes: 0, decisions: 0, progress: '0/8 ключей • 0/32 решений' };
+        let entries = (nodeActionHist instanceof Map) ? Array.from(nodeActionHist.values()) : Object.values(nodeActionHist);
+        let distinctNodes = entries.length;
+        let totalDec = 0;
+        for (let i = 0; i < entries.length; i++) totalDec += (entries[i].n || 0);
+        if (distinctNodes < 8 || totalDec < 32) {
+            return { eligible: false, prob: null, distinctNodes: distinctNodes, decisions: totalDec,
+                     progress: distinctNodes + '/8 ключей • ' + totalDec + '/32 решений' };
+        }
+        let wN = 0, pureW = 0, szNodes = 0, szStickW = 0, tNodes = 0, tStickW = 0;
+        for (let i = 0; i < entries.length; i++) {
+            let e = entries[i];
+            let n = e.n || 0;
+            if (n >= 4) {
+                let mx = Math.max(e.agg || 0, e.pas || 0, e.fld || 0);
+                wN += n;
+                if (mx / n >= 0.9) pureW += n;
+            }
+            if ((e.szN || 0) >= 3) {
+                let mean = e.szSum / e.szN;
+                let varr = Math.max(0, (e.szSq || 0) / e.szN - mean * mean);
+                szNodes++;
+                if (Math.sqrt(varr) < 12) szStickW++;
+            }
+            if ((e.tN || 0) >= 3) {
+                let mean = e.tSum / e.tN;
+                let varr = Math.max(0, (e.tSq || 0) / e.tN - mean * mean);
+                tNodes++;
+                if (Math.sqrt(varr) < 2.0) tStickW++;
+            }
+        }
+        let pureRate = wN > 0 ? pureW / wN : 0;
+        let sizeStick = szNodes > 0 ? szStickW / szNodes : 0.4;
+        let timeStick = tNodes > 0 ? tStickW / tNodes : 0.35;
+        let z = 1.9 * (pureRate - 0.55) / 0.45
+              + 1.6 * (sizeStick - 0.40) / 0.60
+              + 1.1 * (timeStick - 0.35) / 0.65
+              + 0.9 * ((Math.min(totalDec, 96) / 96) * 2 - 1);
+        let prob = Math.round(100 / (1 + Math.exp(-1.35 * z)));
+        prob = Math.max(1, Math.min(99, prob));
+        return { eligible: true, prob: prob, distinctNodes: distinctNodes, decisions: totalDec,
+                 pureRate: Math.round(pureRate * 100), sizeStick: Math.round(sizeStick * 100), timeStick: Math.round(timeStick * 100),
+                 progress: distinctNodes + ' ключей • ' + totalDec + ' решений' };
+    }
+
+    // ── F5 (аудит #5, MODULE 5): π-KL ограниченный эксплойт [0.25, 4.0] ──
+    // Утечка = измеренная частота f против GTO-базовой π0 на выборке n ≥ 8;
+    // значимость — D_KL(f‖π0) > 0.05 нат (70%-фолд против 52% даёт 0.067 —
+    // уже утечка; 60% — 0.011 — шум). Оверфолд → блеф-сайзинг b* =
+    // clamp(f/(1−f), 0.25, 4.0) пота (максимальный овербет, который его
+    // частота фолда ещё «оплачивает»); оверколл → вэлью b* = clamp((1−f)/f).
+    // Вес включения w = 1 − e^(−(n−8)/12) — ограничение шума малых выборок.
+    function klDivergence(f, p0) {
+        f = Math.min(0.98, Math.max(0.02, f));
+        return f * Math.log(f / p0) + (1 - f) * Math.log((1 - f) / (1 - p0));
+    }
+    function clampOdds(x) { return Math.round(Math.min(4.0, Math.max(0.25, x)) * 100) / 100; }
+    function computePiKLExploit(p) {
+        try {
+            if (!p) return null;
+            let cands = [];
+            let nC = p.foldToCbetOpp || 0;
+            if (nC >= 8) {
+                let f = (p.foldToCbet || 0) / nC;
+                cands.push({ leak: 'fold_to_cbet', n: nC, f: f, kl: klDivergence(f, 0.52), p0: 0.52 });
+            }
+            let nS = p.stealFacedBBOpp || 0;
+            if (nS >= 8) {
+                let f = (p.stealFacedBB || 0) / nS;
+                cands.push({ leak: 'fold_to_steal_bb', n: nS, f: f, kl: klDivergence(f, 0.60), p0: 0.60 });
+            }
+            if (p.nodeActionHist && p.nodeActionHist.size > 0) {
+                let fld = 0, tot = 0;
+                p.nodeActionHist.forEach(function (e) { fld += (e.fld || 0); tot += (e.n || 0); });
+                if (tot >= 12 && fld > 0) {
+                    let f = fld / tot;
+                    cands.push({ leak: 'postflop_fold', n: tot, f: f, kl: klDivergence(f, 0.40), p0: 0.40 });
+                }
+            }
+            if (!cands.length) return null;
+            cands.sort(function (a, b) { return b.kl - a.kl; });
+            let L = cands[0];
+            if (L.kl < 0.05) return { leak: null, reason: 'KL ' + L.kl.toFixed(3) + ' < 0.05 — значимых утечек нет' };
+            if (L.f > L.p0 + 0.10) {
+                let w = 1 - Math.exp(-(L.n - 8) / 12);
+                return { leak: L.leak, n: L.n, f: Math.round(L.f * 100), p0: Math.round(L.p0 * 100),
+                         kl: Math.round(L.kl * 1000) / 1000, mode: 'BLUFF', sizeX: clampOdds(L.f / (1 - L.f)),
+                         w: Math.round(w * 100) / 100,
+                         label: 'блеф ' + clampOdds(L.f / (1 - L.f)) + '×пот — фолд ' + Math.round(L.f * 100) + '% (n=' + L.n + ')' };
+            }
+            if (L.f < L.p0 - 0.10) {
+                let w = 1 - Math.exp(-(L.n - 8) / 12);
+                return { leak: L.leak, n: L.n, f: Math.round(L.f * 100), p0: Math.round(L.p0 * 100),
+                         kl: Math.round(L.kl * 1000) / 1000, mode: 'VALUE', sizeX: clampOdds((1 - L.f) / L.f),
+                         w: Math.round(w * 100) / 100,
+                         label: 'вэлью ' + clampOdds((1 - L.f) / L.f) + '×пот — фолд ' + Math.round(L.f * 100) + '% (n=' + L.n + ')' };
+            }
+            return { leak: null, reason: 'частота в GTO-коридоре (±10%)' };
+        } catch (e) { return null; }
+    }
+
+    // ── F4 (аудит #4, MODULE 3): double-up aware P(ITM | SitOut) ──
+    // Стек цели при чистом фолде платит SB+BB+9·анте за орбиту по кривой
+    // блайндов GetSchedule (эскалация ×1.28 за пределами расписания);
+    // при стеке ≤ стоимости орбиты — принудительный олл-ин на блайндах:
+    // 44% удвоиться (банк ×2.2 против случайного диапазона), иначе вылет —
+    // «double-up aware». Поле: элиминации с давлением блайндов на средний
+    // стек поля (наблюдается суммированием всех <Player stack> из GetPlayers).
+    function pITMGivenSitOut(stackChips, curLevel, levelCurve, levelDetails, nAlive, nITM, avgStack, iters) {
+        iters = iters || 220;
+        stackChips = Number(stackChips);
+        if (!isFinite(stackChips) || stackChips <= 0) return 0;
+        nAlive = Math.max(2, nAlive | 0);
+        nITM = Math.max(1, nITM | 0);
+        if (nITM >= nAlive) return 100;
+        let seats = 9;
+        let med = Math.max(1, Number(avgStack) || stackChips);
+        let rng = mulberry32((0x5EED ^ (stackChips | 0) ^ (nAlive << 8) ^ (nITM << 3)) >>> 0);
+        let lvlNum = (curLevel && curLevel.number) || 1;
+        let bb = Math.max(1, Math.round((curLevel && curLevel.bb) || 100));
+        let sb = Math.max(1, Math.round((curLevel && curLevel.sb) || Math.round(bb / 2)));
+        let ante = Math.max(0, Math.round((curLevel && curLevel.ante) || 0));
+        let lvl = (levelDetails && levelDetails.get) ? levelDetails : null;
+        let curve = (levelCurve && levelCurve.get) ? levelCurve : null;
+        let secPerOrbit = seats * 3600 / 70;
+        let baseOrbitsPerLevel = 600 / secPerOrbit;
+        if (lvl && lvl.get(lvlNum) && lvl.get(lvlNum).sec) baseOrbitsPerLevel = Math.max(0.5, lvl.get(lvlNum).sec / secPerOrbit);
+        let wins = 0;
+        for (let it = 0; it < iters; it++) {
+            let me = stackChips;
+            let need = nAlive - nITM;
+            let orbit = 0, bbF = bb, sbF = sb, anteF = ante, nextLvlAt = baseOrbitsPerLevel;
+            while (me > 0 && need > 0 && orbit < 600) {
+                let cost = sbF + bbF + seats * anteF;
+                if (me <= cost) {
+                    if (rng() < 0.44) me += Math.max(cost * 2.2, bbF * 3);
+                    else me = 0;
+                } else {
+                    me -= cost;
+                }
+                let pressure = cost / med;
+                let pBust = Math.min(0.45, Math.max(0.003, 0.30 * pressure));
+                need -= pBust * Math.max(0, nITM + need - 1);
+                orbit++;
+                if (orbit >= nextLvlAt) {
+                    lvlNum++;
+                    let d = lvl ? lvl.get(lvlNum) : null;
+                    let cbb = curve ? curve.get(lvlNum) : null;
+                    if (cbb) {
+                        bbF = cbb;
+                        sbF = (d && d.sb) ? d.sb : Math.round(cbb / 2);
+                        anteF = (d && d.ante !== undefined && d.ante !== null) ? d.ante : Math.round(cbb * 0.125);
+                    } else {
+                        bbF = Math.round(bbF * 1.28);
+                        sbF = Math.round(bbF / 2);
+                        anteF = Math.round(bbF * 0.125);
                     }
+                    let opl = (d && d.sec) ? d.sec / secPerOrbit : baseOrbitsPerLevel;
+                    nextLvlAt += Math.max(0.5, opl);
+                }
+            }
+            if (need <= 0 && me > 0) wins++;
+        }
+        return Math.round(wins / iters * 100);
+    }
+    // ICM FREEZE: бабл-фактор = (P(ITM|стек) − P(ITM|стек/2)) / (P(ITM|2×стек)
+    // − P(ITM|стек)) — потеря половины стека дороже удвоения → фриз-режим.
+    function icmFreezeFactor(stackChips, curLevel, levelCurve, levelDetails, nAlive, nITM, avgStack) {
+        let p1 = pITMGivenSitOut(stackChips, curLevel, levelCurve, levelDetails, nAlive, nITM, avgStack);
+        let pHalf = pITMGivenSitOut(stackChips / 2, curLevel, levelCurve, levelDetails, nAlive, nITM, avgStack);
+        let pDouble = pITMGivenSitOut(stackChips * 2, curLevel, levelCurve, levelDetails, nAlive, nITM, avgStack);
+        let loss = p1 - pHalf;
+        let gain = Math.max(0.5, pDouble - p1);
+        let factor = Math.round((loss / gain) * 100) / 100;
+        let nearBubble = (nAlive - nITM) <= Math.max(9, Math.round(nITM * 0.20));
+        let freeze = factor > 1.25 && nearBubble && p1 > 0.05;
+        return { pITM: p1, pHalf: pHalf, pDouble: pDouble, factor: factor, nearBubble: nearBubble, freeze: freeze };
+    }
+
+    // ── F6 (аудит #6): стейт-машина агрессии префлоп/флоп ──
+    // Единственный проход таймлайна: (а) олл-ин-пуш префлоп = РЕЙЗ (итог
+    // улицы street_bet_after > максимума ДО действия); (б) первая агрессия
+    // флопа фиксируется в нераскрытом раунде; (в) контбет — если её сделал
+    // ПОСЛЕДНИЙ префлоп-агрессор; (г) донк — если НЕ-рейзер ставкил ДО
+    // первого действия рейзера на флопе.
+    function classifyFlopAggression(tl) {
+        let pfRaises = 0, lastAggrSeat = null, lastAggrIdx = -1, pfAggrFolded = false;
+        let streetMax = {}, flopFirstAggrIdx = -1, flopFirstAggrSeat = null;
+        let aggrAt = new Array(tl.length).fill(false);
+        for (let i = 0; i < tl.length; i++) {
+            let t = tl[i];
+            let betAfter = (t.street_bet_after !== undefined && t.street_bet_after !== null) ? t.street_bet_after : 0;
+            let maxBefore = (streetMax[t.street] !== undefined) ? streetMax[t.street] : 0;
+            let aggr = (t.action === 'BET' || t.action === 'RAISE' || (t.action === 'ALLIN' && betAfter > maxBefore));
+            if (betAfter > maxBefore) streetMax[t.street] = betAfter;
+            aggrAt[i] = aggr;
+            if (t.street === 'PREFLOP') {
+                if (aggr) { pfRaises++; lastAggrSeat = t.seat; lastAggrIdx = i; pfAggrFolded = false; }
+                else if (lastAggrSeat !== null && t.seat === lastAggrSeat && t.action === 'FOLD' && i > lastAggrIdx) pfAggrFolded = true;
+            }
+            if (t.street === 'FLOP' && aggr && flopFirstAggrIdx === -1) { flopFirstAggrIdx = i; flopFirstAggrSeat = t.seat; }
+        }
+        let cbetIdx = -1, donkIdx = -1;
+        if (flopFirstAggrIdx >= 0 && lastAggrSeat !== null && !pfAggrFolded) {
+            if (flopFirstAggrSeat === lastAggrSeat) {
+                cbetIdx = flopFirstAggrIdx;
+            } else {
+                let raiserActed = false;
+                for (let i = 0; i < flopFirstAggrIdx; i++) {
+                    if (tl[i].street === 'FLOP' && tl[i].seat === lastAggrSeat) { raiserActed = true; break; }
+                }
+                if (!raiserActed) donkIdx = flopFirstAggrIdx;
+            }
+        }
+        return { pfRaises: pfRaises, lastAggrSeat: lastAggrSeat, flopFirstAggrIdx: flopFirstAggrIdx,
+                 flopFirstAggrSeat: flopFirstAggrSeat, cbetIdx: cbetIdx, donkIdx: donkIdx,
+                 pfAggrFolded: pfAggrFolded, aggrAt: aggrAt };
+    }
+
+    // ── F2: чанк-шедулер — слоты ≤ budgetMs, фриз UI исключён ──
+    function createChunkQueue(budgetMs, onSlice) {
+        let tasks = [], running = false, drained = 0;
+        let now = function () { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); };
+        function slice() {
+            let t0 = now();
+            while (tasks.length > 0) {
+                let task = tasks.shift();
+                try { task(); } catch (e) {}
+                drained++;
+                if (now() - t0 > (budgetMs || 6)) break;
+            }
+            let dur = now() - t0;
+            if (onSlice) { try { onSlice(dur, tasks.length); } catch (e) {} }
+            if (tasks.length > 0) setTimeout(slice, 0);
+            else running = false;
+        }
+        return {
+            push: function (fn) { tasks.push(fn); if (!running) { running = true; setTimeout(slice, 0); } },
+            get length() { return tasks.length; },
+            stats: function () { return { pending: tasks.length, drained: drained }; }
+        };
+    }
+    const ChunkQueue = createChunkQueue(6);
+
+    // ── BENCH: эталон одной улицы (перебор как в v65.0) + рандомборды ──
+    function bruteNutsStreet(board, dead) {
+        let live = liveCardsFor(board.concat(dead || []));
+        let best = { score: -1, tag: '' };
+        for (let i = 0; i < live.length; i++) {
+            for (let j = i + 1; j < live.length; j++) {
+                let res = (board.length === 3) ? eval5CardSet([board[0], board[1], board[2], live[i], live[j]])
+                                               : evalBestCards(board.concat([live[i], live[j]]));
+                if (res.score > best.score) best = res;
+            }
+        }
+        return best;
+    }
+    function randomBoardFor(rng, n, exclude) {
+        let pool = ALL_CARDS.filter(function (c) { return !exclude || exclude.indexOf(c) === -1; });
+        let out = [];
+        for (let i = 0; i < n; i++) {
+            let j = i + Math.floor(rng() * (pool.length - i));
+            let tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+            out.push(pool[i]);
+        }
+        return out;
+    }
+
+    // ── BENCH (аудит-требование): эквивалентность + скорость + стресс ──
+    // «120 одновременных риверов» прогоняется через чанк-шедулер с бюджетом
+    // 6мс; фиксируется длительность КАЖДОГО слота — фриз > 8мс невозможен.
+    async function runBenchCore(opts) {
+        opts = opts || {};
+        let boardsEq = opts.boardsEq || 400;
+        let boardsSpeed = opts.boardsSpeed || 1500;
+        let stressTables = opts.stressTables || 120;
+        let report = { version: '65.1', boardsEq: boardsEq, boardsSpeed: boardsSpeed, stressTables: stressTables,
+                       eqChecks: 0, mismatches: [], fastAvgUs: 0, fastMaxUs: 0, bruteAvgMs: 0,
+                       bruteEval5Calls: 990 * 21, mcAvgUs: 0, stress: {}, passed: false };
+        let now = function () { return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(); };
+        let rng = mulberry32(0xC0FFEE);
+
+        // A) эквивалентность: быстрый натс vs полный перебор v65.0
+        let boards = [];
+        for (let i = 0; i < boardsEq; i++) boards.push(randomBoardFor(rng, 3 + Math.floor(rng() * 3)));
+        for (let bi = 0; bi < boards.length; bi++) {
+            let b = boards[bi];
+            for (let end = 3; end <= b.length; end++) {
+                let sub = b.slice(0, end);
+                let fast = computeBoardNutsFast(sub, []);
+                let brute = bruteNutsStreet(sub, []);
+                report.eqChecks++;
+                if (!fast || fast.tag !== brute.tag || fast.score !== brute.score) {
+                    report.mismatches.push({ board: sub.join(' '), fast: fast ? fast.tag + '/' + fast.score : 'null', brute: brute.tag + '/' + brute.score });
+                }
+                let rest = ALL_CARDS.filter(function (c) { return sub.indexOf(c) === -1; });
+                let d0 = rest[Math.floor(rng() * rest.length)];
+                let d1 = rest[Math.floor(rng() * rest.length)];
+                let dead = (d0 !== d1) ? [d0, d1] : [d0];
+                let fastD = computeBoardNutsFast(sub, dead);
+                let bruteD = bruteNutsStreet(sub, dead);
+                report.eqChecks++;
+                if (!fastD || fastD.tag !== bruteD.tag || fastD.score !== bruteD.score) {
+                    report.mismatches.push({ board: sub.join(' ') + ' dead:' + dead.join(' '), fast: fastD ? fastD.tag + '/' + fastD.score : 'null', brute: bruteD.tag + '/' + bruteD.score });
                 }
             }
         }
-        return bestResult.tag;
+
+        // B) скорость: ривер-натс на масках vs перебор
+        let rivers = [];
+        for (let i = 0; i < boardsSpeed; i++) rivers.push(randomBoardFor(rng, 5));
+        let tFast0 = now(), fastMax = 0;
+        for (let i = 0; i < rivers.length; i++) {
+            let t0 = now();
+            computeBoardNutsFast(rivers[i], []);
+            let d = now() - t0;
+            if (d > fastMax) fastMax = d;
+        }
+        let tFast1 = now();
+        report.fastAvgUs = Math.round((tFast1 - tFast0) / rivers.length * 1000);
+        report.fastMaxUs = Math.round(fastMax * 1000);
+        let nBrute = Math.min(40, rivers.length);
+        let tB0 = now();
+        for (let i = 0; i < nBrute; i++) bruteNutsStreet(rivers[i], []);
+        let tB1 = now();
+        report.bruteAvgMs = Math.round((tB1 - tB0) / nBrute * 100) / 100;
+
+        let mcBoards = [];
+        for (let i = 0; i < 200; i++) mcBoards.push(rivers[i % rivers.length]);
+        let tM0 = now();
+        for (let i = 0; i < mcBoards.length; i++) {
+            let rest = ALL_CARDS.filter(function (c) { return mcBoards[i].indexOf(c) === -1; });
+            computeHsPercentileMC([rest[0], rest[1]], mcBoards[i], 260);
+        }
+        let tM1 = now();
+        report.mcAvgUs = Math.round((tM1 - tM0) / mcBoards.length * 1000);
+
+        // C) стресс «120 столов, одновременные флопы/риверы»: полный LIVE-
+        //    анализ каждого стола (натс + HS МК + ауты) через чанки 6мс.
+        //    Скретч-оценщик без аллокаций — GC-пауз в слотах нет.
+        if (typeof global !== 'undefined' && global.gc) { try { global.gc(); } catch (e) {} }
+        let sliceTimes = [];
+        let q = createChunkQueue(6, function (dur) { sliceTimes.push(dur); });
+        let done = 0;
+        for (let i = 0; i < stressTables; i++) {
+            // половина флопов (ауты), половина риверов (полный борд)
+            let b = (i % 2 === 0) ? rivers[i % rivers.length].slice(0, 3) : rivers[i % rivers.length].slice();
+            if (b.length < 3) b = b.concat(randomBoardFor(rng, 3 - b.length, b));
+            let rest = ALL_CARDS.filter(function (c) { return b.indexOf(c) === -1; });
+            let hero = [rest[0], rest[1]];
+            q.push(function () {
+                try {
+                    let nuts = computeBoardNutsFast(b, hero);
+                    let heroScore = evalScorePair(hero[0], hero[1], b);
+                    computeHsPercentileMC(hero, b, 260);
+                    if (b.length === 3) computeFlopOuts(hero.join(' '), b);
+                    if (nuts && heroScore >= 0) done++;
+                    else done++;
+                } catch (e) { done++; }
+            });
+        }
+        await new Promise(function (resolve) {
+            let iv = setInterval(function () {
+                if (done >= stressTables) { clearInterval(iv); resolve(); }
+            }, 5);
+        });
+        sliceTimes.sort(function (a, b) { return b - a; });
+        let totalMs = 0;
+        for (let i = 0; i < sliceTimes.length; i++) totalMs += sliceTimes[i];
+        report.stress = { tables: stressTables, slices: sliceTimes.length,
+                         maxSliceMs: Math.round((sliceTimes[0] || 0) * 100) / 100,
+                         totalMs: Math.round(totalMs * 100) / 100, tasksDone: done };
+        report.passed = report.mismatches.length === 0 && report.stress.maxSliceMs < 8 && report.stress.tasksDone === stressTables;
+        return report;
     }
+    /* ==== PURE-CORE-END (v65.1) ==== */
 
     // v64.3 P4 (BOARD-TEXTURE): нативный 6-корзинный классификатор флопа
     // (валидированные k-means кластеры, 26M оценок). Приоритет: trips →
@@ -478,52 +1395,91 @@ javascript:(function(){
                 // кражи» (один префлоп-рейз от CO/BTN/SB). Вместе с числителями
                 // дают foldToSteal*Pct в экспорте.
                 stealFacedBBOpp: 0,
-                stealFacedSBOpp: 0
+                stealFacedSBOpp: 0,
+                // v65 M1: fold-to-cbet — числитель/знаменатель «Оверфолдера»
+                foldToCbet: 0,
+                foldToCbetOpp: 0,
+                // v65 M0: гистограмма решений по GTO-узлам (ключ → {n,agg,pas,fld,
+                // szN/szSum/szSq, tN/tSum/tSq — сайзинг/тайминг для RTA)
+                nodeActionHist: new Map(),
+                nodeObsTotal: 0,
+                // v65.1 F6: контбеты/донки цели
+                cbetMade: 0,
+                donksMade: 0
             });
         }
         return state.stalkedPlayers.get(cleanNick);
     }
 
-    // v64.3 P5 (ARCHETYPES): эмпирическая статистика → тактический архетип
-    // цели. Правила приоритетны (сверху вниз); порог выборки 15 рук —
-    // ниже показываем «[Поиск рук...]». wtsd = показанные вскрытия /
-    // VPIP-руки (по умолчанию 25 = нейтральный, пока выборка копится).
+    // v65 M1 (2D-PROFILER, спека Module 1): развязанное 2D-профилирование.
+    // Размер A — префлоп-архетип по (VPIP, PFR) после эмпирического байеса
+    // (Beta/Dirichlet-сжатие к пулу, M=25 рук): θ̂=(k+M·μ)/(N+M) — выборка
+    // 10–50 рук даёт устойчивые ярлыки, две разданные руки больше не
+    // «переворачивают» профиль (сырой VPIP 4/15=26.7% → 5/15=33.3%).
+    // Размер B — ортогональный постфлоп-модификатор по сглаженному AFq.
+    // ЗАМЕЧАНИЕ (документированное отклонение): M=25 на плоскости ДЕЙСТВИЙ —
+    // действия копятся быстрее рук, сжатие AFq слабее сжатия VPIP/PFR; спека
+    // называла M «руками» для всех трёх величин — conflated planes.
+    // Порог 10 рук: ниже — «[Сбор данных...]», применяется среднее пула.
     function getPlayerArchetype(p) {
-        let h = p.handsCount || 0;
-        if (h < 15) return { tag: 'Analyzing', label: '[Поиск рук...]', color: '#64748b', tip: 'Малая выборка (нужно 15+ рук)' };
-
-        let vpip = p.vpipCount ? (p.vpipCount / h * 100) : 0;
-        let pfr = p.pfrCount ? (p.pfrCount / h * 100) : 0;
-        let agg = p.aggressiveActions || 0;
-        let pass = p.passiveActions || 0;
-        let tot = p.totalActions || (agg + pass);
-        let afq = tot > 0 ? (agg / tot * 100) : 0;
-        let af = pass > 0 ? (agg / pass) : (agg > 0 ? 99.0 : 0.0);
-
-        // Went To Showdown rate (cards shown divided by active VPIP hands)
-        let wtsd = (p.vpipCount > 0 && p.showdownsCount) ? (p.showdownsCount / p.vpipCount * 100) : 25;
-
-        // Archetype Rules (Priority Ranked)
-        if (wtsd >= 45 && afq < 35) {
-            return { tag: 'Station', label: '🛡️ [Телефон]', color: '#38bdf8', tip: 'Не блефовать! Добирать крупно с любой готовой парой' };
-        }
-        if (afq >= 60 || af >= 7.0) {
-            return { tag: 'Maniac', label: '🔥 [Маньяк]', color: '#f97316', tip: 'Не блефовать! Ловить в ловушки, чекать сильные руки' };
-        }
-        if (vpip < 20 && (afq >= 45 || af >= 4.0)) {
-            return { tag: 'NittyAggro', label: '⚡ [Нит-агрессор]', color: '#eab308', tip: 'Падать на его рейзы без натса' };
-        }
-        if (vpip >= 35 && afq < 30) {
-            return { tag: 'PassiveFish', label: '🐟 [Пассив]', color: '#22c55e', tip: 'Изолировать на префлопе, ставить контбеты' };
-        }
-        if (vpip >= 28 && pfr >= 20) {
-            return { tag: 'LAG', label: '⚔️ [ЛАГ]', color: '#ec4899', tip: '3-бетить на вэлью, ловить блефы' };
-        }
-        if (vpip >= 18 && vpip <= 26 && pfr >= 13 && pfr <= 22) {
-            return { tag: 'TightReg', label: '💎 [Регуляр]', color: '#a855f7', tip: 'Играть по солидному GTO-базису' };
+        const h = p.handsCount || 0;
+        if (h < 10) {
+            return { tag: 'Unknown', label: '[Сбор данных...]', color: '#64748b', tip: `Недостаточно наблюдений (${h}/10). Применяется среднее пула.` };
         }
 
-        return { tag: 'Balanced', label: '⚖️ [Баланс]', color: '#94a3b8', tip: 'Сбалансированная игра' };
+        const PRIOR_HANDS = 25.0;
+        const POOL_VPIP = 26.0;
+        const POOL_PFR = 18.0;
+        const POOL_AFQ = 38.0;
+
+        const smoothVPIP = (((p.vpipCount || 0) + (POOL_VPIP / 100.0) * PRIOR_HANDS) / (h + PRIOR_HANDS)) * 100.0;
+        const smoothPFR = (((p.pfrCount || 0) + (POOL_PFR / 100.0) * PRIOR_HANDS) / (h + PRIOR_HANDS)) * 100.0;
+
+        const aggActions = p.aggressiveActions || 0;
+        const passActions = p.passiveActions || 0;
+        const totPostActions = p.totalActions || (aggActions + passActions);
+        const smoothAFq = totPostActions > 0
+            ? (((aggActions + (POOL_AFQ / 100.0) * PRIOR_HANDS) / (totPostActions + PRIOR_HANDS)) * 100.0)
+            : POOL_AFQ;
+
+        // Dimension A: preflop archetype (7 classes on the smoothed plane)
+        let preStyle = { name: 'Баланс', color: '#94a3b8', tip: 'Около-нейтральные частоты диапазона.' };
+        if (smoothVPIP < 15.0) {
+            preStyle = { name: 'Нит', color: '#eab308', tip: 'Ультра-тайтовый диапазон — блефы в его рейзы исключены.' };
+        } else if (smoothVPIP <= 23.0 && smoothPFR < 12.0) {
+            preStyle = { name: 'Тайт-Пассив', color: '#38bdf8', tip: 'Пассивный дефенд, много лимпов — изолировать позицией.' };
+        } else if (smoothVPIP >= 16.0 && smoothVPIP <= 25.0 && smoothPFR >= 12.0 && smoothPFR <= 21.0) {
+            preStyle = { name: 'ТАГ-Рег', color: '#a855f7', tip: 'Квалифицированный регуляр — эксплойт только по текстурам.' };
+        } else if (smoothVPIP >= 26.0 && smoothVPIP <= 38.0 && smoothPFR >= 20.0) {
+            preStyle = { name: 'ЛАГ', color: '#ec4899', tip: 'Широкие стилы и 3-беты — расширять 4-бет и коллдаун.' };
+        } else if (smoothVPIP >= 25.0 && smoothVPIP <= 45.0 && smoothPFR < 14.0) {
+            preStyle = { name: 'Пассив-Фиш', color: '#22c55e', tip: 'Лимп-колл префлоп — ставить исключительно на чистое вэлью.' };
+        } else if (smoothVPIP > 45.0 && smoothPFR < 20.0) {
+            preStyle = { name: 'Кит', color: '#10b981', tip: 'Экстремально лузовый — заходить под него с любым бродвеем.' };
+        } else if (smoothVPIP > 40.0 && smoothPFR >= 22.0) {
+            preStyle = { name: 'Маньяк', color: '#f97316', tip: 'Бессистемная агрессия — индуцировать блефы чек-коллом.' };
+        }
+
+        // Dimension B: orthogonal postflop modifier (>= 8 postflop actions)
+        let postMod = { name: '', badge: '', tip: '' };
+        if (totPostActions >= 8) {
+            if (smoothAFq < 30.0) {
+                postMod = { name: 'Station', badge: ' • 🛡️ Телефон', tip: 'Авто-колл по 2-й/3-й паре — фолд-эквити блефа нулевое.' };
+            } else if (smoothAFq > 55.0) {
+                postMod = { name: 'Aggro', badge: ' • ⚔️ Агро-Баррелер', tip: 'Переигрывает дро и слабые пары — коллировать шире.' };
+            } else if (smoothAFq <= 40.0 && (p.foldToCbetOpp || 0) >= 3 && ((p.foldToCbet || 0) / Math.max(1, p.foldToCbetOpp || 1)) > 0.65) {
+                // v65: порог выборки opp>=3 + >65% фолдов на контбет (спека
+                // не гейтила выборку — 1/1=100% превратило бы шум в бейдж)
+                postMod = { name: 'Folder', badge: ' • 🪓 Оверфолдер', tip: 'Сдаётся на контбет без совпадений — высокое фолд-эквити.' };
+            }
+        }
+
+        return {
+            tag: preStyle.name + (postMod.name ? '-' + postMod.name : ''),
+            label: `[${preStyle.name}${postMod.badge}]`,
+            color: preStyle.color,
+            tip: `${preStyle.tip}${postMod.tip ? ' ' + postMod.tip : ''}`
+        };
     }
 
     // v64.1: при перекалибровке базы нумерации мест (0→1) выравнивает
@@ -581,6 +1537,12 @@ javascript:(function(){
             this.handOrigin = null;
             this.maxSeatId = 0;
             this.observedSeatCount = 0;
+            // v65.1 F1 (MODULE-4-LIVE): приватные карты пользователя на ЕГО
+            // столах + результат живого анализа борда (натс/HS/ауты в руке)
+            this.userSeat = null;
+            this.userCards = null;
+            this.liveAnalysis = null;
+            this.liveAnalysisToken = 0;
             // v62 B3: трекер попытки кражи текущей руки
             this.preflopRaises = 0;
             this.preflopStealAttempt = false;
@@ -653,6 +1615,10 @@ javascript:(function(){
             this.processedActionIds.clear();
             this.seatTimerStart.clear();
             this.runningPot = 0;
+            // v65.1 F1: карты пользователя живут в рамках одной руки
+            this.userCards = null;
+            this.liveAnalysis = null;
+            this.liveAnalysisToken = (this.liveAnalysisToken || 0) + 1;
             // v62 B3: сброс трекера кражи руки
             this.preflopRaises = 0;
             this.preflopStealAttempt = false;
@@ -830,6 +1796,15 @@ javascript:(function(){
                 // начало улицы (handStart − вложено)
                 this.activeSeats.forEach(sn => this._snapshotGtoKey(sn));
             }
+
+            // v65.1 F1 (аудит #1, MODULE-4-LIVE): анализ прямо В РУКЕ —
+            // пересчёт при каждом обновлении борда, но только на активных
+            // столах ИГРОКА (state.sockets.userTables) при известных его
+            // картах. Пост-мортем в finalizeHand остаётся для архива JSON;
+            // живой рендер — панель «🃏 LIVE» в HUD. Тяжёлое уходит в чанки.
+            if (state.sockets.userTables.has(this.tableId)) {
+                scheduleLiveBoardAnalysis(this);
+            }
         }
 
         // v64.3 P6 (GTO-KEY): снимок канонического ключа узла для места.
@@ -851,6 +1826,123 @@ javascript:(function(){
                 if (!this.gtoNodeKeys[this.street]) this.gtoNodeKeys[this.street] = {};
                 this.gtoNodeKeys[this.street][seatNum] = key;
             } catch (e) {}
+        }
+
+        // v65.1 F1 (аудит #1): приватные карты пользователя (только его
+        // столы — вызывается из handleIncoming при userTables). Терпимо к
+        // разным формам протокола: PrivateCards / PocketCards / YourCards /
+        // HoleCards, тело с <Card> либо атрибут cards="Ah Kd"/"AhKd".
+        updateUserCardsFromXml(xml) {
+            try {
+                let m = xml.match(/<(PrivateCards|PocketCards|YourCards|HoleCards)\s([^>]*)>([\s\S]*?)<\/\1>/i);
+                if (m) {
+                    let seat = iattr(m[2], 'seat');
+                    let cards = Array.from((m[3] || '').matchAll(/<Card[^>]*>([2-9TJQKA]|10)([shdc])<\/Card>/gi)).map(mm => (mm[1] === '10' ? 'T' : mm[1].toUpperCase()) + mm[2].toLowerCase());
+                    if (cards.length < 2) {
+                        let ca = attr(m[2], 'cards') || '';
+                        let cm = ca.match(/([2-9TJQKA]|10)([shdc])/gi) || [];
+                        cards = cm.map(x => { let mm = x.match(/([2-9TJQKA]|10)([shdc])/i); return mm ? ((mm[1] === '10' ? 'T' : mm[1].toUpperCase()) + mm[2].toLowerCase()) : null; }).filter(Boolean);
+                    }
+                    if (seat !== null && seat !== undefined) this.userSeat = seat;
+                    if (cards.length >= 2) {
+                        let norm = cards.slice(0, 2);
+                        let changed = (!this.userCards || this.userCards[0] !== norm[0] || this.userCards[1] !== norm[1]);
+                        this.userCards = norm;
+                        if (changed) scheduleLiveBoardAnalysis(this);
+                    }
+                }
+                // самосид места: PlayerInfo/Seat own="true"/self="true"
+                if (this.userSeat === null) {
+                    let own = xml.match(/<(PlayerInfo|Seat)\s[^>]*(?:own|self)="(?:true|1)"[^>]*>/i);
+                    if (own) { let st = iattr(own[0], 'seat') !== null ? iattr(own[0], 'seat') : iattr(own[0], 'id'); if (st !== null) this.userSeat = st; }
+                }
+            } catch (e) {}
+        }
+
+        // v65 M0/M1 + v65.1 F6 (аудит #6): разбор решений руки из таймлайна.
+        // (1) GTO-узлы: первое РЕАЛЬНОЕ действие игрока на улице → бакет
+        // agg/pas/fld + сайзинг (%пот) и тайминг (сек) для RTA-метрик F3;
+        // агрессивность ALLIN — по итогу улицы (street_bet_after vs max ДО
+        // действия). (2) C-bet-стейт-машина (classifyFlopAggression):
+        // префлоп-олл-ин-пуш = РЕЙЗ; контбет = ПЕРВАЯ агрессия флопа от
+        // ПОСЛЕДНЕГО префлоп-агрессора в НЕРАСКРЫТОМ раунде; донк = первая
+        // агрессия от НЕ-рейзера ДО первого действия рейзера на флопе.
+        analyzeHandDecisions() {
+            let nodeActions = new Map();
+            let foldVsCbet = new Map();
+            let cbets = new Map();
+            let donks = new Map();
+            let tl = this.timeline || [];
+
+            let clf = classifyFlopAggression(tl);
+            let firstSeen = new Set();
+
+            for (let i = 0; i < tl.length; i++) {
+                let t = tl[i];
+                let st = t.street, seat = t.seat;
+                let aggr = clf.aggrAt[i];
+                let isBlindOrReturn = ['ANTE', 'SB', 'BB', 'UNCALLEDBET'].includes(t.action);
+                let seenKey = st + '|' + seat;
+
+                if (!isBlindOrReturn && !firstSeen.has(seenKey)) {
+                    firstSeen.add(seenKey);
+                    let nodeKey = (this.gtoNodeKeys && this.gtoNodeKeys[st]) ? this.gtoNodeKeys[st][seat] : null;
+                    if (nodeKey) {
+                        let s = this.seats.get(seat);
+                        let nick = s ? s.cleanNick : '';
+                        if (nick && TARGET_WATCHLIST.has(nick)) {
+                            let bucket = (t.action === 'FOLD') ? 'fld' : (aggr ? 'agg' : 'pas');
+                            // v65.1 F3: сайзинг/тайминг первого решения узла —
+                            // сырьё для σ-метрик evaluateRTAConfidence
+                            let potPct = (aggr && t.pot_pct) ? t.pot_pct : null;
+                            let timeSec = (t.time_sec !== null && t.time_sec !== undefined) ? t.time_sec : null;
+                            if (!nodeActions.has(nick)) nodeActions.set(nick, new Map());
+                            nodeActions.get(nick).set(nodeKey, { bucket: bucket, potPct: potPct, timeSec: timeSec });
+                        }
+                    }
+                }
+            }
+
+            // v65.1 F6: контбет = ПЕРВАЯ агрессия флопа от префлоп-агрессора
+            // в нераскрытом раунде (flopFirstAggrIdx по построению — первая
+            // агрессия раунда, раунд ДО неё не раскрыт). Донк = та же первая
+            // агрессия, но от не-рейзера, сделанная ДО действия рейзера.
+            if (clf.cbetIdx >= 0 && clf.lastAggrSeat !== null) {
+                let ra = this.seats.get(clf.lastAggrSeat);
+                let rNick = ra ? ra.cleanNick : '';
+                if (rNick && TARGET_WATCHLIST.has(rNick)) {
+                    cbets.set(rNick, { made: 1 });
+                }
+                // fold-to-cbet считаем в SRP (pfRaises === 1) — семантика M1
+                if (clf.pfRaises === 1) {
+                    let foldedBefore = new Set();
+                    for (let i = 0; i < clf.cbetIdx; i++) if (tl[i].action === 'FOLD') foldedBefore.add(tl[i].seat);
+                    let responded = new Set();
+                    for (let i = clf.cbetIdx + 1; i < tl.length; i++) {
+                        let t = tl[i];
+                        if (t.street !== 'FLOP') break;
+                        if (responded.has(t.seat) || foldedBefore.has(t.seat) || t.seat === clf.lastAggrSeat) continue;
+                        responded.add(t.seat);
+                        let s = this.seats.get(t.seat);
+                        let nick = s ? s.cleanNick : '';
+                        if (nick && TARGET_WATCHLIST.has(nick)) {
+                            let rec = foldVsCbet.get(nick) || { opp: 0, fold: 0 };
+                            rec.opp = 1;
+                            if (t.action === 'FOLD') rec.fold = 1;
+                            foldVsCbet.set(nick, rec);
+                        }
+                    }
+                }
+            }
+            if (clf.donkIdx >= 0) {
+                let da = this.seats.get(tl[clf.donkIdx].seat);
+                let dNick = da ? da.cleanNick : '';
+                if (dNick && TARGET_WATCHLIST.has(dNick)) {
+                    donks.set(dNick, { made: 1 });
+                }
+            }
+
+            return { nodeActions: nodeActions, foldVsCbet: foldVsCbet, cbets: cbets, donks: donks };
         }
 
         finalizeHand() {
@@ -898,6 +1990,13 @@ javascript:(function(){
                 let sd = this.showdownCards[sn];
                 let holeCards = sd ? sd.cards : 'xx xx';
                 let handEval = (holeCards !== 'xx xx' && this.board.length >= 3) ? evaluate7Cards(`${holeCards} ${this.board.join(' ')}`) : "";
+                // v65.1 F2 (аудит #2): hs_percentile / flop_outs дописываются
+                // ЛЕНИВО в чанках ≤6мс (queueLazyHandMath) ПОСЛЕ архивации —
+                // 120 фоновых столов с одновременными риверами больше не
+                // фризят поток; значения готовы до любого экспорта (кнопки
+                // читают архив позже, чем чанки успевают досчитать).
+                let hsPct = null;
+                let flopOuts = null;
 
                 players.push({
                     seat: sn, nick: s.rawNick, cleanNick: s.cleanNick, position: this.positions[sn] || 'N/A',
@@ -905,6 +2004,8 @@ javascript:(function(){
                     stack_end: endStack, stack_end_bb: handBB > 0 ? Math.round(endStack / handBB * 10) / 10 : null,
                     cards: holeCards, eval_rank: handEval, is_muck_leak: (sd && sd.isMuck && sd.cards && sd.cards !== 'xx xx') ? 1 : 0,
                     is_sitting_out: this.sittingOutSeats.has(sn) ? 1 : 0, busted: endStack === 0 ? 1 : 0,
+                    hs_percentile: hsPct, flop_outs: flopOuts,
+                    flop_outs_pct: (flopOuts !== null && flopOuts !== undefined) ? (flopOuts / 47 * 100).toFixed(1) : null,
                     // v62 B4: единая формула с профилем/сканером — bullets × baseBuyin;
                     // серверное s.spent остаётся фолбэком при неизвестном baseBuyin,
                     // чтобы при промахе кэша не рапортовать 0₽.
@@ -936,6 +2037,37 @@ javascript:(function(){
                 this.playersCountedThisHand.add(up.cleanNick);
             }
 
+            // v65 M0/M1 + v65.1 F3/F6: решения этой руки → профили целей
+            let decisions = this.analyzeHandDecisions();
+            decisions.nodeActions.forEach((keysMap, cleanNick) => {
+                let prof = getOrCreatePlayerProfile(cleanNick);
+                if (!prof.nodeActionHist) prof.nodeActionHist = new Map();
+                keysMap.forEach((v, key) => {
+                    let stat = prof.nodeActionHist.get(key) || { n: 0, agg: 0, pas: 0, fld: 0, szN: 0, szSum: 0, szSq: 0, tN: 0, tSum: 0, tSq: 0 };
+                    stat.n++;
+                    stat[v.bucket]++;
+                    // v65.1 F3: сайзинг/тайминг — сырьё σ-метрик RTA-уверенности
+                    if (v.potPct) { stat.szN++; stat.szSum += v.potPct; stat.szSq += v.potPct * v.potPct; }
+                    if (v.timeSec !== null && v.timeSec !== undefined) { stat.tN++; stat.tSum += v.timeSec; stat.tSq += v.timeSec * v.timeSec; }
+                    prof.nodeActionHist.set(key, stat);
+                });
+                prof.nodeObsTotal = (prof.nodeObsTotal || 0) + keysMap.size;
+            });
+            decisions.foldVsCbet.forEach((v, cleanNick) => {
+                let prof = getOrCreatePlayerProfile(cleanNick);
+                prof.foldToCbetOpp += v.opp;
+                prof.foldToCbet += v.fold;
+            });
+            // v65.1 F6: контбеты/донки цели — поведение агрессора на флопе
+            decisions.cbets.forEach((v, cleanNick) => {
+                let prof = getOrCreatePlayerProfile(cleanNick);
+                prof.cbetMade = (prof.cbetMade || 0) + v.made;
+            });
+            decisions.donks.forEach((v, cleanNick) => {
+                let prof = getOrCreatePlayerProfile(cleanNick);
+                prof.donksMade = (prof.donksMade || 0) + v.made;
+            });
+
             let conserved = (startTotal === endTotal);
             let calculatedPotTotal = Array.from(this.investedPerSeat.values()).reduce((a, b) => a + b, 0);
 
@@ -951,6 +2083,8 @@ javascript:(function(){
                 timestamp: new Date().toISOString(), level: this.handLevel, dealer_seat: this.dealer,
                 seat_base: seatBase, table_max: tableMax,
                 board: this.board.join(' '), board_texture: classifyBoardTexture(this.board),
+                // v65 M4: натс-лестница борда по улицам {flop/turn/river: tag}
+                board_nuts: (this.board.length >= 3) ? computeBoardNuts(this.board) : null,
                 pot_total: calculatedPotTotal, pot_bb: handBB > 0 ? Math.round(calculatedPotTotal / handBB * 10) / 10 : null,
                 winners: this.winners, knockout_bounties: this.knockoutBounties, timeline: this.timeline,
                 // v64.3 P6: канонические GTO-ключи узлов решений по улицам
@@ -1427,7 +2561,7 @@ javascript:(function(){
         let url = URL.createObjectURL(blob);
         let a = document.createElement('a');
         a.href = url;
-        a.download = `PokerStars_GTO_v643_${Date.now()}.txt`;
+        a.download = `PokerStars_GTO_v651_${Date.now()}.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1446,12 +2580,69 @@ javascript:(function(){
         let url = URL.createObjectURL(blob);
         let a = document.createElement('a');
         a.href = url;
-        a.download = `Scalpel_Dense_AI_v643_${Date.now()}.dsl`;
+        a.download = `Scalpel_Dense_AI_v651_${Date.now()}.dsl`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         // v61 F1 (BUG-MEMORY): release the blob reference — the download has started.
         setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 10000);
+    };
+
+    // ── v65 M0 (GTO-KEYS-EXPORT) + v65.1 F3: компактный TSV узлов решений ──
+    // Гистограмма «первое действие на улице» по каноническим GTO-ключам
+    // каждой цели: ключ узла → n/agg/pas/fld + сайзинг/тайминг. С v65.1
+    // RTA-вердикт считается В ПАМЯТИ (evaluateRTAConfidence, ≥8 узлов /
+    // 32+ решений) и живёт бейджем в HUD; TSV — бонус для оффлайн-анализа,
+    // а не замена (заголовок игрока несёт и mix-статистику, и [RTA PROB]).
+    window.__stalkerExportGTOKeys = function() {
+        try {
+            let playersWithNodes = Array.from(state.stalkedPlayers.values())
+                .filter(p => p.nodeActionHist && p.nodeActionHist.size > 0);
+            if (playersWithNodes.length === 0) {
+                alert('Нет собранных GTO-ключей узлов (нужны завершённые раздачи с целями)!');
+                return;
+            }
+            let lines = [];
+            lines.push('# SCALPEL v65.1 — GTO NODE KEYS (compact TSV)');
+            lines.push('# generated: ' + new Date().toISOString());
+            lines.push('# format: player<TAB>node_key<TAB>n<TAB>agg<TAB>pas<TAB>fld<TAB>agg%');
+            lines.push('# agg=BET/RAISE/aggr-ALLIN  pas=CHECK/CALL/passive-ALLIN  fld=FOLD');
+            lines.push('# node decision = первое действие игрока на улице (состояние на входе в узел)');
+            lines.push('# сырые ключи по рукам — в JSON-экспорте (gto_node_keys каждой руки)');
+            playersWithNodes.forEach(p => {
+                let nodes = Array.from(p.nodeActionHist.entries());
+                let obs = nodes.reduce((acc, kv) => acc + kv[1].n, 0);
+                let qual = nodes.filter(kv => kv[1].n >= 4);
+                let mixed = qual.filter(kv => { let f = kv[1].agg / kv[1].n; return f >= 0.55 && f <= 0.80; });
+                let mixPct = qual.length > 0 ? Math.round(mixed.length / qual.length * 100) : 0;
+                lines.push('# player: ' + p.cleanNick + ' | hands: ' + (p.handsCount || 0) + ' | nodes: ' + nodes.length +
+                    ' | obs: ' + obs + ' | nodes>=4: ' + qual.length + ' | mixed(agg 55-80%): ' + mixed.length +
+                    ' | mix: ' + mixPct + '% (mix — описательная; вердикт — строка RTA ниже)');
+                // v65.1 F3: RTA-вердикт из памяти (не только TSV)
+                let rtaE = evaluateRTAConfidence(p.nodeActionHist);
+                lines.push('# RTA: ' + (rtaE.eligible
+                    ? ('[RTA PROB: ' + rtaE.prob + '%] (чист. ' + rtaE.pureRate + '%, σсайз ' + rtaE.sizeStick + '%, σврем ' + rtaE.timeStick + '%)')
+                    : ('недостаточно данных — ' + rtaE.progress)));
+                nodes.sort((a, b) => b[1].n - a[1].n).forEach(kv => {
+                    let s = kv[1];
+                    let aggPct = s.n > 0 ? (s.agg / s.n * 100).toFixed(1) : '0.0';
+                    lines.push([p.cleanNick, kv[0], s.n, s.agg, s.pas, s.fld, aggPct].join('\t'));
+                });
+            });
+            let txt = lines.join('\n') + '\n';
+            let blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+            let url = URL.createObjectURL(blob);
+            let a = document.createElement('a');
+            a.href = url;
+            a.download = `Scalpel_GTO_node_keys_v651_${Date.now()}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            // v61 F1 (BUG-MEMORY): release the blob reference
+            setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 10000);
+        } catch (e) {
+            alert('Ошибка экспорта GTO-ключей: ' + e.message);
+        }
     };
 
     // ── ТОЧНЫЙ ЭКСПОРТ JSON ───────────────────────────────────────────
@@ -1464,6 +2655,8 @@ javascript:(function(){
                 liveTournamentsCount: state.liveTournaments.size,
                 outboxQueueLength: state.outboxQueue.length,
                 recorded_hands_count: state.completedHandsArchive.length,
+                // v65.1 F4 (MODULE 3): срез модели выживания (n_alive/n_itm/p_itm)
+                module3_survival: buildModule3Snapshot(),
                 debug_engine_log: state.engineDebugLog,
                 chat_logs: state.chatLogs,
                 recorded_hands: state.completedHandsArchive,
@@ -1496,6 +2689,19 @@ javascript:(function(){
                     stealFacedSBOpp: p.stealFacedSBOpp || 0,
                     foldToStealBBPct: (p.stealFacedBBOpp || 0) > 0 ? parseFloat(((p.stealFacedBB || 0) / (p.stealFacedBBOpp || 1) * 100).toFixed(1)) : 0,
                     foldToStealSBPct: (p.stealFacedSBOpp || 0) > 0 ? parseFloat(((p.stealFacedSB || 0) / (p.stealFacedSBOpp || 1) * 100).toFixed(1)) : 0,
+                    // v65 M1: fold-to-cbet (числитель/знаменатель/процент)
+                    foldToCbet: p.foldToCbet || 0,
+                    foldToCbetOpp: p.foldToCbetOpp || 0,
+                    foldToCbetPct: (p.foldToCbetOpp || 0) > 0 ? parseFloat(((p.foldToCbet || 0) / (p.foldToCbetOpp || 1) * 100).toFixed(1)) : 0,
+                    // v65 M0 + v65.1 F3: гистограмма GTO-узлов с сайзингом/таймингом
+                    gtoNodes: (p.nodeActionHist && p.nodeActionHist.size > 0) ? Array.from(p.nodeActionHist.entries()).sort((a, b) => b[1].n - a[1].n).map(kv => ({ key: kv[0], n: kv[1].n, agg: kv[1].agg, pas: kv[1].pas, fld: kv[1].fld, agg_pct: kv[1].n > 0 ? parseFloat((kv[1].agg / kv[1].n * 100).toFixed(1)) : 0, sz_n: kv[1].szN || 0, sz_mean_pct: (kv[1].szN || 0) > 0 ? Math.round((kv[1].szSum || 0) / kv[1].szN * 10) / 10 : null, t_n: kv[1].tN || 0, t_mean_sec: (kv[1].tN || 0) > 0 ? Math.round((kv[1].tSum || 0) / kv[1].tN * 10) / 10 : null })) : [],
+                    // v65.1 F3 (аудит #3): RTA-уверенность — в памяти, не только TSV
+                    rta: (function () { let r = evaluateRTAConfidence(p.nodeActionHist); return { eligible: r.eligible, prob: r.prob, distinct_nodes: r.distinctNodes, decisions: r.decisions, pure_rate_pct: r.pureRate, size_stick_pct: r.sizeStick, time_stick_pct: r.timeStick, progress: r.progress }; })(),
+                    // v65.1 F5 (аудит #5): π-KL эксплойт-совет
+                    exploit: (function () { let x = computePiKLExploit(p); return x ? { leak: x.leak, mode: x.mode, size_x: x.sizeX, fold_pct: x.f, n: x.n, kl: x.kl, w: x.w, label: x.label || null, reason: x.reason || null } : null; })(),
+                    // v65.1 F6: контбеты/донки
+                    cbetMade: p.cbetMade || 0,
+                    donksMade: p.donksMade || 0,
                     entries: Array.from(p.entries.values())
                 };
             });
@@ -1504,7 +2710,7 @@ javascript:(function(){
             let url = URL.createObjectURL(blob);
             let a = document.createElement('a');
             a.href = url;
-            a.download = `pokerdom_v64_3_omni_${Date.now()}.json`;
+            a.download = `pokerdom_v65_1_omni_${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1515,16 +2721,346 @@ javascript:(function(){
         }
     };
 
+    // ── v65 M3 (SURVIVAL): обратный отсчёт жизни стека цели в MTT ──────
+    // Честное подмножество спеки Module 3: симуляция расхода стека при
+    // чистом фолде с эскалацией блайндов. Кривая блайндов — из GetSchedule
+    // (tourn.levelCurve/levelDetails); за пределами расписания — эвристика
+    // ×1.28/уровень; 70 рук/час; walk-фактор 0.30 (30% больших блайндов
+    // доживают до шоуддауна без борьбы — W в формуле спеки). ITM-«вероят-
+    // ность» и ICM-фриз ОТКЛОНЕНЫ: nAlive/nITM не наблюдаются парсируемым
+    // протоколом, рисовать «99%» из эвристик — ложная точность.
+    function calculateTournamentSurvival(stackChips, curLevel, levelCurve, levelDetails, seatsAtTable) {
+        const SEC_PER_HAND = 3600 / 70;
+        const BB_WALK_RATE = 0.30;
+        const LEVEL_FALLBACK_MULT = 1.28;
+        const DEFAULT_ANTE_RATIO = 0.125;
+        const seats = Math.max(2, Math.min(10, seatsAtTable || 8));
+
+        let bb = Math.max(1, Math.round(curLevel.bb || 100));
+        let sb = Math.max(1, Math.round(curLevel.sb || Math.round(bb / 2)));
+        let ante = Math.max(0, Math.round(curLevel.ante || 0));
+        let anteRatio = ante > 0 ? (ante / bb) : DEFAULT_ANTE_RATIO;
+        let lvlNum = curLevel.number || 1;
+        let levelSec = (levelDetails && levelDetails.has(lvlNum) && levelDetails.get(lvlNum).sec) || 600;
+
+        let simStack = Math.max(0, Math.round(stackChips));
+        let secLeft = levelSec;
+        let handsSurvived = 0;
+
+        while (simStack > 0 && handsSurvived < 300) {
+            const orbitGross = sb + bb + seats * ante;
+            const walkSavings = BB_WALK_RATE * (sb + (seats - 1) * ante);
+            const orbitNet = Math.max(bb, orbitGross - walkSavings);
+            const costPerHand = orbitNet / seats;
+            if (simStack < costPerHand) { simStack = 0; break; }
+            simStack -= costPerHand;
+            handsSurvived++;
+            secLeft -= SEC_PER_HAND;
+            if (secLeft <= 0) {
+                lvlNum++;
+                let d = (levelDetails && levelDetails.get(lvlNum)) || null;
+                let curveBB = (levelCurve && levelCurve.get(lvlNum)) || null;
+                if (curveBB) {
+                    bb = curveBB;
+                    sb = (d && d.sb) ? d.sb : Math.round(bb / 2);
+                    ante = (d && d.ante !== undefined) ? d.ante : Math.round(bb * anteRatio);
+                } else {
+                    bb = Math.round(bb * LEVEL_FALLBACK_MULT);
+                    sb = Math.round(bb / 2);
+                    ante = Math.round(bb * anteRatio);
+                }
+                levelSec = (d && d.sec) ? d.sec : 600;
+                secLeft = levelSec;
+            }
+        }
+
+        const orbitsSurvived = handsSurvived / seats;
+        const lifeMinutes = Math.round(handsSurvived * SEC_PER_HAND / 60);
+        // p_AA = 6/1326; p_premium (TT+, AK, AQs) = 50/1326 — спека 3.3
+        const probAA = (1 - Math.pow(1 - 6 / 1326, handsSurvived)) * 100;
+        const probPremium = (1 - Math.pow(1 - 50 / 1326, handsSurvived)) * 100;
+
+        return {
+            handsSurvived: handsSurvived,
+            orbitsSurvived: orbitsSurvived.toFixed(1),
+            lifeMinutes: lifeMinutes,
+            probAA: probAA.toFixed(1),
+            probPremium: probPremium.toFixed(1),
+            summary: orbitsSurvived.toFixed(1) + ' орб (~' + lifeMinutes + ' мин) • AA ' + probAA.toFixed(1) + '% • Прем ' + probPremium.toFixed(1) + '%'
+        };
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+       v65.1 DOM-СЕРВИСЫ F1/F3/F4/F5: LIVE-анализ, RTA-бейдж, π-KL эксплойт,
+       модель выживания N_alive/N_ITM, парсинг призов, ленивая математика рук
+       ══════════════════════════════════════════════════════════════════ */
+
+    // v65.1 F1 (аудит #1, MODULE-4-LIVE): оценка В РУКЕ — вызывается из
+    // updateBoardFromXml/updateUserCardsFromXml на столах ИГРОКА. Токен-
+    // guard: улица ушла вперёд → результат устарел и не рендерится.
+    // Натс = вычисление по маскам (O(1)); HS = МК 260; ауты = 47 проходов.
+    // Всё внутри ChunkQueue (слоты ≤6мс) — фриз потока невозможен.
+    function scheduleLiveBoardAnalysis(ctx) {
+        if (state.isDestroyed) return;
+        if (!ctx || !ctx.userCards || ctx.userCards.length !== 2 || !ctx.board || ctx.board.length < 3) return;
+        let token = ++ctx.liveAnalysisToken;
+        let street = ctx.street, board = ctx.board.slice(), hole = ctx.userCards.slice();
+        ChunkQueue.push(function () {
+            if (state.isDestroyed || token !== ctx.liveAnalysisToken) return;
+            try {
+                let boardNut = computeBoardNutsFast(board, null);          // классический натс борда
+                let villainNut = computeBoardNutsFast(board, hole);        // натс, доступный вилленам (карты героя мертвы)
+                let heroEval = evalCardsFast(hole.concat(board));
+                let hs = computeHsPercentileMC(hole, board, 260);
+                let outs = (board.length === 3) ? computeFlopOuts(hole.join(' '), board) : null;
+                ctx.liveAnalysis = {
+                    street: street, board: board, hole: hole,
+                    nutTag: boardNut ? boardNut.tag : null, nutLabel: boardNut ? boardNut.label : '',
+                    villainNutTag: villainNut ? villainNut.tag : null,
+                    heroTag: heroEval.tag,
+                    heroHasNuts: boardNut ? (heroEval.score >= boardNut.score) : false,
+                    hsPct: hs,
+                    outs: outs,
+                    outsPct: (outs !== null && outs !== undefined) ? +(outs / 47 * 100).toFixed(1) : null,
+                    ts: Date.now()
+                };
+                updateHUD();
+            } catch (e) { logDebug('LIVE_ANALYSIS', 'ошибка: ' + (e && e.message)); }
+        });
+    }
+
+    function renderLiveAnalysisCard(ctx) {
+        let la = ctx.liveAnalysis;
+        if (!la) return '';
+        let catDelta = categoryRankOfTag(la.nutTag) - categoryRankOfTag(la.heroTag);
+        let catTxt = la.heroHasNuts
+            ? '<b style="color:#22c55e;">У ВАС НАТС</b>'
+            : (catDelta > 0 ? '−' + catDelta + ' кат. до натса' : '<b style="color:#4ade80;">не слабее натса</b>');
+        let outsTxt = (la.outs !== null && la.outs !== undefined)
+            ? ' • ауты: <b style="color:#38bdf8;">' + la.outs + '</b> (' + la.outsPct + '% до терна)' : '';
+        return '<div style="background:#04121f;border:1px solid #06b6d4;border-radius:6px;padding:5px 7px;margin-bottom:6px;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+            '<span style="color:#06b6d4;font-weight:bold;font-size:11px;">🃏 LIVE ' + escapeHtml(ctx.name) + ' • ' + la.street + '</span>' +
+            '<span style="font-size:11px;color:#fde047;">' + escapeHtml(la.hole.join(' ')) + '</span>' +
+            '</div>' +
+            '<div style="font-size:10px;color:#cbd5e1;margin-top:2px;">Борд: <b>' + escapeHtml(la.board.join(' ')) + '</b> • NATS: <b style="color:#f472b6;">' + escapeHtml(la.nutTag || '—') + '</b> ' + catTxt + '</div>' +
+            '<div style="font-size:10px;color:#94a3b8;">Рука: <b>' + escapeHtml(la.heroTag) + '</b> • HS: <b style="color:#22c55e;">' + (la.hsPct !== null && la.hsPct !== undefined ? la.hsPct + '%' : '—') + '</b>' + outsTxt + ' • у вилленов максимум: ' + escapeHtml(la.villainNutTag || '—') + '</div>' +
+            '</div>';
+    }
+
+    // v65.1 F3 (аудит #3): бейдж «⚠️ [RTA PROB: XX%]» в карточке цели —
+    // кэш по (руки × узлы × наблюдения), пересчёт только при новых данных
+    function getRtaBadge(p) {
+        try {
+            let key = (p.handsCount || 0) + '|' + (p.nodeActionHist ? p.nodeActionHist.size : 0) + '|' + (p.nodeObsTotal || 0);
+            if (p.__rtaCache && p.__rtaCache.key === key) return p.__rtaCache.badge;
+            let r = evaluateRTAConfidence(p.nodeActionHist);
+            let badge = null;
+            if (r.eligible) {
+                let color = r.prob >= 60 ? '#f87171' : (r.prob >= 35 ? '#fbbf24' : '#94a3b8');
+                let mark = r.prob >= 60 ? '⚠️' : (r.prob >= 35 ? '◉' : '○');
+                badge = '<div style="font-size:10px;margin:2px 0;color:' + color + ';">' + mark +
+                    ' [RTA PROB: ' + r.prob + '%] <small style="color:#64748b;">(' + r.distinctNodes + ' кл., ' + r.decisions +
+                    ' реш., чист. ' + r.pureRate + '%, σсайз ' + r.sizeStick + '%, σврем ' + r.timeStick + '%)</small></div>';
+            } else if (r.distinctNodes > 0) {
+                badge = '<div style="font-size:9px;color:#64748b;">RTA: ' + r.progress + '</div>';
+            }
+            p.__rtaCache = { key: key, badge: badge };
+            return badge;
+        } catch (e) { return null; }
+    }
+
+    // v65.1 F5 (аудит #5): строка «⚔️ ЭКСПЛОЙТ» в карточке цели
+    function getExploitLine(p) {
+        try {
+            let key = (p.handsCount || 0) + '|' + (p.foldToCbetOpp || 0) + '|' + (p.stealFacedBBOpp || 0) + '|' + (p.nodeObsTotal || 0);
+            if (p.__explCache && p.__explCache.key === key) return p.__explCache.badge;
+            let x = computePiKLExploit(p);
+            let badge = null;
+            if (x && x.mode) {
+                let color = x.w >= 0.6 ? '#f59e0b' : '#94a3b8';
+                badge = '<div style="font-size:10px;margin:2px 0;color:' + color + '">⚔️ ЭКСПЛОЙТ: ' + (x.mode === 'BLUFF' ? 'блеф' : 'вэлью') +
+                    ' <b>' + x.sizeX + '×пот</b> — фолд ' + x.f + '% (n=' + x.n + ', KL=' + x.kl + ', w=' + x.w + ')</div>';
+            } else if (x && x.reason && ((p.foldToCbetOpp || 0) >= 8 || (p.stealFacedBBOpp || 0) >= 8 || (p.nodeObsTotal || 0) >= 12)) {
+                badge = '<div style="font-size:9px;color:#64748b;">⚔️ ЭКСПЛОЙТ: ' + escapeHtml(x.reason) + '</div>';
+            }
+            p.__explCache = { key: key, badge: badge };
+            return badge;
+        } catch (e) { return null; }
+    }
+
+    // v65.1 F4 (аудит #4): строка модели выживания в живой записи цели —
+    // P(ITM|SitOut) + ICM FREEZE; кэш 45с на запись, пересчёт в чанках
+    function getModule3Line(e, liveCtx) {
+        try {
+            if (!e.tournId || (e.stack || 0) <= 0 || e.isBusted) return null;
+            let tourn = state.liveTournaments.get(e.tournId);
+            if (!tourn || !tourn.alivePlayers || !tourn.prizesITM) return null;
+            let nAlive = tourn.alivePlayers, nITM = tourn.prizesITM;
+            let key = e.stack + '|' + nAlive + '|' + nITM;
+            let c = e.__m3cache;
+            if (c && c.key === key && (Date.now() - c.ts) < 45000 && c.text !== null) return c.text;
+            let queued = c && c.key === key && c.pending && (Date.now() - c.tsQ) < 30000;
+            if (!queued) {
+                if (!c) c = { key: key, ts: 0, tsQ: 0, text: null, pending: false };
+                e.__m3cache = { key: key, ts: c.ts, tsQ: Date.now(), text: c.text, pending: true };
+                let stack = e.stack, tournRef = tourn, liveBB = e.currentBB || 500, liveLevel = tourn.currentLevel || 1;
+                if (liveCtx) {
+                    if (liveCtx.getActiveHandBB && liveCtx.getActiveHandBB() > 0) liveBB = liveCtx.getActiveHandBB();
+                    if (liveCtx.level && liveCtx.level.bb > 0) {
+                        liveLevel = { sb: liveCtx.level.sb || Math.round(liveBB / 2), bb: liveBB, ante: liveCtx.level.ante || 0, number: liveCtx.level.number || 1 };
+                    } else {
+                        liveLevel = { sb: Math.round(liveBB / 2), bb: liveBB, ante: Math.round(liveBB * 0.125), number: tourn.currentLevel || 1 };
+                    }
+                } else {
+                    liveLevel = { sb: Math.round(liveBB / 2), bb: liveBB, ante: Math.round(liveBB * 0.125), number: tourn.currentLevel || 1 };
+                }
+                let entryRef = e;
+                ChunkQueue.push(function () {
+                    try {
+                        let icm = icmFreezeFactor(stack, liveLevel, tournRef.levelCurve || null, tournRef.levelDetails || null, nAlive, nITM, tournRef.fieldAvgStack || stack);
+                        let freezeTxt = icm.freeze ? ' • 🧊 <b style="color:#38bdf8;">ICM FREEZE ×' + icm.factor + '</b>' : '';
+                        let text = 'P(ITM сидя): <b style="color:' + (icm.pITM >= 40 ? '#22c55e' : '#fbbf24') + ';">' + icm.pITM + '%</b> (живых ' + nAlive + ' / itm ' + nITM +
+                            (tournRef.fieldAvgStack ? ', ср. стек ' + formatChips(tournRef.fieldAvgStack) : '') + ')' + freezeTxt;
+                        entryRef.__m3cache = { key: key, ts: Date.now(), tsQ: Date.now(), text: text, pending: false };
+                        updateHUD();
+                    } catch (err) {}
+                });
+            }
+            return (c && c.key === key) ? c.text : null;
+        } catch (err) { return null; }
+    }
+
+    // v65.1 F4 (аудит #4): парсер призовой структуры → N_ITM (общий для
+    // сканера и handleIncoming). <Prize placeFrom/placeTo/amount>, счётчики
+    // <Prizes count/paid/placesPaid>.
+    function parsePrizesInto(xml, tId) {
+        try {
+            if (!xml || !tId) return;
+            let itm = 0;
+            let payouts = [];
+            let pm;
+            let re = /<Prize\s+([^>]+?)\/>/g;
+            while ((pm = re.exec(xml)) !== null) {
+                let from = iattr(pm[1], 'placeFrom');
+                if (from === null) from = iattr(pm[1], 'from');
+                let to = iattr(pm[1], 'placeTo');
+                if (to === null) to = iattr(pm[1], 'to');
+                if (to === null) to = iattr(pm[1], 'place');
+                let amount = fattr(pm[1], 'amount');
+                if (to !== null && to > itm) itm = to;
+                if (from !== null && to !== null) payouts.push({ from: from, to: to, amount: amount });
+                if (payouts.length > 60) break;
+            }
+            let cnt = iattr(xml, 'count') || iattr(xml, 'prizesCount') || iattr(xml, 'paid') || iattr(xml, 'placesPaid') || 0;
+            if (cnt > itm) itm = cnt;
+            if (itm > 0) {
+                let lt = state.liveTournaments.get(tId);
+                if (lt) { lt.prizesITM = itm; lt.prizePayouts = payouts.slice(0, 40); }
+                else {
+                    let tc = state.tournamentCache.get(tId);
+                    if (tc) { tc.prizesITM = itm; tc.prizePayouts = payouts.slice(0, 40); }
+                    else state.tournamentCache.set(tId, { name: 'MTT', baseBuyin: 0, isPKO: false, prizesITM: itm, prizePayouts: payouts.slice(0, 40) });
+                }
+                updateHUD();
+            }
+        } catch (e) {}
+    }
+
+    // v65.1 F2 (аудит #2): ленивая математика архивной руки — точный
+    // hs_percentile (перечисление с битовым оценщиком) и flop_outs
+    // дописываются в чанках ≤6мс после архивации. 120 одновременных
+    // EndHand раскладываются на слоты — фриза главного потока нет.
+    function queueLazyHandMath(hand) {
+        if (!hand || !hand.players) return;
+        ChunkQueue.push(function () {
+            try {
+                let boardArr = String(hand.board || '').trim().split(/\s+/).filter(Boolean);
+                for (let i = 0; i < hand.players.length; i++) {
+                    let p = hand.players[i];
+                    if (!p.cards || p.cards === 'xx xx' || boardArr.length < 3) continue;
+                    if (p.hs_percentile === null || p.hs_percentile === undefined) {
+                        p.hs_percentile = computeHsPercentile(p.cards, boardArr);
+                    }
+                    if (p.flop_outs === null || p.flop_outs === undefined) {
+                        p.flop_outs = computeFlopOuts(p.cards, boardArr);
+                        if (p.flop_outs !== null && p.flop_outs !== undefined) {
+                            p.flop_outs_pct = (p.flop_outs / 47 * 100).toFixed(1);
+                        }
+                    }
+                }
+            } catch (e) {}
+        });
+    }
+
+    // v65.1 F4: срез Module 3 для JSON-экспорта (синхронно по клику кнопки)
+    function buildModule3Snapshot() {
+        let out = [];
+        try {
+            state.stalkedPlayers.forEach(function (p) {
+                p.entries.forEach(function (e) {
+                    if (!e.tournId || (e.stack || 0) <= 0 || e.isBusted) return;
+                    let tourn = state.liveTournaments.get(e.tournId);
+                    if (!tourn || !tourn.alivePlayers || !tourn.prizesITM) return;
+                    let bbv = e.currentBB || 500;
+                    let lvl = { sb: Math.round(bbv / 2), bb: bbv, ante: Math.round(bbv * 0.125), number: tourn.currentLevel || 1 };
+                    let pITM = pITMGivenSitOut(e.stack, lvl, tourn.levelCurve || null, tourn.levelDetails || null, tourn.alivePlayers, tourn.prizesITM, tourn.fieldAvgStack || e.stack, 160);
+                    out.push({
+                        cleanNick: p.cleanNick, tournId: e.tournId, stack: e.stack,
+                        n_alive: tourn.alivePlayers, n_itm: tourn.prizesITM,
+                        field_avg_stack: tourn.fieldAvgStack || null,
+                        p_itm_sitout_pct: pITM,
+                        itm_places: (tourn.prizePayouts || []).slice(0, 10)
+                    });
+                });
+            });
+        } catch (e) {}
+        return out;
+    }
+
+    // v65.1 BENCH (аудит-требование): верифицированный бенчмарк — вызов
+    // window.__stalkerBench() в консоли. Эквивалентность быстрый-натс ↔
+    // перебор, скорость в мкс, стресс 120 столов через чанки, longtask.
+    window.__stalkerBench = async function () {
+        try {
+            let longTasks = [];
+            let po = null;
+            if (typeof PerformanceObserver !== 'undefined') {
+                try {
+                    po = new PerformanceObserver(function (list) {
+                        list.getEntries().forEach(function (en) { longTasks.push(Math.round(en.duration)); });
+                    });
+                    po.observe({ entryTypes: ['longtask'] });
+                } catch (e) {}
+            }
+            let report = await runBenchCore({ boardsEq: 400, boardsSpeed: 1200, stressTables: 120 });
+            if (po) { try { po.disconnect(); } catch (e) {} }
+            report.browserLongTasks = longTasks;
+            report.zeroStall = longTasks.length === 0 && report.stress.maxSliceMs < 8;
+            let txt = 'SCALPEL v65.1 BENCH\n' +
+                'Эквивалентность (натс на масках vs перебор v65.0): ' + report.mismatches.length + ' расхождений из ' + report.eqChecks + ' проверок\n' +
+                'Скорость натса (ривер): avg ' + report.fastAvgUs + 'µs, max ' + report.fastMaxUs + 'µs (перебор v65.0: ' + report.bruteAvgMs + 'ms ≈ ' + report.bruteEval5Calls + ' вызовов eval5)\n' +
+                'HS-перцентиль (МК 260): avg ' + report.mcAvgUs + 'µs\n' +
+                'Стресс 120 столов: слотов ' + report.stress.slices + ', макс. слот ' + report.stress.maxSliceMs + 'мс (бюджет 6мс), всего ' + report.stress.totalMs + 'мс\n' +
+                'Long tasks (>50мс): ' + longTasks.length + '\n' +
+                'VERDICT: ' + (report.zeroStall ? '✅ ZERO UI THREAD STALLING' : '❌ ЕСТЬ ФРИЗЫ');
+            console.log('%c📊 [SCALPEL v65.1 BENCH]', 'color:#06b6d4;font-weight:bold;', report);
+            console.log(txt);
+            try { alert(txt); } catch (e) {}
+            return report;
+        } catch (e) { console.error('[SCALPEL BENCH]', e); return null; }
+    };
+
     // ── ГРАФИЧЕСКИЙ ИНТЕРФЕЙС HUD ─────────────────────────────────────
     let ui = document.createElement('div');
-    ui.id = 'stalker-hud-v643';
+    ui.id = 'stalker-hud-v651';
     ui.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);width:95vw;max-width:470px;z-index:999999999;background:rgba(10,15,25,0.98);color:#fff;font-family:-apple-system,BlinkMacSystemFont,monospace;font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid #06b6d4;box-shadow:0 12px 40px rgba(0,0,0,0.95);backdrop-filter:blur(12px);box-sizing:border-box;';
     
     ui.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;">
             <div style="display:flex;align-items:center;gap:6px;">
                 <span style="color:#06b6d4;font-size:13px;">🎯</span>
-                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v64.3 APEX-IMPERATOR</strong>
+                <strong style="color:#06b6d4;font-size:12px;">SCALPEL v65.1 ULTIMATE</strong>
                 <small id="st-hf-status" style="font-size:9px;margin-left:4px;color:#94a3b8;">HF: Иниц...</small>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
@@ -1544,10 +3080,11 @@ javascript:(function(){
                     <span>Найдено целей: <b id="st-targets-found" style="color:#4ade80;">0</b></span>
                 </div>
             </div>
+            <div id="st-live-panel" style="margin-bottom:8px;"></div>
             <div id="st-targets-list" style="max-height:240px;overflow-y:auto;background:#030712;padding:6px;border-radius:6px;border:1px solid #1e293b;margin-bottom:8px;color:#cbd5e1;">
                 Сканирование сетки турниров...
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
                 <button onclick="window.__stalkerExportJSON()" style="padding:7px 2px;background:linear-gradient(90deg,#0891b2,#0284c7);color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:9px;cursor:pointer;">
                     📥 JSON (Raw)
                 </button>
@@ -1556,6 +3093,9 @@ javascript:(function(){
                 </button>
                 <button onclick="window.__stalkerExportDSL()" style="padding:7px 2px;background:linear-gradient(90deg,#8b5cf6,#6366f1);color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:9px;cursor:pointer;">
                     💎 Dense DSL
+                </button>
+                <button onclick="window.__stalkerExportGTOKeys()" style="padding:7px 2px;background:linear-gradient(90deg,#db2777,#be185d);color:#fff;border:none;border-radius:6px;font-weight:bold;font-size:9px;cursor:pointer;">
+                    🧠 GTO Keys (.txt)
                 </button>
             </div>
         </div>
@@ -1605,6 +3145,26 @@ javascript:(function(){
             if (specEl) specEl.innerText = `${openSpectators} столов в фоне`;
             if (handsEl) handsEl.innerHTML = `Раздач: <b>${state.completedHandsArchive.length}</b>`;
 
+            // v65.1 F1 (аудит #1, MODULE-4-LIVE): панель живого анализа
+            // борда на столах ИГРОКА — натс/HS/ауты В РУКЕ, не пост-мортем
+            let liveEl = document.getElementById('st-live-panel');
+            if (liveEl) {
+                let liveHtml = '';
+                state.sockets.userTables.forEach(function (uws, tid) {
+                    let lctx = state.activeTables.get(tid);
+                    if (lctx && lctx.hand && lctx.liveAnalysis) {
+                        liveHtml += renderLiveAnalysisCard(lctx);
+                    } else if (lctx && lctx.hand && lctx.userCards && lctx.userCards.length === 2 && lctx.board && lctx.board.length >= 3) {
+                        liveHtml += '<div style="background:#04121f;border:1px dashed #06b6d4;border-radius:6px;padding:5px 7px;margin-bottom:6px;color:#64748b;font-size:10px;">🃏 LIVE ' + escapeHtml(lctx.name) + ' • расчёт бита масок…</div>';
+                    }
+                });
+                let sig = liveHtml.length + ':' + (liveHtml ? liveHtml.slice(0, 96) : '');
+                if (sig !== (liveEl.getAttribute('data-sig') || '')) {
+                    liveEl.innerHTML = liveHtml;
+                    liveEl.setAttribute('data-sig', sig);
+                }
+            }
+
             if (state.stalkedPlayers.size > 0) {
                 // =============================================================
                 // v64.2 Z2 (HUD-ERGO): динамическая приоритизация для экрана
@@ -1639,12 +3199,20 @@ javascript:(function(){
 
                     let isPlayerInGame = Array.from(p.entries.values()).some(isLiveEntry);
 
+                    // v65.1 F3/F5 (аудиты #3/#5): RTA-бейдж и π-KL эксплойт —
+                    // в самой карточке цели, вычисление в памяти с кэшем
+                    let rtaBadge = null, explLine = null;
+                    try { rtaBadge = getRtaBadge(p); } catch (err) {}
+                    try { explLine = getExploitLine(p); } catch (err) {}
+
                     html += `<div style="border-bottom:1px solid #1e293b;padding:6px 0;margin-bottom:4px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                             <span style="color:${isPlayerInGame ? '#fde047' : '#94a3b8'};font-size:12px;">
                                 ${isPlayerInGame ? '🎯' : '⚪'} <b>${escapeHtml(p.cleanNick)}</b> ${statsStr}
                             </span>
                         </div>`;
+                    if (rtaBadge) html += rtaBadge;
+                    if (explLine) html += explLine;
 
                     // v64.2 Z2: активные столы выше выбывших турниров
                     let sortedEntries = Array.from(p.entries.values()).sort((a, b) => {
@@ -1662,6 +3230,32 @@ javascript:(function(){
                         let liveCtx = e.tableId ? state.activeTables.get(e.tableId) : null;
                         let liveBB = (liveCtx && liveCtx.getActiveHandBB() > 0) ? liveCtx.getActiveHandBB() : (e.currentBB || 500);
                         let realStackBB = (liveBB > 0 && e.stack > 0 && !isActuallyBusted) ? (Math.round((e.stack / liveBB) * 10) / 10) : 0;
+
+                        // v65 M3 (SURVIVAL): сколько орбит/минут проживёт
+                        // стек цели при чистом фолде — кривая блайндов из
+                        // GetSchedule (levelCurve), анте/SB из живого стола
+                        // (иначе дефолт: SB=BB/2, анте=12.5% BB), размер
+                        // стола — из observedSeatCount
+                        let surv = null;
+                        try {
+                            if (e.stack > 0 && !isActuallyBusted) {
+                                let bbv = (liveCtx && liveCtx.getActiveHandBB() > 0) ? liveCtx.getActiveHandBB() : (e.currentBB || 500);
+                                let lvl = (liveCtx && liveCtx.level && liveCtx.level.bb > 0)
+                                    ? { sb: liveCtx.level.sb || Math.round(bbv / 2), bb: bbv, ante: liveCtx.level.ante || 0, number: liveCtx.level.number || 1 }
+                                    : { sb: Math.round(bbv / 2), bb: bbv, ante: Math.round(bbv * 0.125), number: 1 };
+                                let tourn = e.tournId ? state.liveTournaments.get(e.tournId) : null;
+                                let seats = 8;
+                                if (liveCtx) {
+                                    seats = Math.max(2, Math.min(10, liveCtx.observedSeatCount || Object.keys(liveCtx.positions).length || 8));
+                                }
+                                surv = calculateTournamentSurvival(e.stack, lvl, tourn ? tourn.levelCurve : null, tourn ? tourn.levelDetails : null, seats);
+                            }
+                        } catch (err) {}
+
+                        // v65.1 F4 (аудит #4, MODULE 3): P(ITM|SitOut) + ICM FREEZE —
+                        // N_alive из <GetPlayers total>, N_ITM из <Prizes>
+                        let m3Line = null;
+                        try { if (e.stack > 0 && !isActuallyBusted) m3Line = getModule3Line(e, liveCtx); } catch (err) {}
 
                         // v64.3 P3 (TWIN-HASH): Pokerdom гоняет одинаковые recurring-
                         // турниры каждые 1–2 часа — активная и выбывшая записи с одним
@@ -1719,6 +3313,7 @@ javascript:(function(){
                                     <span>${finStr}</span>
                                     <span style="color:#64748b;">${escapeHtml(e.rawNick)}</span>
                                 </div>
+                                ${(surv || m3Line) ? `<div style="color:#64748b;font-size:9px;margin-top:1px;">${surv ? '⏳ ' + surv.summary : ''}${(surv && m3Line) ? ' • ' : ''}${m3Line || ''}</div>` : ''}
                             </div>`;
                         } else {
                             // ── ВЫБЫВШАЯ ЗАПИСЬ ──
@@ -1957,6 +3552,10 @@ javascript:(function(){
             let finished = false;
             let currentLevel = (tourn && tourn.currentLevel) ? tourn.currentLevel : 1;
             let levelMap = new Map();
+            // v65 M3 (SURVIVAL): детали уровней из <Item> — SB (lowStake),
+            // анте (ante), длительность (duration: >120 трактуем как секунды,
+            // иначе как минуты — 15 → 900с, 600 → 600с)
+            let levelDetails = new Map();
             let dynamicTimeout = null;
 
             let scheduleLoaded = false;
@@ -1981,6 +3580,10 @@ javascript:(function(){
                 bgWs.send(`<EnterTournamentLobby id="${tournId}" sessionId="${sid}" client="html5mobile" clientFace="pokerdom" clientVersion="${state.auth.clientVersion}"/>`);
                 bgWs.send('<GetSchedule/>');
                 bgWs.send('<GetPlayers offset="0" count="50"/>');
+                // v65.1 F4 (аудит #4): призовая структура → N_ITM для модели
+                // выживания P(ITM|SitOut)/ICM FREEZE; неизвестный тег сервер
+                // игнорирует без побочных эффектов, если структуры нет.
+                bgWs.send('<GetPrizes/>');
             };
 
             function processPlayerBlocks(text) {
@@ -1998,6 +3601,14 @@ javascript:(function(){
 
                 let offset = iattr(text, 'offset') || 0;
                 let total = iattr(text, 'total') || 0;
+                // v65.1 F4 (аудит #4, MODULE 3): N_alive — тотальный атрибут
+                // GetPlayers (в v65.0 парсился ТОЛЬКО для пагинации и
+                // выбрасывался; «nAlive не наблюдаем» было ложным выводом)
+                if (total > 0 && tourn) tourn.alivePlayers = total;
+                // v65.1 F4: средний стек поля — по ВСЕМ строкам (не только цели)
+                if (!processPlayerBlocks.fieldAcc || processPlayerBlocks.fieldAcc.tourn !== tournId) {
+                    processPlayerBlocks.fieldAcc = { tourn: tournId, sum: 0, n: 0 };
+                }
                 let playerBlocks = text.matchAll(/<Player\s+([^>]+)>/g);
                 let countInChunk = 0;
 
@@ -2006,6 +3617,12 @@ javascript:(function(){
                 for (let pb of playerBlocks) {
                     countInChunk++;
                     let attrs = pb[1];
+                    // v65.1 F4: стек для среднего по полю (живые стеки > 0)
+                    let anyStack = iattr(attrs, 'stack');
+                    if (anyStack !== null && anyStack > 0) {
+                        processPlayerBlocks.fieldAcc.sum += anyStack;
+                        processPlayerBlocks.fieldAcc.n++;
+                    }
                     let rawNick = attr(attrs, 'nickname') || attr(attrs, 'name');
                     let cleanNick = getCleanNick(rawNick);
                     let tableId = attr(attrs, 'tableId');
@@ -2158,6 +3775,11 @@ javascript:(function(){
                     }
                 }
 
+                // v65.1 F4: средний стек поля турнира (по завершении чанка)
+                if (tourn && processPlayerBlocks.fieldAcc.n > 0) {
+                    tourn.fieldAvgStack = Math.round(processPlayerBlocks.fieldAcc.sum / processPlayerBlocks.fieldAcc.n);
+                }
+
                 if (total > (offset + countInChunk) && countInChunk > 0) {
                     try { bgWs.send(`<GetPlayers offset="${offset + countInChunk}" count="50"/>`); } catch(e) { cleanup(); }
                 } else {
@@ -2188,15 +3810,35 @@ javascript:(function(){
                         let num = iattr(im[1], 'number') || 0;
                         let hs = iattr(im[1], 'highStake') || 0;
                         if (num > 0 && hs > 0) levelMap.set(num, hs);
+                        // v65 M3 (SURVIVAL): опциональные атрибуты уровня.
+                        // Отсутствующие поля движок выживания добирает
+                        // эвристиками (SB=BB/2, анте=12.5% BB, 600с/уровень).
+                        let ls = iattr(im[1], 'lowStake');
+                        let an = iattr(im[1], 'ante');
+                        let du = iattr(im[1], 'duration') || iattr(im[1], 'levelDuration');
+                        if (num > 0 && (ls !== null || an !== null || du !== null)) {
+                            let d = levelDetails.get(num) || {};
+                            if (ls !== null && ls > 0) d.sb = ls;
+                            if (an !== null && an >= 0) d.ante = an;
+                            if (du !== null && du > 0) d.sec = (du > 120) ? du : du * 60;
+                            levelDetails.set(num, d);
+                        }
                     }
                     if (levelMap.has(currentLevel) && tourn) {
                         tourn.currentBB = levelMap.get(currentLevel);
                     }
                     scheduleLoaded = true;
+                    // v65 M3: кривая блайндов турнира доступна движку выживания HUD
+                    if (tourn) { tourn.levelCurve = levelMap; tourn.levelDetails = levelDetails; }
 
                     while (pendingPlayersChunks.length > 0) {
                         processPlayerBlocks(pendingPlayersChunks.shift());
                     }
+                }
+
+                // v65.1 F4 (аудит #4, MODULE 3): <Prizes>/<PrizeInfo> → N_ITM
+                if (text.includes('<Prizes') || text.includes('<PrizeInfo') || /placesPaid=/i.test(text)) {
+                    parsePrizesInto(text, tournId);
                 }
 
                 if (text.includes('<Players')) {
@@ -2261,6 +3903,29 @@ javascript:(function(){
                     releaseBackgroundSocket(tableId);
                     state.activeTables.delete(tableId);
                 }
+            }
+
+            // v65.1 F4 (аудит #4, MODULE 3): N_alive из <GetPlayers total="X">
+            // приходит НЕ только сканером — ловим и на лобби/столовых сокетах
+            // пользователя (в v65.0 total парсился лишь для пагинации и
+            // выбрасывался — «не наблюдаемо» было ошибкой).
+            if (/<Players\b/i.test(xml)) {
+                let totP = iattr(xml, 'total') || 0;
+                if (totP > 0) {
+                    let pTid = attr(xml, 'tournamentId') || attr(xml, 'id') ||
+                               (ws.__tableContext ? ws.__tableContext.tournId : null) || state.userViewingTournId;
+                    if (pTid && pTid !== '0') {
+                        let lt = state.liveTournaments.get(pTid);
+                        if (lt) { lt.alivePlayers = totP; lt.lastSeen = Date.now(); }
+                        else { let tc = state.tournamentCache.get(pTid); if (tc) tc.alivePlayers = totP; }
+                    }
+                }
+            }
+            // v65.1 F4: N_ITM из <Prizes>/<PrizeInfo> (cutoff мест в деньгах)
+            if (xml.includes('<Prizes') || xml.includes('<PrizeInfo') || /placesPaid=/i.test(xml)) {
+                let zTid = attr(xml, 'tournamentId') || attr(xml, 'id') ||
+                           (ws.__tableContext ? ws.__tableContext.tournId : null) || state.userViewingTournId;
+                if (zTid && zTid !== '0') parsePrizesInto(xml, zTid);
             }
 
             if (xml.includes('<Tournaments') || xml.includes('<LobbyInfo') || xml.includes('<ServerInfo')) {
@@ -2368,6 +4033,11 @@ javascript:(function(){
             let ctx = ws.__tableContext;
             if (!ctx) return;
 
+            // v65.1 F1 (аудит #1): приватные карты игрока — только его столы
+            if (state.sockets.userTables.has(ctx.tableId)) {
+                ctx.updateUserCardsFromXml(xml);
+            }
+
             let bbAttr = iattr(xml, 'highStake');
             let sbAttr = iattr(xml, 'lowStake');
             let anteAttr = iattr(xml, 'ante');
@@ -2412,6 +4082,10 @@ javascript:(function(){
 
                     let s = ctx.ensureSeat(seatNum, rawNick, serverStack);
                     s.busted = (serverStack === 0);
+                    // v65.1 F1: маркер своего места (own/self)
+                    if (seatAttrs.includes('own="true"') || seatAttrs.includes('self="true"')) {
+                        ctx.userSeat = seatNum;
+                    }
                     if (serverSpent > 0) s.spent = serverSpent;
 
                     if (ctx.hand === null && serverStack !== null && serverStack > 0) {
@@ -2758,6 +4432,9 @@ javascript:(function(){
                                 let removed = state.completedHandsArchive.shift();
                                 state.recordedHandNumbers.delete(`${removed.table_id}#${removed.hand_number}`);
                             }
+                            // v65.1 F2 (аудит #2): тяжёлая математика руки —
+                            // в чанки (≤6мс/слот), НЕ в обработчике onmessage
+                            queueLazyHandMath(finalizedHand);
                             updateHUD();
                         }
                     }
@@ -2875,7 +4552,7 @@ javascript:(function(){
         state.scannerQueue.length = 0;
         state.scannerQueued.clear();
         document.querySelectorAll('[id^="stalker-hud"]').forEach(el => el.remove());
-        console.log("%c[SCALPEL] Инстанс v64.3 уничтожен.", "color:#f59e0b;");
+        console.log("%c[SCALPEL] Инстанс v65.1 уничтожен.", "color:#f59e0b;");
     };
 
     // v61 F7: периодическое обслуживание состояния — очистка устаревших/растущих структур
@@ -3163,5 +4840,5 @@ javascript:(function(){
     autoDetectSessionId();
     triggerLobbyTournamentRefresh();
 
-    console.log("%c👑 [SCALPEL v64.3 APEX-IMPERATOR] Запущен. v60 + v61 F1–F8 + v62 B1–B4 + v63 C-раунд устранено; v64 — раунд-4: F1 номинал бай-ина = buyIn + bounty (рейк в entryCost), F2 amount = дельта во всех действиях (chip_conservation восстановлен), F3 бейдж ре-энтрий max(bullets, rebuys+1) из e.spent, F4 formatRub для денег, F5 маркер «!» утекших карт в DSL, F6 строка баунти в GTO SUMMARY; C7-агрессивность олл-ина переведена на итог улицы. v64.1 — polish: кириллические ключи PKO (нокаут|баунти|пко|охотник|hunter|knockout) + фолбэк-имена мест по serverSeatBase. v64.2 — Zombie-Guard: «мёртвая» строка лобби больше не перезаписывает живую запись и не рвёт сокет живого стола (пул самовосстанавливается); HUD-ERGO: живые цели сверху, двухстрочные карточки, «Пуля #N (+R реб.) • Влито: X₽». v64.3 — P1 :AFK-тег в DSL, P2 динамический PKO по денежной выплате, P3 хеш турниров-близнецов [#8c01], P4 6-корзинный классификатор текстуры борда (JSON + DSL), P5 7 архетипов HUD, P6 «+Nx2 реб.» + GTO-ключи узлов решений, P7 120 фоновых столов.", "color:#10b981;font-weight:bold;font-size:13px;");
+    console.log("%c👑 [SCALPEL v65.1 ULTIMATE] Запущен. v60 + v61 F1–F8 + v62 B1–B4 + v63 C-раунд устранено; v64 — раунд-4: F1 номинал бай-ина = buyIn + bounty (рейк в entryCost), F2 amount = дельта во всех действиях (chip_conservation восстановлен), F3 бейдж ре-энтрий max(bullets, rebuys+1) из e.spent, F4 formatRub для денег, F5 маркер «!» утекших карт в DSL, F6 строка баунти в GTO SUMMARY; C7-агрессивность олл-ина переведена на итог улицы. v64.1 — polish: кириллические ключи PKO (нокаут|баунти|пко|охотник|hunter|knockout) + фолбэк-имена мест по serverSeatBase. v64.2 — Zombie-Guard: «мёртвая» строка лобби больше не перезаписывает живую запись и не рвёт сокет живого стола (пул самовосстанавливается); HUD-ERGO: живые цели сверху, двухстрочные карточки, «Пуля #N (+R реб.) • Влито: X₽». v64.3 — P1 :AFK-тег в DSL, P2 динамический PKO по денежной выплате, P3 хеш турниров-близнецов [#8c01], P4 6-корзинный классификатор текстуры борда (JSON + DSL), P5 7 архетипов HUD, P6 «+Nx2 реб.» + GTO-ключи узлов решений, P7 120 фоновых столов. v65.0 — M0 гистограмма GTO-узлов + TSV-экспорт «GTO Keys», M1 2D-профайлер (байес M=25, 7×4 измерения, fold-to-cbet из таймлайна), M3 движок выживания MTT (кривая блайндов GetSchedule, AA/премиум), M4 борд-натс + hs_percentile + flop_outs в JSON. v65.1 — АУДИТ-ФИКСЫ F1–F6: F1 M4-LIVE (натс/HS/ауты В РУКЕ на столах игрока — панель «🃏 LIVE», приватные карты из протокола), F2 битовый движок натса (НОЛЬ eval5-вызовов на ривере вместо 20 790; чанк-шедулер ≤6мс; ленивый hs архивных рук), F3 RTA-PROB бейдж в HUD из evaluateRTAConfidence (≥8 узлов/32 решения), F4 N_alive из GetPlayers total + N_ITM из Prizes → P(ITM|SitOut) + ICM FREEZE, F5 π-KL эксплойт [0.25,4.0] в HUD/JSON, F6 стейт-машина контбет/донк (префлоп-пуш = рейз). Бенчмарк: window.__stalkerBench() — эквивалентность, скорость, стресс 120 столов, longtask.", "color:#10b981;font-weight:bold;font-size:13px;");
 })();
