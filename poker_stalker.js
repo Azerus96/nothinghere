@@ -3775,7 +3775,9 @@ let postedSeats = new Set();
                 if (tourn && processPlayerBlocks.fieldAcc.n > 0) {
                     tourn.fieldAvgStack = Math.round(processPlayerBlocks.fieldAcc.sum / processPlayerBlocks.fieldAcc.n);
                 }
-
+                if (tourn && processPlayerBlocks.fieldAcc.aliveCount > 0) {
+                 tourn.alivePlayers = processPlayerBlocks.fieldAcc.aliveCount;
+                }
                 if (total > (offset + countInChunk) && countInChunk > 0) {
                     try { bgWs.send(`<GetPlayers offset="${offset + countInChunk}" count="50"/>`); } catch(e) { cleanup(); }
                 } else {
