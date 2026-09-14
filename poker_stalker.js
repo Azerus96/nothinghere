@@ -3907,18 +3907,18 @@ let postedSeats = new Set();
             // приходит НЕ только сканером — ловим и на лобби/столовых сокетах
             // пользователя (в v65.0 total парсился лишь для пагинации и
             // выбрасывался — «не наблюдаемо» было ошибкой).
-            if (/<Players\b/i.test(xml)) {
-                let totP = iattr(xml, 'total') || 0;
-                if (totP > 0) {
-                    let pTid = attr(xml, 'tournamentId') || attr(xml, 'id') ||
-                               (ws.__tableContext ? ws.__tableContext.tournId : null) || state.userViewingTournId;
-                    if (pTid && pTid !== '0') {
-                        let lt = state.liveTournaments.get(pTid);
-                        if (lt) { lt.alivePlayers = totP; lt.lastSeen = Date.now(); }
-                        else { let tc = state.tournamentCache.get(pTid); if (tc) tc.alivePlayers = totP; }
-                    }
-                }
-            }
+             if (/<Players\b/i.test(xml)) {
+             let totP = iattr(xml, 'total') || 0;
+             if (totP > 0) {
+                 let pTid = attr(xml, 'tournamentId') || attr(xml, 'id') ||
+                            (ws.__tableContext ? ws.__tableContext.tournId : null) || state.userViewingTournId;
+                 if (pTid && pTid !== '0') {
+                     let lt = state.liveTournaments.get(pTid);
+                     if (lt) { lt.totalEntries = totP; lt.lastSeen = Date.now(); }
+                     else { let tc = state.tournamentCache.get(pTid); if (tc) tc.totalEntries = totP; }
+                 }
+             }
+         }
             // v65.1 F4: N_ITM из <Prizes>/<PrizeInfo> (cutoff мест в деньгах)
             if (xml.includes('<Prizes') || xml.includes('<PrizeInfo') || /placesPaid=/i.test(xml)) {
                 let zTid = attr(xml, 'tournamentId') || attr(xml, 'id') ||
