@@ -3595,30 +3595,30 @@ let postedSeats = new Set();
                     tourn.currentLevel = currentLevel;
                 }
 
-                let offset = iattr(text, 'offset') || 0;
-                let total = iattr(text, 'total') || 0;
-                // v65.1 F4 (аудит #4, MODULE 3): N_alive — тотальный атрибут
-                // GetPlayers (в v65.0 парсился ТОЛЬКО для пагинации и
-                // выбрасывался; «nAlive не наблюдаем» было ложным выводом)
-                if (total > 0 && tourn) tourn.alivePlayers = total;
-                // v65.1 F4: средний стек поля — по ВСЕМ строкам (не только цели)
-                if (!processPlayerBlocks.fieldAcc || processPlayerBlocks.fieldAcc.tourn !== tournId) {
-                    processPlayerBlocks.fieldAcc = { tourn: tournId, sum: 0, n: 0 };
-                }
-                let playerBlocks = text.matchAll(/<Player\s+([^>]+)>/g);
-                let countInChunk = 0;
+             let offset = iattr(text, 'offset') || 0;
+             let total = iattr(text, 'total') || 0;
+             
+             // Инициализируем аккумулятор турнира при старте пагинации (offset === 0)
+             if (offset === 0 || !processPlayerBlocks.fieldAcc || processPlayerBlocks.fieldAcc.tourn !== tournId) {
+                 processPlayerBlocks.fieldAcc = { tourn: tournId, sum: 0, n: 0, aliveCount: 0 };
+             }
+             let playerBlocks = text.matchAll(/<Player\s+([^>]+)>/g);
+             let countInChunk = 0;
 
-                let tMeta = state.tournamentCache.get(tournId) || { name: tourn ? tourn.name : 'MTT', baseBuyin: 0 };
+             let tMeta = state.tournamentCache.get(tournId) || { name: tourn ? tourn.name : 'MTT', baseBuyin: 0 };
 
-                for (let pb of playerBlocks) {
-                    countInChunk++;
-                    let attrs = pb[1];
-                    // v65.1 F4: стек для среднего по полю (живые стеки > 0)
-                    let anyStack = iattr(attrs, 'stack');
-                    if (anyStack !== null && anyStack > 0) {
-                        processPlayerBlocks.fieldAcc.sum += anyStack;
-                        processPlayerBlocks.fieldAcc.n++;
-                    }
+             for (let pb of playerBlocks) {
+                 countInChunk++;
+                 let attrs = pb[1];
+                 let anyStack = iattr(attrs, 'stack') || 0;
+                 let anyPlace = iattr(attrs, 'placeFrom') || iattr(attrs, 'place') || iattr(attrs, 'placeTo') || 0;
+
+                 // Считаем игрока живым только если у него есть фишки и нет занятого места вылета
+                 if (anyStack > 0 && anyPlace === 0) {
+                     processPlayerBlocks.fieldAcc.sum += anyStack;
+                     processPlayerBlocks.fieldAcc.n++;
+                     processPlayerBlocks.fieldAcc.aliveCount++;
+                 }
                     let rawNick = attr(attrs, 'nickname') || attr(attrs, 'name');
                     let cleanNick = getCleanNick(rawNick);
                     let tableId = attr(attrs, 'tableId');
