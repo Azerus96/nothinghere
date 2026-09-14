@@ -2213,53 +2213,34 @@ javascript:(function(){
                     }
                 });
 
-                let sbPosted = false, bbPosted = false;
-                players.forEach(p => {
-                    (p.actions || []).forEach(a => {
-                        if (a.includes('PREFLOP_SB:')) {
-                            // v63 C2: стек, съеденный анте, не порождает пост «0»
-                            let amt = extractAmt(a) || sb;
-                            let effStack = Math.max(0, (p.stack_start || 0) - ante);
-                            if (effStack > 0) {
-                                let postAmt = Math.min(effStack, amt);
-                                let allInStr = (effStack <= amt) ? ' and is all-in' : '';
-                                lines.push(`${p.nick}: posts small blind ${postAmt}${allInStr}`);
-                                sbPosted = true;
-                            }
-                        } else if (a.includes('PREFLOP_BB:')) {
-                            let amt = extractAmt(a) || bb;
-                            let effStack = Math.max(0, (p.stack_start || 0) - ante);
-                            if (effStack > 0) {
-                                let postAmt = Math.min(effStack, amt);
-                                let allInStr = (effStack <= amt) ? ' and is all-in' : '';
-                                lines.push(`${p.nick}: posts big blind ${postAmt}${allInStr}`);
-                                bbPosted = true;
-                            }
-                        }
-                    });
-                });
+let postedSeats = new Set();
+             let sbPosted = false, bbPosted = false;
 
-                // v63 C2: запасной цикл — тот же guard: реальный эмиттер нулевой
-                // строки был именно здесь (игрок, чей стек целиком ушёл в анте,
-                // не имеет SB-действия для основного цикла).
-                if (!sbPosted || !bbPosted) {
-                    players.forEach(p => {
-                        let effStack = Math.max(0, (p.stack_start || 0) - ante);
-                        if (effStack <= 0) return;
-                        if (!sbPosted && (p.position === 'SB' || p.position === 'BTN/SB')) {
-                            let postAmt = Math.min(effStack, sb);
-                            let allInStr = (effStack <= sb) ? ' and is all-in' : '';
-                            lines.push(`${p.nick}: posts small blind ${postAmt}${allInStr}`);
-                            sbPosted = true;
-                        }
-                        if (!bbPosted && p.position === 'BB') {
-                            let postAmt = Math.min(effStack, bb);
-                            let allInStr = (effStack <= bb) ? ' and is all-in' : '';
-                            lines.push(`${p.nick}: posts big blind ${postAmt}${allInStr}`);
-                            bbPosted = true;
-                        }
-                    });
-                }
+             players.forEach(p => {
+                 let effStack = Math.max(0, (p.stack_start || 0) - ante);
+                 if (effStack <= 0) return;
+                 
+                 let isSB = (p.position === 'SB' || p.position === 'BTN/SB');
+                 let isBB = (p.position === 'BB');
+
+                 if (isSB && !postedSeats.has(p.seat)) {
+                     let sbAct = (p.actions || []).find(a => a.includes('PREFLOP_SB:'));
+                     let amt = sbAct ? (extractAmt(sbAct) || sb) : sb;
+                     let postAmt = Math.min(effStack, amt);
+                     let allInStr = (effStack <= amt) ? ' and is all-in' : '';
+                     lines.push(`${p.nick}: posts small blind ${postAmt}${allInStr}`);
+                     postedSeats.add(p.seat);
+                     sbPosted = true;
+                 } else if (isBB && !postedSeats.has(p.seat)) {
+                     let bbAct = (p.actions || []).find(a => a.includes('PREFLOP_BB:'));
+                     let amt = bbAct ? (extractAmt(bbAct) || bb) : bb;
+                     let postAmt = Math.min(effStack, amt);
+                     let allInStr = (effStack <= amt) ? ' and is all-in' : '';
+                     lines.push(`${p.nick}: posts big blind ${postAmt}${allInStr}`);
+                     postedSeats.add(p.seat);
+                     bbPosted = true;
+                 }
+             });
 
                 lines.push(`*** HOLE CARDS ***`);
 
