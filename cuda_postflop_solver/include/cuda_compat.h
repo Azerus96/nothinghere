@@ -268,4 +268,25 @@ inline cudaError_t cudaGetDeviceProperties(cudaDeviceProp* p, int) {
 #define cuPrintf(...)  printf(__VA_ARGS__)
 
 #endif // __CUDACC__
+
+// ── [V8] Unified CUDA_CHECK macro (both build modes) ───────────────────
+// Defined OUTSIDE the __CUDACC__ branch so it is available identically to
+// real nvcc translation units (cudaError_t / cudaGetErrorString from the
+// implicitly included cuda_runtime.h) and to plain g++ builds (the CPU
+// shims above). Shared by src/gpu_solver.cu, tools/gen_preflop_3way.cpp
+// and any host code touching the runtime API. Non-fatal by design: errors
+// are reported to stderr and the pipeline falls back (gpu_solver_init
+// returns false; callers route to the CPU path).
+#ifndef CUDA_CHECK
+#define CUDA_CHECK(call)                                                          \
+    do {                                                                          \
+        cudaError_t _cuda_check_err_ = (call);                                    \
+        if (_cuda_check_err_ != cudaSuccess) {                                    \
+            fprintf(stderr, "[CUDA ERROR] %s:%d: %s -> %s\n",                    \
+                    __FILE__, __LINE__, #call,                                    \
+                    cudaGetErrorString(_cuda_check_err_));                        \
+        }                                                                         \
+    } while (0)
+#endif
+
 #endif // CUDA_COMPAT_H

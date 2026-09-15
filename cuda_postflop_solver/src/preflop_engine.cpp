@@ -82,6 +82,81 @@ std::string default_table_path() {
     return std::string("preflop_table.bin");
 }
 
+// ── [Module 3, V8] 3-way preflop tensor ──────────────────────────────────
+static const char TENSOR_3WAY_MAGIC[4] = {'P', '3', 'T', 'B'};
+static const uint32_t TENSOR_3WAY_VERSION = 1;
+static const uint32_t TENSOR_3WAY_PLAYERS = 3;
+static const uint32_t TENSOR_3WAY_DTYPE = 4;   // bytes per element (float)
+
+#pragma pack(push, 1)
+struct Tensor3WayHeader {
+    char     magic[4];
+    uint32_t version;
+    uint32_t classes;
+    uint32_t players;
+    uint32_t dtype;
+};
+#pragma pack(pop)
+
+bool Preflop3WayEquityTable::load(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    Tensor3WayHeader hdr;
+    if (std::fread(&hdr, sizeof(hdr), 1, f) != 1) { std::fclose(f); return false; }
+    if (std::memcmp(hdr.magic, TENSOR_3WAY_MAGIC, 4) != 0) { std::fclose(f); return false; }
+    if (hdr.version != TENSOR_3WAY_VERSION || hdr.classes != NUM_CLASSES ||
+        hdr.players != TENSOR_3WAY_PLAYERS || hdr.dtype != TENSOR_3WAY_DTYPE) {
+        std::fclose(f);
+        return false;
+    }
+    data.resize(TENSOR_3WAY_FLOATS);
+    size_t got = std::fread(data.data(), sizeof(float), TENSOR_3WAY_FLOATS, f);
+    std::fclose(f);
+    if (got != TENSOR_3WAY_FLOATS) { data.clear(); return false; }
+    loaded = true;
+    return true;
+}
+
+bool Preflop3WayEquityTable::save(const std::string& path) const {
+    if (data.size() != TENSOR_3WAY_FLOATS) return false;
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return false;
+    Tensor3WayHeader hdr;
+    std::memcpy(hdr.magic, TENSOR_3WAY_MAGIC, 4);
+    hdr.version = TENSOR_3WAY_VERSION;
+    hdr.classes = (uint32_t)NUM_CLASSES;
+    hdr.players = TENSOR_3WAY_PLAYERS;
+    hdr.dtype   = TENSOR_3WAY_DTYPE;
+    if (std::fwrite(&hdr, sizeof(hdr), 1, f) != 1) { std::fclose(f); return false; }
+    size_t put = std::fwrite(data.data(), sizeof(float), TENSOR_3WAY_FLOATS, f);
+    std::fclose(f);
+    return put == TENSOR_3WAY_FLOATS;
+}
+
+float Preflop3WayEquityTable::equity_cards_3way(const std::pair<Card, Card>& h0,
+                                                const std::pair<Card, Card>& h1,
+                                                const std::pair<Card, Card>& h2,
+                                                int player_idx) const {
+    auto classify = [](const std::pair<Card, Card>& h) -> uint16_t {
+        int r1 = card_rank(h.first), r2 = card_rank(h.second);
+        bool suited = card_suit(h.first) == card_suit(h.second);
+        return class_index((uint8_t)std::max(r1, r2), (uint8_t)std::min(r1, r2), suited);
+    };
+    return equity(classify(h0), classify(h1), classify(h2), player_idx);
+}
+
+Preflop3WayEquityTable& global_preflop_3way_table() {
+    static Preflop3WayEquityTable table;
+    return table;
+}
+
+std::string default_3way_table_path() {
+    if (const char* env = std::getenv("POSTFLOP_3WAY_PATH")) {
+        if (*env) return std::string(env);
+    }
+    return std::string("preflop_3way.bin");
+}
+
 PushFoldDecision push_fold_call_decision(const std::pair<Card, Card>& hero,
                                          const std::pair<Card, Card>& villain_range_rep,
                                          int32_t pot_before, int32_t to_call) {

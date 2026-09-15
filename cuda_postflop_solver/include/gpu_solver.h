@@ -15,10 +15,12 @@ struct GpuMemory {
     uint8_t*      d_storage_ip;
     uint8_t*      d_storage_chance;
     
-    Card*         d_private_cards[6];   
-    uint16_t*     d_same_hand_idx[6];   
-    float*        d_initial_weights[6];
-    int           num_hands[6];
+    // [Module 1, V8] MAX_PLAYERS pointer slots (V7 sized 6: kernels read
+    // d_private_cards_ptrs[6..7] out of bounds in 7/8-handed games).
+    Card*         d_private_cards[MAX_PLAYERS];   
+    uint16_t*     d_same_hand_idx[MAX_PLAYERS];   
+    float*        d_initial_weights[MAX_PLAYERS];
+    int           num_hands[MAX_PLAYERS];
 
     float*        d_node_cfreach; 
     float*        d_node_cfv;     
@@ -51,6 +53,12 @@ struct GpuMemory {
     int   num_players;
     bool  initialized;
     bool  is_compressed;
+
+    // [Module 4, V8] ICM bubble factor mirrored from TreeConfig at init
+    // (1.0 = pure Chip-EV). Passed to kernel_exact_820_showdown_leaf as a
+    // launch argument; terminal fold/showdown kernels read the identical
+    // value from every PostFlopNode::bubble_factor.
+    float bubble_factor;
     
     uint8_t locked_players_mask;
 
@@ -68,8 +76,11 @@ struct GpuMemory {
                   num_nodes(0), num_storage(0), num_storage_ip(0),
                   num_storage_chance(0), starting_pot(0), rake_rate(0.0f), rake_cap(0.0f),
                   num_players(2), initialized(false), is_compressed(false),
+                  bubble_factor(1.0f),
                   locked_players_mask(0) {
-        for (int i = 0; i < 6; ++i) {
+        // [Module 1, V8] initialize the FULL MAX_PLAYERS slot range (V7
+        // looped to 6 — seats 6/7 stayed uninitialized garbage pointers).
+        for (int i = 0; i < MAX_PLAYERS; ++i) {
             d_private_cards[i] = nullptr;
             d_same_hand_idx[i] = nullptr;
             d_initial_weights[i] = nullptr;

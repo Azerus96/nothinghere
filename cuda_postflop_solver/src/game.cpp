@@ -136,7 +136,13 @@ void PostFlopGame::build_node_arena() {
         node.river = cur.river;
         node.active_mask = atn->active_mask;
         node.amount = atn->total_pot;              // [Defect 1.8] exact total pot
-        for (int i = 0; i < 6; ++i) node.invested[i] = atn->invested[i];
+        // [Module 1, V8] MAX_PLAYERS-wide investment copy (V7 copied 6 —
+        // the out-of-bounds write landed exactly on action_types).
+        for (int i = 0; i < MAX_PLAYERS; ++i) node.invested[i] = atn->invested[i];
+        // [Module 4, V8] tree-wide ICM bubble factor snapshot (mirrors into
+        // GpuMemory at gpu_solver_init; kernels/evaluators read this node
+        // field or the identical launch argument).
+        node.bubble_factor = tree_config_.bubble_factor;
         node.children_offset = (uint32_t)bfs_order.size();
 
         node.num_children = (uint16_t)atn->children.size();

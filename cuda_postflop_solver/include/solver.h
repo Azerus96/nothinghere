@@ -67,6 +67,25 @@ void evaluate_terminal(
     int player,
     const float* cfreach);
 
+// ── [Module 2, V8] Exact 820-board rollout leaf (CPU mirror) ────────────
+// Street-bounded multiway leaves are evaluated by EXACT enumeration of every
+// remaining turn/river runout — the deterministic, zero-variance CPU mirror
+// of kernel_exact_820_showdown_leaf (src/gpu_solver.cu), replicating the
+// enumeration domain and double-accumulation order line-for-line so the CPU
+// and compat-GPU solve paths agree bit-identically. Loss terms scale by the
+// node's ICM bubble factor [Module 4, V8].
+//
+// Public test hook: the canonical templated path stays internal; this
+// non-template wrapper dispatches on game.num_players() so the regression
+// suite can evaluate a single leaf in isolation.
+void evaluate_rollout_leaf_3way_for_test(
+    float* result,
+    const PostFlopGame& game,
+    const PostFlopNode& node,
+    int node_idx,
+    int player,
+    const std::vector<const float*>& reaches);
+
 // ── Transposition table ─────────────────────────────────────────────────
 struct TranspositionTable {
     struct Entry {

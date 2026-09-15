@@ -11,6 +11,16 @@
 
 namespace postflop {
 
+// ── [Module 1, V8] Global capacity: 8-max MTT tables ────────────────────
+// Every player-indexed structure in the codebase is sized against this
+// constant: TreeConfig bet-size arrays, ActionTreeNode/PostFlopNode
+// invested[], GpuMemory per-player device slots, and the exact-820 kernel
+// template instantiations (2..8). V7 hard-coded 6 in scattered places,
+// which made invested[6]/[7] writes stomp adjacent memory in 7/8-handed
+// games (the V7 out-of-bounds corruption vector, regression-tested by
+// tests/test_regression_8max.cpp).
+constexpr int MAX_PLAYERS = 8;
+
 constexpr uint8_t PLAYER_OOP           = 0;
 constexpr uint8_t PLAYER_IP            = 1;
 constexpr uint8_t PLAYER_MASK          = 7;
@@ -111,9 +121,9 @@ struct TreeConfig {
     int32_t           effective_stack = 0;
     double            rake_rate = 0;
     double            rake_cap = 0;
-    std::array<BetSizeOptions, 6> flop_bet_sizes;
-    std::array<BetSizeOptions, 6> turn_bet_sizes;
-    std::array<BetSizeOptions, 6> river_bet_sizes;
+    std::array<BetSizeOptions, MAX_PLAYERS> flop_bet_sizes;
+    std::array<BetSizeOptions, MAX_PLAYERS> turn_bet_sizes;
+    std::array<BetSizeOptions, MAX_PLAYERS> river_bet_sizes;
     DonkSizeOptions*  turn_donk_sizes = nullptr;
     DonkSizeOptions*  river_donk_sizes = nullptr;
     double            add_allin_threshold = 1.0;
@@ -145,7 +155,18 @@ struct TreeConfig {
     // Per-player chips already invested BEFORE the postflop subtree starts
     // (blinds / preflop contributions). Their sum should equal starting_pot;
     // entries <= -1 request an equal split (default convention).
-    std::array<int32_t, 6> initial_invested = {-1, -1, -1, -1, -1, -1};
+    std::array<int32_t, MAX_PLAYERS> initial_invested =
+        {-1, -1, -1, -1, -1, -1, -1, -1};
+
+    // ── [Module 4, V8] ICM bubble factor ───────────────────────────────────
+    // Risk premium scaling every loss-denominated utility term in the tree:
+    //   EV_loss ~ invested * bubble_factor,  EV_win ~ pot (unscaled).
+    // 1.0 = pure Chip-EV (cash-game semantics, full backward compatibility);
+    // > 1 near tournament bubbles (derived exactly via Malmuth-Harville in
+    // include/icm_math.hpp and the live_solver "icm" JSON payload).
+    // Propagates into every PostFlopNode at build time and mirrors into
+    // GpuMemory at gpu_solver_init (the two always agree).
+    float bubble_factor = 1.0f;
 };
 
 struct ActionTreeNode {
@@ -158,7 +179,9 @@ struct ActionTreeNode {
 
     // ── Defect 1.8: exact chip bookkeeping ───────────────────────────────
     int32_t total_pot = 0;                     // full pot including starting pot and all streets
-    int32_t invested[6] = {0, 0, 0, 0, 0, 0};  // cumulative per-player investment (incl. preflop share)
+    // [Module 1, V8] MAX_PLAYERS-sized (V7's invested[6] let 7/8-handed
+    // games write out of bounds into adjacent node fields).
+    int32_t invested[MAX_PLAYERS] = {0, 0, 0, 0, 0, 0, 0, 0};  // cumulative per-player investment (incl. preflop share)
 };
 
 class ActionTree {

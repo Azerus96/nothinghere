@@ -43,7 +43,17 @@ struct PostFlopNode {
     // ── Defect 1.1 / 1.8: cumulative chips contributed by each player at
     // this node (including their seeded share of the starting pot).
     // Sum over players == amount (exact zero-sum chip bookkeeping).
-    int32_t  invested[6];
+    // [Module 1, V8] MAX_PLAYERS-sized: V7's invested[6] sat directly
+    // before action_types[8], so 7/8-handed games wrote invested[6]/[7]
+    // out of bounds and stomped the semantic action-type bytes (the exact
+    // corruption vector regression-tested by test_regression_8max.cpp).
+    int32_t  invested[MAX_PLAYERS];
+    // ── [Module 4, V8] ICM bubble factor snapshot for THIS node ───────────
+    // Copied from TreeConfig::bubble_factor at arena-build time so both the
+    // CPU evaluators and the GPU kernels read the identical risk scaling
+    // (kernel_terminal_fold / kernel_terminal_showdown use node.bubble_factor;
+    // kernel_exact_820_showdown_leaf receives it as a launch argument).
+    float    bubble_factor;
     // ── Defect 1.5: semantic Action::Type of each child action, enabling
     // type-bound (not index-bound) node locking and strategy reporting.
     uint8_t  action_types[8];
@@ -202,8 +212,9 @@ private:
     // Per-(turn,river) sorted strength cache for terminal evaluation.
     // Key: (turn << 8) | river. Filled lazily; guarded by mutex for safety
     // even though the solver itself is single-threaded per game.
+    // [Module 1, V8] MAX_PLAYERS rows (V7 sized 6 — out-of-range for 7/8).
     mutable std::unordered_map<uint16_t,
-        std::array<std::vector<StrengthItem>, 6>> strength_cache_;
+        std::array<std::vector<StrengthItem>, MAX_PLAYERS>> strength_cache_;
     mutable std::mutex strength_cache_mu_;
 
     void build_node_arena();

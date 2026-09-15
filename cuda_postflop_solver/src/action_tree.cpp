@@ -81,15 +81,19 @@ ActionTree::ActionTree(const TreeConfig& cfg,
     root_->amount = 0;
 
     int num_players = cfg.num_players;
-    if (num_players < 2 || num_players > 6) {
-        throw std::invalid_argument("num_players must be between 2 and 6");
+    // [Module 1, V8] 8-max MTT tables: accept 2..MAX_PLAYERS(=8) seats.
+    // V7 rejected 7/8-handed games outright (and the invested[6] arrays
+    // corrupted memory before any validation could help).
+    if (num_players < 2 || num_players > MAX_PLAYERS) {
+        throw std::invalid_argument("num_players must be between 2 and 8");
     }
 
     // ── Section 2: Two-Tier routing ──────────────────────────────────────
     // Tier 1 (exactly 2 players): full Flop→Turn→River tree with chance
     // expansion over unseen runout cards.
-    // Tier 2 (3-6 players): street-bounded search, max_depth = 1; street-end
-    // leaves are evaluated by (GPU) rollout showdown instead of expansion.
+    // Tier 2 (3-8 players) [V8]: street-bounded search, max_depth = 1;
+    // street-end leaves are evaluated by the EXACT 820-board enumeration
+    // kernel (zero-variance replacement of the V7 Monte Carlo rollout).
     if (num_players > 2 && config_.max_depth > 1) {
         config_.max_depth = 1;
     }
@@ -336,7 +340,8 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
             auto child = std::make_unique<ActionTreeNode>();
             child->amount = node.amount;
             child->total_pot = node.total_pot;              // chance adds no chips
-            for (int i = 0; i < 6; ++i) child->invested[i] = node.invested[i];
+            // [Module 1, V8] MAX_PLAYERS-wide investment propagation.
+            for (int i = 0; i < MAX_PLAYERS; ++i) child->invested[i] = node.invested[i];
             child->board_state = next_state;
 
             BuildInfo child_info = info;
@@ -432,7 +437,8 @@ void ActionTree::build_recursive(ActionTreeNode& node, BoardState state, int pla
         // ── Defect 1.8: exact chip flow bookkeeping ──────────────────────
         child->amount = node.amount + added_to_pot;
         child->total_pot = node.total_pot + added_to_pot;
-        for (int i = 0; i < 6; ++i) child->invested[i] = node.invested[i];
+        // [Module 1, V8] MAX_PLAYERS-wide investment propagation.
+        for (int i = 0; i < MAX_PLAYERS; ++i) child->invested[i] = node.invested[i];
         child->invested[player] += added_to_pot;
 
         child->board_state = state;
@@ -463,7 +469,8 @@ void ActionTree::apply_added_lines() {
                 int32_t added = (act.type == Action::Type::Bet || act.type == Action::Type::Raise ||
                                  act.type == Action::Type::AllIn) ? act.amount : 0;
                 child->total_pot = node->total_pot + added;
-                for (int i = 0; i < 6; ++i) child->invested[i] = node->invested[i];
+                // [Module 1, V8] MAX_PLAYERS-wide investment propagation.
+                for (int i = 0; i < MAX_PLAYERS; ++i) child->invested[i] = node->invested[i];
                 child->invested[current_player] += added;
 
                 BuildInfo info;

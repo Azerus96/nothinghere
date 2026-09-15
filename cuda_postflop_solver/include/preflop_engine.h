@@ -105,6 +105,72 @@ PreflopEquityTable& global_preflop_table();
 // then ./preflop_table.bin.
 std::string default_table_path();
 
+// ── [Module 3, V8] 3-way preflop tensor (169^3 x 3 floats) ───────────────
+// Exact HU equities answer 2-player questions; 3-way all-in spots (the
+// critical MTT confrontation: hero vs two live opponents) need a separate
+// tensor of per-player win probabilities:
+//     data[(c0 * 169 + c1) * 169 + c2] * 3 + player_idx
+// The full artifact is ~57.9 MB (4,826,809 triplet cells x 3 floats) —
+// generated ONCE on the staging GPU cluster by tools/gen_preflop_3way
+// (deterministic 5000-sample Monte Carlo per cell; exact enumeration would
+// cost ~8.26e13 operations) and shipped alongside the solver. O(1) queries,
+// sub-millisecond, with graceful 1/3 fallbacks for out-of-range inputs.
+//
+// Binary format (little endian, "P3TB"):
+//   magic    : 4 bytes
+//   version  : uint32 = 1
+//   classes  : uint32 = 169
+//   players  : uint32 = 3
+//   dtype    : uint32 = 4 (float)
+//   data     : 169*169*169*3 floats
+constexpr std::size_t TENSOR_3WAY_FLOATS =
+    NUM_CLASSES * NUM_CLASSES * NUM_CLASSES * 3;
+
+// [Module 3, V8] tensor shape constants (generator + loader vocabulary).
+constexpr std::size_t NUM_3WAY_TRIPLETS =
+    NUM_CLASSES * NUM_CLASSES * NUM_CLASSES;   // 4,826,809 triplet cells
+constexpr std::size_t NUM_3WAY_PLAYERS = 3;
+
+struct Preflop3WayEquityTable {
+    std::vector<float> data;   // TENSOR_3WAY_FLOATS floats
+    bool loaded = false;
+
+    // Loads the tensor from `path`; returns false if missing/corrupt.
+    bool load(const std::string& path);
+
+    // Saves the tensor (generator side).
+    bool save(const std::string& path) const;
+
+    // O(1) equity lookup for player_idx (0/1/2) of the (c0,c1,c2) triplet.
+    // Out-of-range classes or player indices fall back to the uniform 1/3.
+    float equity(std::uint16_t c0, std::uint16_t c1, std::uint16_t c2,
+                 int player_idx) const {
+        if (c0 >= NUM_CLASSES || c1 >= NUM_CLASSES || c2 >= NUM_CLASSES) return 1.0f / 3.0f;
+        if (player_idx < 0 || player_idx > 2) return 1.0f / 3.0f;
+        size_t base = ((size_t)c0 * NUM_CLASSES + c1) * NUM_CLASSES + c2;
+        return data[base * 3 + (size_t)player_idx];
+    }
+
+    // Convenience: equity for player_idx from concrete card pairs (ranks +
+    // suitedness classify each hand into its 169-class; suit interplay is
+    // absorbed by the class abstraction — the representative-combo error is
+    // bounded by the documented MC standard error of the generator).
+    float equity_cards_3way(const std::pair<Card, Card>& h0,
+                            const std::pair<Card, Card>& h1,
+                            const std::pair<Card, Card>& h2,
+                            int player_idx) const;
+
+    bool is_loaded() const { return loaded; }
+};
+
+// Global 3-way tensor instance (loaded once by live_solver / tests; queries
+// before load() return the uniform 1/3 fallback).
+Preflop3WayEquityTable& global_preflop_3way_table();
+
+// Search order for the tensor file: $POSTFLOP_3WAY_PATH, then
+// ./preflop_3way.bin.
+std::string default_3way_table_path();
+
 // ── Push/Fold decision (<= 12 BB) ───────────────────────────────────────
 // Facing an all-in shove of `to_call` chips into `pot_before` chips with an
 // effective stack of `stack_bb` big blinds: CALL iff equity >= required.

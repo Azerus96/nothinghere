@@ -226,7 +226,9 @@ void evaluate_terminal(
 
         if (player == folded_player) {
             // EV(Fold) = -Invested_player * CompatReach.
-            double inv = (double)node.invested[player];
+            // [Module 4, V8] the loss term scales by the ICM bubble factor
+            // (kernel_terminal_fold parity: risk_weighted_inv).
+            double inv = (double)node.invested[player] * (double)node.bubble_factor;
             for (int i = 0; i < num_hands; ++i) {
                 Card c1 = cc.private_cards[player][i].first;
                 Card c2 = cc.private_cards[player][i].second;
@@ -362,7 +364,9 @@ void evaluate_terminal(
         }
         const auto& same_idx2 = cc.same_hand_index[player];
         double pot_eff = pot - rake;
-        double inv = (double)node.invested[player];
+        // [Module 4, V8] ICM risk weighting of the invested (loss) term
+        // (kernel_terminal_showdown parity).
+        double inv = (double)node.invested[player] * (double)node.bubble_factor;
         for (int i = 0; i < num_hands; ++i) {
             Card c1 = cc.private_cards[player][i].first;
             Card c2 = cc.private_cards[player][i].second;
@@ -397,9 +401,11 @@ void evaluate_terminal_mw(float* result, const PostFlopGame& game, const PostFlo
         // locked at their own total investment). The compatible-reach
         // weighting preserves the chance-node summation and the zero-sum
         // invariant (see the HU scrutiny note above).
-        double inv = (double)node.invested[player];
+        // [Module 4, V8] the loss term scales by the ICM bubble factor;
+        // the win term stays unscaled (kernel_terminal_fold parity).
+        double inv = (double)node.invested[player] * (double)node.bubble_factor;
         bool me_active = (node.active_mask & (1 << player)) != 0;
-        double net_win = pot - inv;
+        double net_win = pot - (double)node.invested[player];
         for (int i = 0; i < num_hands; ++i) {
             uint64_t my_mask = card_to_bit(game.private_cards(player)[i].first)
                              | card_to_bit(game.private_cards(player)[i].second);
@@ -477,131 +483,173 @@ void evaluate_terminal_mw(float* result, const PostFlopGame& game, const PostFlo
             joint_total_prob *= opp_compat_reach;
         }
         if (me_active) {
+            // [Module 4, V8] loss term risk-weighted (kernel_terminal_showdown parity).
             result[my_idx] = (float)(pot * joint_win_prob
-                                     - (double)node.invested[player] * joint_total_prob);
+                                     - (double)node.invested[player] * (double)node.bubble_factor
+                                       * joint_total_prob);
         } else {
             // Player folded earlier: utility locked at their investment.
-            result[my_idx] = (float)(-(double)node.invested[player] * joint_total_prob);
+            result[my_idx] = (float)(-(double)node.invested[player] * (double)node.bubble_factor
+                                     * joint_total_prob);
         }
     }
 }
 
-// ── Rollout Showdown (CPU mirror of kernel_rollout_showdown_leaf) ────────
-// Section 2 / Module 3.4: street-bounded multiway leaves are evaluated by
-// Monte Carlo rollout over the pending runout. Deterministic LCG seeded by
-// (node_idx, hand) — byte-identical results on CPU and GPU paths.
+// ── [Module 2, V8] EXACT 820-board rollout leaf (CPU mirror) ─────────────
+// Replaces the V7 32-sample LCG Monte Carlo rollout (high variance in
+// multiway leaves) with EXACT, zero-variance enumeration over every
+// remaining turn/river runout — the line-for-line CPU mirror of
+// kernel_exact_820_showdown_leaf (src/gpu_solver.cu):
+//
+//   * 49-card deck = 52 - 3 flop cards, built once.
+//   * both streets pending  : unordered pairs i < j of the deck (board
+//     evaluation is symmetric under (t,r) exchange, so each physical
+//     5-card runout is counted exactly once; C(47,2) = 1081 valid pairs
+//     per hero hand after removing the hero's two cards).
+//   * turn known, river pending: t pinned to node.turn, river sweeps the
+//     FULL remaining deck (jstart = 0) — the naive i<j inner loop would
+//     silently drop rivers positioned before the turn card in deck order,
+//     biasing 4-card-board multiway queries.
+//   * river known without turn (defensive; unreachable in valid trees):
+//     river pinned, turn sweeps the full remaining deck.
+//   * both known: the single completed board (normally routed to the
+//     showdown kernel; handled here for robustness).
+//
+// Hero hands accumulate win/total mass per runout in double, in the SAME
+// (i, j) runout order as the kernel's per-hand accumulators, so both paths
+// agree bit-identically. Opponents are blocker-filtered against the hero's
+// cards AND the runout (range construction already guarantees board
+// disjointness), with a w > 0 range filter; folded opponents pass their
+// total reach through as a hand-agnostic conditioning factor.
+//
+// [Module 4, V8] the invested (loss) term scales by the node's ICM bubble
+// factor; the win term stays unscaled — identical to the kernel's
+// risk_weighted_inv.
 template <int NUM_PLAYERS>
 void evaluate_rollout_leaf(float* result, const PostFlopGame& game, const PostFlopNode& node,
                            int node_idx, int player, const std::vector<const float*>& reaches) {
+    (void)node_idx;
     int num_hands = game.num_private_hands(player);
     std::memset(result, 0, num_hands * sizeof(float));
 
     const auto& cc = game.card_config();
     double pot = (double)node.amount;
-    int32_t invested = node.invested[player];
+    double inv_me = (double)node.invested[player];
+    // [Module 4, V8] tournament utility: losses scaled by the bubble factor.
+    double risk_weighted_inv = inv_me * (double)node.bubble_factor;
+    bool am_i_active = (node.active_mask & (1 << player)) != 0;
+
     Card flop0 = cc.flop[0], flop1 = cc.flop[1], flop2 = cc.flop[2];
     Card known_turn = node.turn;
     Card known_river = node.river;
 
-    // Player folded earlier (multiway): utility locked at their investment,
-    // weighted by the other players' total reach (conditioning factor).
-    bool me_active = (node.active_mask & (1 << player)) != 0;
-    if (!me_active) {
-        double inv = (double)invested;
-        for (int h = 0; h < num_hands; ++h) {
-            Card c1 = cc.private_cards[player][h].first;
-            Card c2 = cc.private_cards[player][h].second;
-            double total_prob = 1.0;
-            for (int p = 0; p < NUM_PLAYERS; ++p) {
-                if (p == player) continue;
-                int nh = game.num_private_hands(p);
-                double sum_reach = 0.0, blocked = 0.0;
-                for (int j = 0; j < nh; ++j) {
-                    float w = reaches[p][j];
-                    if (w == 0.0f) continue;
-                    sum_reach += w;
-                    Card oc1 = cc.private_cards[p][j].first;
-                    Card oc2 = cc.private_cards[p][j].second;
-                    if (oc1 == c1 || oc1 == c2 || oc2 == c1 || oc2 == c2) blocked += w;
-                }
-                total_prob *= (sum_reach - blocked);
-            }
-            result[h] = (float)(-inv * total_prob);
-        }
-        return;
+    // Build the 49-card remaining deck (52 - 3 flop cards).
+    Card deck[49];
+    int deck_size = 0;
+    for (Card c = 0; c < 52; ++c) {
+        if (c != flop0 && c != flop1 && c != flop2) deck[deck_size++] = c;
     }
 
-    const auto& my_cards = cc.private_cards[player];
+    // Per-hand accumulators (double accumulation, kernel order).
+    std::vector<double> acc_win((size_t)num_hands, 0.0);
+    std::vector<double> acc_total((size_t)num_hands, 0.0);
+    std::vector<int> valid((size_t)num_hands, 0);
 
-    for (int h = 0; h < num_hands; ++h) {
-        Card c1 = my_cards[h].first;
-        Card c2 = my_cards[h].second;
+    // A known street card pins its street; the other street sweeps the full
+    // deck (jstart = 0). With both streets pending, i < j enumerates each
+    // unordered pair exactly once.
+    int jstart_base = (known_turn != NOT_DEALT || known_river != NOT_DEALT) ? 0 : 1;
 
-        double accumulated_win = 0.0;
-        double accumulated_total = 0.0;
-        int valid_runouts = 0;
-        uint32_t rng = (uint32_t)((uint32_t)node_idx * 1326u + (uint32_t)h) ^ 0x9E3779B9u;
+    for (int i = 0; i < deck_size; ++i) {
+        Card t = deck[i];
+        if (known_turn != NOT_DEALT && t != known_turn) continue;
 
-        for (int sample = 0; sample < 32; ++sample) {
-            rng = rng * 1664525U + 1013904223U;
-            Card t = (Card)((rng >> 16) % 52);
-            rng = rng * 1664525U + 1013904223U;
-            Card r = (Card)((rng >> 16) % 52);
+        for (int j = i + jstart_base; j < deck_size; ++j) {
+            Card r = deck[j];
+            if (r == t) continue;   // full-sweep modes revisit the turn card
+            if (known_river != NOT_DEALT && r != known_river) continue;
 
-            // Condition on known street cards (RNG stream stays aligned with
-            // the unconditional kernel: draws are consumed either way).
-            if (known_turn  != NOT_DEALT) t = known_turn;
-            if (known_river != NOT_DEALT) r = known_river;
+            // Hero hands (kernel Phase B: each hand accumulates this runout).
+            for (int h = 0; h < num_hands; ++h) {
+                Card c1 = cc.private_cards[player][h].first;
+                Card c2 = cc.private_cards[player][h].second;
 
-            if (t == r || t == flop0 || t == flop1 || t == flop2 ||
-                r == flop0 || r == flop1 || r == flop2 ||
-                t == c1 || t == c2 || r == c1 || r == c2) continue;
+                // Hero cards block the runout (physical impossibility).
+                if (t == c1 || t == c2) continue;
+                if (r == c1 || r == c2) continue;
 
-            Card my_7[7] = {c1, c2, flop0, flop1, flop2, t, r};
-            uint16_t my_s = (uint16_t)evaluate(my_7, 7);
+                Card my_7[7] = {c1, c2, flop0, flop1, flop2, t, r};
+                uint16_t my_s = (uint16_t)evaluate(my_7, 7);
 
-            double win_prob = 1.0;
-            double total_prob = 1.0;
-            for (int p = 0; p < NUM_PLAYERS; ++p) {
-                if (p == player) continue;
-                bool opp_active = (node.active_mask & (1 << p)) != 0;
-                const float* opp_reach = reaches[p];
-                int nh = game.num_private_hands(p);
+                double win_prob = 1.0;
+                double total_prob = 1.0;
 
-                if (!opp_active) {
-                    double sum_reach = 0.0;
-                    for (int j = 0; j < nh; ++j) sum_reach += opp_reach[j];
-                    win_prob *= sum_reach;
-                    total_prob *= sum_reach;
-                    continue;
+                for (int p = 0; p < NUM_PLAYERS; ++p) {
+                    if (p == player) continue;
+                    bool opp_active = (node.active_mask & (1 << p)) != 0;
+
+                    if (!opp_active) {
+                        // Folded opponent: hand-agnostic conditioning factor.
+                        double sum_reach = 0.0;
+                        int nh = game.num_private_hands(p);
+                        for (int oh = 0; oh < nh; ++oh) sum_reach += reaches[p][oh];
+                        win_prob *= sum_reach;
+                        total_prob *= sum_reach;
+                    } else {
+                        double beat_reach = 0.0;
+                        double compat_reach = 0.0;
+                        int nh = game.num_private_hands(p);
+                        for (int oh = 0; oh < nh; ++oh) {
+                            float w = reaches[p][oh];
+                            if (w <= 0.0f) continue;   // range filter [V8]
+                            Card oc1 = cc.private_cards[p][oh].first;
+                            Card oc2 = cc.private_cards[p][oh].second;
+
+                            // Blocker filtering: cannot overlap hero or runout.
+                            if (oc1 == c1 || oc1 == c2 || oc2 == c1 || oc2 == c2) continue;
+                            if (oc1 == t  || oc1 == r  || oc2 == t  || oc2 == r)  continue;
+
+                            compat_reach += w;
+                            Card ocards[7] = {oc1, oc2, flop0, flop1, flop2, t, r};
+                            uint16_t os = (uint16_t)evaluate(ocards, 7);
+                            if (my_s > os)       beat_reach += w;
+                            else if (my_s == os) beat_reach += w * 0.5;
+                        }
+                        win_prob *= beat_reach;
+                        total_prob *= compat_reach;
+                    }
                 }
-
-                const auto& opp_cards = cc.private_cards[p];
-                double beat_reach = 0.0;
-                double compat_reach = 0.0;
-                for (int j = 0; j < nh; ++j) {
-                    Card oc1 = opp_cards[j].first;
-                    Card oc2 = opp_cards[j].second;
-                    if (oc1 == c1 || oc1 == c2 || oc2 == c1 || oc2 == c2) continue;
-                    if (oc1 == t || oc1 == r || oc2 == t || oc2 == r) continue;
-                    if (oc1 == flop0 || oc1 == flop1 || oc1 == flop2 ||
-                        oc2 == flop0 || oc2 == flop1 || oc2 == flop2) continue;
-                    compat_reach += opp_reach[j];
-                    Card ocards[7] = {oc1, oc2, flop0, flop1, flop2, t, r};
-                    uint16_t os = (uint16_t)evaluate(ocards, 7);
-                    if (my_s > os)      beat_reach += opp_reach[j];
-                    else if (my_s == os) beat_reach += 0.5 * opp_reach[j];
-                }
-                win_prob *= beat_reach;
-                total_prob *= compat_reach;
+                acc_win[(size_t)h] += win_prob;
+                acc_total[(size_t)h] += total_prob;
+                valid[(size_t)h] += 1;
             }
-            accumulated_win += win_prob;
-            accumulated_total += total_prob;
-            valid_runouts++;
         }
-        double eq = valid_runouts > 0 ? (accumulated_win / valid_runouts) : 0.0;
-        double eq_total = valid_runouts > 0 ? (accumulated_total / valid_runouts) : 0.0;
-        result[h] = (float)(pot * eq - (double)invested * eq_total);
+    }
+
+    // Final write: exact equity + tournament utility (kernel parity).
+    for (int h = 0; h < num_hands; ++h) {
+        double eq = valid[(size_t)h] > 0 ? (acc_win[(size_t)h] / (double)valid[(size_t)h]) : 0.0;
+        double eq_total = valid[(size_t)h] > 0 ? (acc_total[(size_t)h] / (double)valid[(size_t)h]) : 0.0;
+        result[h] = (float)(
+            am_i_active ? (pot * eq - risk_weighted_inv * eq_total)
+                        : (-risk_weighted_inv * eq_total));
+    }
+}
+
+// [Module 2, V8] public test hook: dispatches the exact-820 leaf evaluator
+// on the true player count (the canonical templated path stays internal).
+void evaluate_rollout_leaf_3way_for_test(float* result, const PostFlopGame& game,
+                                         const PostFlopNode& node, int node_idx, int player,
+                                         const std::vector<const float*>& reaches) {
+    switch (game.num_players()) {
+        case 2: evaluate_rollout_leaf<2>(result, game, node, node_idx, player, reaches); break;
+        case 3: evaluate_rollout_leaf<3>(result, game, node, node_idx, player, reaches); break;
+        case 4: evaluate_rollout_leaf<4>(result, game, node, node_idx, player, reaches); break;
+        case 5: evaluate_rollout_leaf<5>(result, game, node, node_idx, player, reaches); break;
+        case 6: evaluate_rollout_leaf<6>(result, game, node, node_idx, player, reaches); break;
+        case 7: evaluate_rollout_leaf<7>(result, game, node, node_idx, player, reaches); break;
+        case 8: evaluate_rollout_leaf<8>(result, game, node, node_idx, player, reaches); break;
+        default: break;
     }
 }
 
@@ -851,6 +899,11 @@ void solve_step(PostFlopGame& game, uint32_t current_iter) {
             case 4: solve_recursive_impl<4>(result.data(), game, root_idx, p, reaches, params, 0); break;
             case 5: solve_recursive_impl<5>(result.data(), game, root_idx, p, reaches, params, 0); break;
             case 6: solve_recursive_impl<6>(result.data(), game, root_idx, p, reaches, params, 0); break;
+            // [Module 1, V8] 7- and 8-handed MTT tables on the CPU path
+            // (mirrors the gpu_solve_step dispatch extension).
+            case 7: solve_recursive_impl<7>(result.data(), game, root_idx, p, reaches, params, 0); break;
+            case 8: solve_recursive_impl<8>(result.data(), game, root_idx, p, reaches, params, 0); break;
+            default: break;
         }
     }
 }
