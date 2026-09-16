@@ -59,8 +59,9 @@ if(NOT USE_CUDA)
         src/node_locking.cpp
     )
     target_compile_definitions(postflop_core PUBLIC CPU_ONLY=1)
+    target_link_libraries(postflop_core PUBLIC OpenMP::OpenMP_CXX)
 
-# ── CUDA build (Tesla T4, sm_75) ─────────────────────────────────────────
+# ── CUDA build (Tesla T4, sm_75, 2x GPU Multi-Device) ────────────────────
 else()
     enable_language(CUDA)
     set(CMAKE_CUDA_STANDARD 17)
@@ -71,6 +72,9 @@ else()
         set(CUDA_ARCH 75)   # Tesla T4
     endif()
     set(CMAKE_CUDA_ARCHITECTURES ${CUDA_ARCH})
+
+    # Глобальная активация OpenMP и снятие ограничений constexpr в драйвере NVCC
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -fopenmp --expt-relaxed-constexpr")
 
     add_library(postflop_core STATIC
         src/hand_evaluator.cpp
@@ -91,14 +95,17 @@ else()
         $<$<COMPILE_LANGUAGE:CUDA>:
             -O3 --use_fast_math
             --extra-device-vectorization
+            -Xcompiler -fopenmp
+            --expt-relaxed-constexpr
             -Xptxas=-v
         >
     )
+    target_link_libraries(postflop_core PUBLIC OpenMP::OpenMP_CXX)
 endif()
 
 # ── Live solver daemon (persistent, JSON-over-stdio) ─────────────────────
 add_executable(live_solver src/live_solver.cpp)
-target_link_libraries(live_solver PRIVATE postflop_core)
+target_link_libraries(live_solver PRIVATE postflop_core OpenMP::OpenMP_CXX)
 
 # ── Tests and benchmarks ────────────────────────────────────────────────
 enable_testing()
@@ -166,24 +173,24 @@ add_executable(bench_solver bench/bench_solver.cpp)
 target_link_libraries(bench_solver PRIVATE postflop_core)
 
 add_executable(experiment_4way tests/experiment_4way.cpp)
-target_link_libraries(experiment_4way PRIVATE postflop_core)
+target_link_libraries(experiment_4way PRIVATE postflop_core OpenMP::OpenMP_CXX)
 
 add_executable(experiment_2way tests/experiment_2way.cpp)
-target_link_libraries(experiment_2way PRIVATE postflop_core)
+target_link_libraries(experiment_2way PRIVATE postflop_core OpenMP::OpenMP_CXX)
 
 # ════════════════════════════════════════════════════════════════════════
 # V8 Pure CUDA Artifact Generators (2x Tesla T4 Multi-GPU + OpenMP)
 # ════════════════════════════════════════════════════════════════════════
 
-# 1. Heads-Up 1.71M boards Exact Enumeration
+# 1. Heads-Up 1.71M boards Exact Enumeration (2x GPU)
 add_executable(gen_preflop_table tools/gen_preflop_table.cu)
 target_link_libraries(gen_preflop_table PRIVATE postflop_core OpenMP::OpenMP_CXX)
 
-# 2. 169^3 x 3 Three-Way Preflop Tensor (50k samples Monte Carlo, ~57.9 MB)
+# 2. 169^3 x 3 Three-Way Preflop Tensor (50k samples Monte Carlo, 2x GPU)
 add_executable(gen_preflop_3way tools/gen_preflop_3way.cu)
 target_link_libraries(gen_preflop_3way PRIVATE postflop_core OpenMP::OpenMP_CXX)
 
-# 3. MTT Preflop Anchor Table (100% CUDA Kernel, 27 stacks x 184 flops)
+# 3. MTT Preflop Anchor Table (100% Pure CUDA Kernel, 27 stacks x 184 flops, 2x GPU)
 add_executable(gen_mtt_anchors tools/gen_mtt_anchors.cu)
 target_link_libraries(gen_mtt_anchors PRIVATE postflop_core OpenMP::OpenMP_CXX)
 
