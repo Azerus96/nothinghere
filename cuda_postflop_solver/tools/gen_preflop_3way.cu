@@ -293,6 +293,8 @@ int main(int argc, char** argv) {
         tensor[base * NUM_3WAY_PLAYERS + 2] = cell_out_global[k * 3 + 2];
     }
 
+// Замените конец main() в tools/gen_preflop_3way.cu:
+
     Preflop3WayEquityTable tbl;
     tbl.data = std::move(tensor);
     tbl.loaded = true;
@@ -301,8 +303,20 @@ int main(int argc, char** argv) {
     float aa = tbl.equity(0, 1, 2, 0);
     float kk = tbl.equity(0, 1, 2, 1);
     float qq = tbl.equity(0, 1, 2, 2);
-    std::printf("[gen3way] ✔ УСПЕХ! Тензор сохранён: %s\n", out_path.c_str());
-    std::printf("[gen3way] Проверка среза AA vs KK vs QQ: AA=%.4f, KK=%.4f, QQ=%.4f (Сумма: %.4f)\n",
-                aa, kk, qq, aa + kk + qq);
+    float s = aa + kk + qq;
+
+    std::printf("[gen3way] УСПЕХ! Записан файл: %s\n", out_path.c_str());
+    std::printf("[gen3way] Срез AA vs KK vs QQ: AA=%.4f, KK=%.4f, QQ=%.4f (Сумма: %.4f)\n", aa, kk, qq, s);
+
+    // ── СТРОГО ДЛЯ CTEST: точный вывод, который проверяет тест ──
+    if (dry_run) {
+        bool fast_enough = sec < 5.0;
+        bool sane = (aa > kk && kk > qq && aa > 0.55f && aa < 0.75f && std::fabs((double)s - 1.0) < 0.01);
+        std::printf("[gen3way] DRY-RUN check: %.2fs (<5s: %s), AA>KK>QQ ordering + sum=1: %s\n",
+                    sec, fast_enough ? "OK" : "FAIL", sane ? "OK" : "FAIL");
+        std::fflush(stdout);
+        if (!fast_enough || !sane) return 1;
+    }
+
     return 0;
 }
