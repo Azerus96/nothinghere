@@ -366,5 +366,9 @@ inline const std::vector<JsonValue>& json_get_array(const JsonValue& v, const st
     if (it == v.obj.end() || it->second.type != JsonType::Array) return empty;
     return it->second.arr;
 }
-
+inline const std::vector<JsonValue>& json_get_array_of(const JsonValue& v) {
+    static const std::vector<JsonValue> empty;
+    if (v.type != JsonType::Array) return empty;
+    return v.arr;
+}
 #endif // JSON_MINI_H
