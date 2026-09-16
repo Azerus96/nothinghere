@@ -190,6 +190,11 @@ void kernel_exact_hu_bucket(
 }
 
 int main(int argc, char** argv) {
+    if (init_hand_table_on_gpu() != 0) {
+        std::fprintf(stderr, "FATAL: Failed to init GPU hand table\n");
+        return 1;
+    }
+
     const char* out_path = "preflop_table.bin";
     bool dry = false;
     for (int i = 1; i < argc; ++i) {
