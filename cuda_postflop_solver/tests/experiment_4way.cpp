@@ -172,7 +172,7 @@ int main() {
 
         auto t_start = std::chrono::high_resolution_clock::now();
 
-        for (uint32_t iter = 1; iter <= 1000; ++iter) {
+        for (uint32_t iter = 1; iter <= 60; ++iter) {
             auto t0 = std::chrono::high_resolution_clock::now();
             int res = gpu_solve_step_dispatch(game, iter);
             if (res != 0) {
@@ -182,7 +182,7 @@ int main() {
             auto t1 = std::chrono::high_resolution_clock::now();
             double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-            if (iter % 100 == 0 || iter == 1) {
+            if (iter % 10 == 0 || iter == 1) {
                 gpu_solver_copy_back(game, *game.gpu_mem());
                 std::vector<float> new_strat = extract_all_normalized_strategies(game);
                 float delta = compute_strategy_delta(old_strat, new_strat);
