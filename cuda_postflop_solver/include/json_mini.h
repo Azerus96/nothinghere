@@ -17,16 +17,48 @@
 
 enum class JsonType { Null, Bool, Number, String, Array, Object };
 
+struct JsonValue;
+
+struct JsonObjectMap {
+    using Entry = std::pair<std::string, JsonValue>;
+    std::vector<Entry> entries;
+
+    using iterator = std::vector<Entry>::iterator;
+    using const_iterator = std::vector<Entry>::const_iterator;
+
+    iterator begin() { return entries.begin(); }
+    iterator end() { return entries.end(); }
+    const_iterator begin() const { return entries.begin(); }
+    const_iterator end() const { return entries.end(); }
+
+    size_t size() const { return entries.size(); }
+    bool empty() const { return entries.empty(); }
+
+    iterator find(const std::string& key) {
+        for (auto it = entries.begin(); it != entries.end(); ++it) {
+            if (it->first == key) return it;
+        }
+        return entries.end();
+    }
+
+    const_iterator find(const std::string& key) const {
+        for (auto it = entries.begin(); it != entries.end(); ++it) {
+            if (it->first == key) return it;
+        }
+        return entries.end();
+    }
+
+    JsonValue& operator[](const std::string& key);
+};
+
 struct JsonValue {
     JsonType type = JsonType::Null;
     double num = 0.0;
     bool boolean = false;
     std::string str;
     std::vector<JsonValue> arr;
-    std::unordered_map<std::string, JsonValue> obj;
+    JsonObjectMap obj;
 
-    // Static factories (named j*/boolean_ to avoid clashing with the
-    // data members `num` / `str`).
     static JsonValue make_null() { return JsonValue{}; }
     static JsonValue jnum(double v) { JsonValue j; j.type = JsonType::Number; j.num = v; return j; }
     static JsonValue jstr(const std::string& s) { JsonValue j; j.type = JsonType::String; j.str = s; return j; }
@@ -35,6 +67,14 @@ struct JsonValue {
     bool is_number() const { return type == JsonType::Number; }
     bool is_string() const { return type == JsonType::String; }
 };
+
+inline JsonValue& JsonObjectMap::operator[](const std::string& key) {
+    for (auto& kv : entries) {
+        if (kv.first == key) return kv.second;
+    }
+    entries.push_back({key, JsonValue{}});
+    return entries.back().second;
+}
 
 namespace json_mini_detail {
 
