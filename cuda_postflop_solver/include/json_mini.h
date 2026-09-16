@@ -20,17 +20,11 @@
 enum class JsonType { Null, Bool, Number, String, Array, Object };
 
 struct JsonValue;
+struct JsonObjectImpl; // Только предварительное объявление! Никаких шаблонов до закрытия JsonValue
 
-// PIMPL-обертка для поддержки рекурсивных типов на GCC 11 / Clang / MSVC
 class JsonObject {
-public:
-    using MapType = std::unordered_map<std::string, JsonValue>;
-    using iterator = MapType::iterator;
-    using const_iterator = MapType::const_iterator;
-
 private:
-    mutable std::shared_ptr<MapType> map_;
-    void ensure_map() const;
+    std::shared_ptr<JsonObjectImpl> impl;
 
 public:
     JsonObject();
@@ -40,16 +34,19 @@ public:
     JsonObject(JsonObject&&) noexcept;
     JsonObject& operator=(JsonObject&&) noexcept;
 
-    iterator begin();
-    iterator end();
-    const_iterator begin() const;
-    const_iterator end() const;
+    struct Iterator;
+    struct ConstIterator;
+
+    Iterator begin();
+    Iterator end();
+    ConstIterator begin() const;
+    ConstIterator end() const;
 
     size_t size() const;
     bool empty() const;
 
-    iterator find(const std::string& key);
-    const_iterator find(const std::string& key) const;
+    Iterator find(const std::string& key);
+    ConstIterator find(const std::string& key) const;
 
     JsonValue& operator[](const std::string& key);
 };
@@ -60,7 +57,7 @@ struct JsonValue {
     bool boolean = false;
     std::string str;
     std::vector<JsonValue> arr;
-    JsonObject obj; // Фиксированный размер 16 байт, компилируется на любых GCC
+    JsonObject obj; // Ровно 16 байт (shared_ptr), компилируется на абсолютно любом GCC
 
     static JsonValue make_null() { return JsonValue{}; }
     static JsonValue jnum(double v) { JsonValue j; j.type = JsonType::Number; j.num = v; return j; }
@@ -71,39 +68,62 @@ struct JsonValue {
     bool is_string() const { return type == JsonType::String; }
 };
 
-// Реализация методов JsonObject после полного закрытия JsonValue
-inline void JsonObject::ensure_map() const {
-    if (!map_) map_ = std::make_shared<MapType>();
-}
+// ── ТЕПЕРЬ JsonValue ПОЛНОСТЬЮ ЗАВЕРШЁН (COMPLETE TYPE) ────────────────
+// Теперь безопасно объявлять std::unordered_map
+struct JsonObjectImpl {
+    std::unordered_map<std::string, JsonValue> map;
+};
 
-inline JsonObject::JsonObject() = default;
+struct JsonObject::Iterator {
+    std::unordered_map<std::string, JsonValue>::iterator it;
+    bool operator==(const Iterator& o) const { return it == o.it; }
+    bool operator!=(const Iterator& o) const { return it != o.it; }
+    Iterator& operator++() { ++it; return *this; }
+    std::pair<const std::string, JsonValue>& operator*() { return *it; }
+    std::pair<const std::string, JsonValue>* operator->() { return &(*it); }
+};
+
+struct JsonObject::ConstIterator {
+    std::unordered_map<std::string, JsonValue>::const_iterator it;
+    bool operator==(const ConstIterator& o) const { return it == o.it; }
+    bool operator!=(const ConstIterator& o) const { return it != o.it; }
+    ConstIterator& operator++() { ++it; return *this; }
+    const std::pair<const std::string, JsonValue>& operator*() const { return *it; }
+    const std::pair<const std::string, JsonValue>* operator->() const { return &(*it); }
+};
+
+inline JsonObject::JsonObject() : impl(std::make_shared<JsonObjectImpl>()) {}
 inline JsonObject::~JsonObject() = default;
-inline JsonObject::JsonObject(const JsonObject&) = default;
-inline JsonObject& JsonObject::operator=(const JsonObject&) = default;
+inline JsonObject::JsonObject(const JsonObject& o) {
+    if (o.impl) impl = std::make_shared<JsonObjectImpl>(*o.impl);
+    else impl = std::make_shared<JsonObjectImpl>();
+}
+inline JsonObject& JsonObject::operator=(const JsonObject& o) {
+    if (this != &o) {
+        if (o.impl) impl = std::make_shared<JsonObjectImpl>(*o.impl);
+        else impl = std::make_shared<JsonObjectImpl>();
+    }
+    return *this;
+}
 inline JsonObject::JsonObject(JsonObject&&) noexcept = default;
 inline JsonObject& JsonObject::operator=(JsonObject&&) noexcept = default;
 
-inline JsonObject::iterator JsonObject::begin() { ensure_map(); return map_->begin(); }
-inline JsonObject::iterator JsonObject::end() { ensure_map(); return map_->end(); }
-inline JsonObject::const_iterator JsonObject::begin() const { ensure_map(); return map_->begin(); }
-inline JsonObject::const_iterator JsonObject::end() const { ensure_map(); return map_->end(); }
+inline JsonObject::Iterator JsonObject::begin() { return Iterator{impl->map.begin()}; }
+inline JsonObject::Iterator JsonObject::end() { return Iterator{impl->map.end()}; }
+inline JsonObject::ConstIterator JsonObject::begin() const { return ConstIterator{impl->map.begin()}; }
+inline JsonObject::ConstIterator JsonObject::end() const { return ConstIterator{impl->map.end()}; }
 
-inline size_t JsonObject::size() const { return map_ ? map_->size() : 0; }
-inline bool JsonObject::empty() const { return map_ ? map_->empty() : true; }
+inline size_t JsonObject::size() const { return impl ? impl->map.size() : 0; }
+inline bool JsonObject::empty() const { return impl ? impl->map.empty() : true; }
 
-inline JsonObject::iterator JsonObject::find(const std::string& key) {
-    ensure_map();
-    return map_->find(key);
+inline JsonObject::Iterator JsonObject::find(const std::string& key) {
+    return Iterator{impl->map.find(key)};
 }
-
-inline JsonObject::const_iterator JsonObject::find(const std::string& key) const {
-    ensure_map();
-    return map_->find(key);
+inline JsonObject::ConstIterator JsonObject::find(const std::string& key) const {
+    return ConstIterator{impl->map.find(key)};
 }
-
 inline JsonValue& JsonObject::operator[](const std::string& key) {
-    ensure_map();
-    return (*map_)[key];
+    return impl->map[key];
 }
 
 namespace json_mini_detail {
@@ -281,16 +301,9 @@ inline void serialize_value(const JsonValue& v, std::string& out) {
         case JsonType::Null:   out += "null"; break;
         case JsonType::Bool:   out += v.boolean ? "true" : "false"; break;
         case JsonType::Number: {
-            double r = v.num < 0 ? -v.num : v.num;
-            if (v.num == (double)(long long)v.num && r < 1e15) {
-                char buf[32];
-                std::snprintf(buf, sizeof(buf), "%lld", (long long)v.num);
-                out += buf;
-            } else {
-                char buf[32];
-                std::snprintf(buf, sizeof(buf), "%.10g", v.num);
-                out += buf;
-            }
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.10g", v.num);
+            out += buf;
             break;
         }
         case JsonType::String: escape_into(v.str, out); break;
@@ -352,11 +365,6 @@ inline const std::vector<JsonValue>& json_get_array(const JsonValue& v, const st
     auto it = v.obj.find(key);
     if (it == v.obj.end() || it->second.type != JsonType::Array) return empty;
     return it->second.arr;
-}
-inline const std::vector<JsonValue>& json_get_array_of(const JsonValue& v) {
-    static const std::vector<JsonValue> empty;
-    if (v.type != JsonType::Array) return empty;
-    return v.arr;
 }
 
 #endif // JSON_MINI_H
