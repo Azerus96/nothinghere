@@ -199,6 +199,8 @@ target_link_libraries(experiment_2way PRIVATE postflop_core)
 
 # ── V8 artifact generators (heavy compute runs on the 2x Tesla T4 staging
 #    cluster; --dry-run sanity paths run anywhere in < 5 s) ───────────────
+add_executable(gen_preflop_table tools/gen_preflop_table.cu)
+target_link_libraries(gen_preflop_table PRIVATE postflop_core)
 
 # Module 3: 169^3 x 3 three-way preflop tensor (P3TB, ~57.9 MB).
 # Deterministic GPU Monte Carlo (5000 samples/cell) — exact enumeration
