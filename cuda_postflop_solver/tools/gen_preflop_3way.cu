@@ -243,7 +243,7 @@ void kernel_3way_mc(
     }
 }
 
-    int main(int argc, char** argv) {
+int main(int argc, char** argv) {
     if (init_hand_table_on_gpu() != 0) {
         std::fprintf(stderr, "FATAL: Failed to init GPU hand table\n");
         return 1;
