@@ -91,7 +91,8 @@ public:
         hi = (lo + 1 < (int)grid.size()) ? lo + 1 : lo;
 
         double w = (grid[hi] > grid[lo]) ? (stack_bb - grid[lo]) / (double)(grid[hi] - grid[lo]) : 0.0;
-        if (w < 0.0) w = 0.0; if (w > 1.0) w = 1.0;
+        if (w < 0.0) { w = 0.0; }
+        if (w > 1.0) { w = 1.0; }
 
         size_t idx_lo = anchor::tensor_index_v2(lo, pos, ctx, combo_idx, 0);
         size_t idx_hi = anchor::tensor_index_v2(hi, pos, ctx, combo_idx, 0);
@@ -122,7 +123,8 @@ public:
         hi = (lo + 1 < (int)grid.size()) ? lo + 1 : lo;
 
         double w = (grid[hi] > grid[lo]) ? (stack_bb - grid[lo]) / (double)(grid[hi] - grid[lo]) : 0.0;
-        if (w < 0.0) w = 0.0; if (w > 1.0) w = 1.0;
+        if (w < 0.0) { w = 0.0; }
+        if (w > 1.0) { w = 1.0; }
 
         auto cell = [&](int stk) -> const uint8_t* {
             size_t idx = (((stk * 8) + position) * 169 + hero_class) * 4;
