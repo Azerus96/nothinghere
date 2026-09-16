@@ -203,7 +203,7 @@ target_link_libraries(experiment_2way PRIVATE postflop_core)
 # Module 3: 169^3 x 3 three-way preflop tensor (P3TB, ~57.9 MB).
 # Deterministic GPU Monte Carlo (5000 samples/cell) — exact enumeration
 # would cost ~8.26e13 operations (~4 days).
-add_executable(gen_preflop_3way tools/gen_preflop_3way.cpp)
+add_executable(gen_preflop_3way tools/gen_preflop_3way.cu)
 target_link_libraries(gen_preflop_3way PRIVATE postflop_core)
 
 # Module 6: MTT preflop anchor table (MTTA) over the 27-point stack grid,
