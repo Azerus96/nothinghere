@@ -115,10 +115,6 @@ endif()
 add_executable(live_solver src/live_solver.cpp)
 target_link_libraries(live_solver PRIVATE postflop_core)
 
-# ── Preflop table generator (run once; ships preflop_table.bin) ─────────
-add_executable(gen_preflop_table tools/gen_preflop_table.cpp)
-target_link_libraries(gen_preflop_table PRIVATE postflop_core)
-
 # ── Tests and benchmarks ────────────────────────────────────────────────
 enable_testing()
 
