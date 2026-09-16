@@ -11,42 +11,45 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <memory>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 enum class JsonType { Null, Bool, Number, String, Array, Object };
 
 struct JsonValue;
 
-struct JsonObjectMap {
-    using Entry = std::pair<std::string, JsonValue>;
-    std::vector<Entry> entries;
+// PIMPL-обертка для поддержки рекурсивных типов на GCC 11 / Clang / MSVC
+class JsonObject {
+public:
+    using MapType = std::unordered_map<std::string, JsonValue>;
+    using iterator = MapType::iterator;
+    using const_iterator = MapType::const_iterator;
 
-    using iterator = std::vector<Entry>::iterator;
-    using const_iterator = std::vector<Entry>::const_iterator;
+private:
+    mutable std::shared_ptr<MapType> map_;
+    void ensure_map() const;
 
-    iterator begin() { return entries.begin(); }
-    iterator end() { return entries.end(); }
-    const_iterator begin() const { return entries.begin(); }
-    const_iterator end() const { return entries.end(); }
+public:
+    JsonObject();
+    ~JsonObject();
+    JsonObject(const JsonObject&);
+    JsonObject& operator=(const JsonObject&);
+    JsonObject(JsonObject&&) noexcept;
+    JsonObject& operator=(JsonObject&&) noexcept;
 
-    size_t size() const { return entries.size(); }
-    bool empty() const { return entries.empty(); }
+    iterator begin();
+    iterator end();
+    const_iterator begin() const;
+    const_iterator end() const;
 
-    iterator find(const std::string& key) {
-        for (auto it = entries.begin(); it != entries.end(); ++it) {
-            if (it->first == key) return it;
-        }
-        return entries.end();
-    }
+    size_t size() const;
+    bool empty() const;
 
-    const_iterator find(const std::string& key) const {
-        for (auto it = entries.begin(); it != entries.end(); ++it) {
-            if (it->first == key) return it;
-        }
-        return entries.end();
-    }
+    iterator find(const std::string& key);
+    const_iterator find(const std::string& key) const;
 
     JsonValue& operator[](const std::string& key);
 };
@@ -57,7 +60,7 @@ struct JsonValue {
     bool boolean = false;
     std::string str;
     std::vector<JsonValue> arr;
-    JsonObjectMap obj;
+    JsonObject obj; // Фиксированный размер 16 байт, компилируется на любых GCC
 
     static JsonValue make_null() { return JsonValue{}; }
     static JsonValue jnum(double v) { JsonValue j; j.type = JsonType::Number; j.num = v; return j; }
@@ -68,12 +71,39 @@ struct JsonValue {
     bool is_string() const { return type == JsonType::String; }
 };
 
-inline JsonValue& JsonObjectMap::operator[](const std::string& key) {
-    for (auto& kv : entries) {
-        if (kv.first == key) return kv.second;
-    }
-    entries.push_back({key, JsonValue{}});
-    return entries.back().second;
+// Реализация методов JsonObject после полного закрытия JsonValue
+inline void JsonObject::ensure_map() const {
+    if (!map_) map_ = std::make_shared<MapType>();
+}
+
+inline JsonObject::JsonObject() = default;
+inline JsonObject::~JsonObject() = default;
+inline JsonObject::JsonObject(const JsonObject&) = default;
+inline JsonObject& JsonObject::operator=(const JsonObject&) = default;
+inline JsonObject::JsonObject(JsonObject&&) noexcept = default;
+inline JsonObject& JsonObject::operator=(JsonObject&&) noexcept = default;
+
+inline JsonObject::iterator JsonObject::begin() { ensure_map(); return map_->begin(); }
+inline JsonObject::iterator JsonObject::end() { ensure_map(); return map_->end(); }
+inline JsonObject::const_iterator JsonObject::begin() const { ensure_map(); return map_->begin(); }
+inline JsonObject::const_iterator JsonObject::end() const { ensure_map(); return map_->end(); }
+
+inline size_t JsonObject::size() const { return map_ ? map_->size() : 0; }
+inline bool JsonObject::empty() const { return map_ ? map_->empty() : true; }
+
+inline JsonObject::iterator JsonObject::find(const std::string& key) {
+    ensure_map();
+    return map_->find(key);
+}
+
+inline JsonObject::const_iterator JsonObject::find(const std::string& key) const {
+    ensure_map();
+    return map_->find(key);
+}
+
+inline JsonValue& JsonObject::operator[](const std::string& key) {
+    ensure_map();
+    return (*map_)[key];
 }
 
 namespace json_mini_detail {
@@ -189,7 +219,6 @@ struct Parser {
                             else if (h >= 'A' && h <= 'F') code |= (unsigned)(h - 'A' + 10);
                             else throw std::runtime_error("bad hex in \\u escape");
                         }
-                        // Basic multilingual plane: encode as UTF-8.
                         if (code < 0x80) out += (char)code;
                         else if (code < 0x800) {
                             out += (char)(0xC0 | (code >> 6));
@@ -292,7 +321,6 @@ inline void serialize_value(const JsonValue& v, std::string& out) {
 
 } // namespace json_mini_detail
 
-// ── Public API ──────────────────────────────────────────────────────────
 inline JsonValue json_parse(const std::string& text) {
     json_mini_detail::Parser p{text.data(), text.data() + text.size()};
     JsonValue v = p.parse_value();
@@ -306,7 +334,6 @@ inline std::string json_serialize(const JsonValue& v) {
     return out;
 }
 
-// Accessors with defaults (daemon convenience).
 inline double json_get_double(const JsonValue& v, const std::string& key, double def) {
     auto it = v.obj.find(key);
     if (it == v.obj.end() || it->second.type != JsonType::Number) return def;
