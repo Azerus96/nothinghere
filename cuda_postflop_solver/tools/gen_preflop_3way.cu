@@ -293,7 +293,8 @@ int main(int argc, char** argv) {
         tensor[base * NUM_3WAY_PLAYERS + 2] = cell_out_global[k * 3 + 2];
     }
 
-// Замените конец main() в tools/gen_preflop_3way.cu:
+    auto t1 = std::chrono::high_resolution_clock::now();
+    double sec = std::chrono::duration<double>(t1 - t0).count();
 
     Preflop3WayEquityTable tbl;
     tbl.data = std::move(tensor);
