@@ -1,62 +1,370 @@
 (function () {
   'use strict';
 
-  if (window.__OFC_ENGINE_INSTALLED__) {
-    console.warn('[OFC Engine] Уже активен!');
+  if (window.__OFC_REAL_SOLVER__) {
+    console.warn('[OFC Solver] Уже запущен!');
     return;
   }
-  window.__OFC_ENGINE_INSTALLED__ = true;
-
-  console.log('%c[OFC Engine] Запуск движка Pineapple + Fantasyland...', 'color: #00ff00; font-weight: bold;');
+  window.__OFC_REAL_SOLVER__ = true;
 
   // =========================================================================
-  // 1. КОНСТАНТЫ, РАНГИ И РОЯЛТИ (POKERDOM / AMERICAN OFC)
+  // 1. КОНСТАНТЫ И ВЕСА FANTASYLAND (ИЗ OFC-SOLVER-MAIN)
   // =========================================================================
-  const RANKS = { '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, 'T': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14 };
-  const SUITS = ['c', 'd', 'h', 's'];
-  const RANK_NAMES = { 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8', 9: '9', 10: 'T', 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };
+  const CAT_HIGH = 0, CAT_PAIR = 1, CAT_TWOPAIR = 2, CAT_TRIPS = 3;
+  const CAT_STRAIGHT = 4, CAT_FLUSH = 5, CAT_FULLHOUSE = 6, CAT_QUADS = 7, CAT_STRAIGHTFLUSH = 8;
+
+  // Динамическая ценность Fantasyland Ultimate для 54 карт с Джокерами (V14..V17)
+  const FL_VALUES_JOKER = { 14: 6.5, 15: 19.6, 16: 41.8, 17: 87.2 };
+  const FOUL_WEIGHT = 9.0;
+
+  const BOT_ROY = [0, 0, 0, 0, 2, 4, 6, 10, 15];
+  const MID_ROY = [0, 0, 0, 2, 4, 8, 12, 20, 30];
+  const ROYAL_KEY = (CAT_STRAIGHTFLUSH << 20) | (14 << 16);
+
+  const WINDOW_MASKS = new Int32Array(15);
+  for (let high = 6; high <= 14; high++) {
+    let m = 0;
+    for (let d = 0; d < 5; d++) m |= (1 << (high - d));
+    WINDOW_MASKS[high] = m;
+  }
+  WINDOW_MASKS[5] = (1 << 14) | (1 << 5) | (1 << 4) | (1 << 3) | (1 << 2);
 
   // =========================================================================
-  // 2. ОЦЕНЩИК РУК С ДЖОКЕРАМИ (5-карточный и 3-карточный)
+  // 2. БЕЗАЛЛОКАЦИОННЫЙ 24-БИТНЫЙ ОЦЕНЩИК РУК (FASTEVAL)
   // =========================================================================
-  function parseCard(cardStr) {
-    if (!cardStr) return null;
-    if (cardStr.startsWith('Joker')) {
-      return { rank: 0, suit: 'j', isJoker: true, raw: cardStr };
-    }
-    const r = RANKS[cardStr[0]];
-    const s = cardStr[1];
-    return { rank: r, suit: s, isJoker: false, raw: cardStr };
+  const cnt = new Uint8Array(15);
+  const wcnt = new Uint8Array(15);
+  const natRanks = new Int32Array(5);
+
+  function cardId(c) {
+    if (c.rank === 0) return c.suit === 'c' ? 52 : 53;
+    return (c.rank - 2) * 4 + (c.suit === 'c' ? 0 : c.suit === 'd' ? 1 : c.suit === 'h' ? 2 : 3);
   }
 
-  // Оценка 5-карточной линии (с подстановкой до 2 джокеров)
-  function eval5(cards) {
-    const jokers = cards.filter(c => c.isJoker);
-    const regular = cards.filter(c => !c.isJoker);
-    const jCount = jokers.length;
+  function parseCard(str) {
+    if (!str) return null;
+    if (str === 'X1' || str === 'Joker0') return { rank: 0, suit: 'c', raw: str };
+    if (str === 'X2' || str === 'Joker1') return { rank: 0, suit: 'd', raw: str };
+    const len = str.length;
+    const s = str[len - 1].toLowerCase();
+    const rStr = str.substring(0, len - 1);
+    let r = 0;
+    if (rStr === 'A') r = 14;
+    else if (rStr === 'K') r = 13;
+    else if (rStr === 'Q') r = 12;
+    else if (rStr === 'J') r = 11;
+    else if (rStr === 'T' || rStr === '10') r = 10;
+    else r = parseInt(rStr, 10);
+    return { rank: r, suit: s, raw: str };
+  }
 
-    if (jCount === 0) return eval5Natural(regular);
+  function evaluate3(c) {
+    const a = c[0].rank, b = c[1].rank, d = c[2].rank;
+    if (a === 0 || b === 0 || d === 0) {
+      let x = (a !== 0) ? a : ((b !== 0) ? b : d);
+      let y = (a !== 0 && b !== 0) ? b : ((a !== 0 && d !== 0) ? d : ((b !== 0 && d !== 0) ? d : 0));
+      if (y === 0 || x === y) return (CAT_TRIPS << 20) | (x << 16);
+      return (CAT_PAIR << 20) | (Math.max(x, y) << 16) | (Math.min(x, y) << 12);
+    }
+    if (a === b && b === d) return (CAT_TRIPS << 20) | (a << 16);
+    if (a === b) return (CAT_PAIR << 20) | (a << 16) | (d << 12);
+    if (a === d) return (CAT_PAIR << 20) | (a << 16) | (b << 12);
+    if (b === d) return (CAT_PAIR << 20) | (b << 16) | (a << 12);
 
-    // Генерируем возможные варианты замещения джокеров
-    let best = { score: -1, type: 0, rankVal: 0 };
-    const allRanks = [14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2];
-    const targetSuits = regular.length > 0 ? [regular[0].suit] : ['c'];
+    let x = a, y = b, z = d, tmp;
+    if (x < y) { tmp = x; x = y; y = tmp; }
+    if (y < z) { tmp = y; y = z; z = tmp; }
+    if (x < y) { tmp = x; x = y; y = tmp; }
+    return (CAT_HIGH << 20) | (x << 16) | (y << 12) | (z << 8);
+  }
 
-    if (jCount === 1) {
-      for (let r of allRanks) {
-        for (let s of SUITS) {
-          const testHand = [...regular, { rank: r, suit: s, isJoker: false }];
-          const res = eval5Natural(testHand);
-          if (res.score > best.score) best = res;
+  function evaluate5(cards) {
+    let jokers = 0;
+    for (let i = 0; i < 5; i++) if (cards[i].rank === 0) jokers++;
+
+    if (jokers === 0) {
+      const isFlush = (cards[0].suit === cards[1].suit && cards[0].suit === cards[2].suit &&
+                       cards[0].suit === cards[3].suit && cards[0].suit === cards[4].suit);
+      cnt.fill(0);
+      for (let i = 0; i < 5; i++) cnt[cards[i].rank]++;
+
+      let quad = 0, trip = 0, pairHi = 0, pairLo = 0;
+      let k0 = 0, k1 = 0, k2 = 0, k3 = 0, k4 = 0;
+      let uniq = 0, hi = 0, lo = 15;
+
+      for (let r = 14; r >= 2; r--) {
+        const c = cnt[r];
+        if (c === 0) continue;
+        uniq++;
+        if (r > hi) hi = r;
+        if (r < lo) lo = r;
+        if (c === 4) quad = r;
+        else if (c === 3) trip = r;
+        else if (c === 2) {
+          if (pairHi === 0) pairHi = r; else pairLo = r;
+        } else {
+          if (k0 === 0) k0 = r;
+          else if (k1 === 0) k1 = r;
+          else if (k2 === 0) k2 = r;
+          else if (k3 === 0) k3 = r;
+          else k4 = r;
         }
       }
-    } else if (jCount === 2) {
-      for (let r1 of allRanks) {
-        for (let r2 of allRanks) {
-          for (let s of targetSuits) {
-            const testHand = [...regular, { rank: r1, suit: s }, { rank: r2, suit: s }];
-            const res = eval5Natural(testHand);
-            if (res.score > best.score) best = res;
+
+      let sh = 0;
+      if (uniq === 5) {
+        if (hi - lo === 4) sh = hi;
+        else if (hi === 14 && k1 === 5) sh = 5; // Стрит-колесо A-2-3-4-5 исправлен!
+      }
+
+      if (isFlush && sh) return (CAT_STRAIGHTFLUSH << 20) | (sh << 16);
+      if (quad) return (CAT_QUADS << 20) | (quad << 16) | (k0 << 12);
+      if (trip && pairHi) return (CAT_FULLHOUSE << 20) | (trip << 16) | (pairHi << 12);
+      if (isFlush) return (CAT_FLUSH << 20) | (k0 << 16) | (k1 << 12) | (k2 << 8) | (k3 << 4) | k4;
+      if (sh) return (CAT_STRAIGHT << 20) | (sh << 16);
+      if (trip) return (CAT_TRIPS << 20) | (trip << 16) | (k0 << 12) | (k1 << 8);
+      if (pairLo) return (CAT_TWOPAIR << 20) | (pairHi << 16) | (pairLo << 12) | (k0 << 8);
+      if (pairHi) return (CAT_PAIR << 20) | (pairHi << 16) | (k0 << 12) | (k1 << 8) | (k2 << 4);
+      return (CAT_HIGH << 20) | (k0 << 16) | (k1 << 12) | (k2 << 8) | (k3 << 4) | k4;
+    }
+
+    // Джокерный 5-карточный оценщик
+    let sameSuit = true, suit = null, rankMask = 0, hasDup = false, m = 0;
+    wcnt.fill(0);
+
+    for (let i = 0; i < 5; i++) {
+      const c = cards[i];
+      if (c.rank === 0) continue;
+      if (suit === null) suit = c.suit;
+      else if (c.suit !== suit) sameSuit = false;
+      wcnt[c.rank]++;
+      if (wcnt[c.rank] > 1) hasDup = true;
+      rankMask |= (1 << c.rank);
+      natRanks[m++] = c.rank;
+    }
+
+    // Сортировка натуральных рангов на месте
+    for (let i = 1; i < m; i++) {
+      let v = natRanks[i], j = i - 1;
+      while (j >= 0 && natRanks[j] < v) { natRanks[j + 1] = natRanks[j]; j--; }
+      natRanks[j + 1] = v;
+    }
+
+    if (sameSuit && !hasDup) {
+      for (let high = 14; high >= 5; high--) {
+        if ((rankMask & ~WINDOW_MASKS[high]) === 0) return (CAT_STRAIGHTFLUSH << 20) | (high << 16);
+      }
+    }
+    for (let r = 14; r >= 2; r--) {
+      if (wcnt[r] >= 4 - jokers) {
+        let jl = jokers - (4 - wcnt[r]);
+        let kicker = (jl > 0) ? (r === 14 ? 13 : 14) : 0;
+        if (kicker === 0) {
+          for (let i = 0; i < m; i++) if (natRanks[i] !== r) { kicker = natRanks[i]; break; }
+        }
+        return (CAT_QUADS << 20) | (r << 16) | (kicker << 12);
+      }
+    }
+    if (jokers === 1) {
+      let p1 = 0, p2 = 0;
+      for (let r = 14; r >= 2; r--) {
+        if (wcnt[r] === 2) { if (p1 === 0) p1 = r; else if (p2 === 0) p2 = r; }
+      }
+      if (p1 && p2) return (CAT_FULLHOUSE << 20) | (p1 << 16) | (p2 << 12);
+    }
+    if (sameSuit) {
+      let key = (CAT_FLUSH << 20), need = jokers, filled = 0;
+      for (let r = 14; r >= 2 && filled < 5; r--) {
+        if (rankMask & (1 << r)) key |= (r << (16 - 4 * filled++));
+        else if (need > 0) { key |= (r << (16 - 4 * filled++)); need--; }
+      }
+      return key;
+    }
+    if (!hasDup) {
+      for (let high = 14; high >= 5; high--) {
+        if ((rankMask & ~WINDOW_MASKS[high]) === 0) return (CAT_STRAIGHT << 20) | (high << 16);
+      }
+    }
+    for (let r = 14; r >= 2; r--) {
+      if (wcnt[r] >= 3 - jokers) {
+        let k0 = 0, k1 = 0;
+        for (let i = 0; i < m; i++) {
+          if (natRanks[i] === r) continue;
+          if (k0 === 0) k0 = natRanks[i]; else { k1 = natRanks[i]; break; }
+        }
+        return (CAT_TRIPS << 20) | (r << 16) | (k0 << 12) | (k1 << 8);
+      }
+    }
+    return (CAT_PAIR << 20) | (natRanks[0] << 16) | (natRanks[1] << 12) | (natRanks[2] << 8) | (natRanks[3] << 4);
+  }
+
+  // Каскадный демут джокеров (Rule of Wilds)
+  function key5AtMost(cards, bound) {
+    let jc = 0, j0 = -1, j1 = -1;
+    for (let i = 0; i < 5; i++) {
+      if (cards[i].rank === 0) {
+        jc++;
+        if (j0 === -1) j0 = i; else j1 = i;
+      }
+    }
+    if (jc === 0) {
+      const k = evaluate5(cards);
+      return k <= bound ? k : -1;
+    }
+    let best = -1;
+    const buf = cards.map(c => ({ rank: c.rank, suit: c.suit }));
+    if (jc === 1) {
+      for (let r = 14; r >= 2; r--) {
+        buf[j0].rank = r;
+        const k = evaluate5(buf);
+        if (k <= bound && k > best) best = k;
+      }
+    } else {
+      for (let r1 = 14; r1 >= 2; r1--) {
+        buf[j0].rank = r1;
+        for (let r2 = r1; r2 >= 2; r2--) {
+          buf[j1].rank = r2;
+          const k = evaluate5(buf);
+          if (k <= bound && k > best) best = k;
+        }
+      }
+    }
+    return best;
+  }
+
+  function key3AtMost(cards, bound) {
+    let jc = 0, j0 = -1, j1 = -1;
+    for (let i = 0; i < 3; i++) {
+      if (cards[i].rank === 0) {
+        jc++;
+        if (j0 === -1) j0 = i; else j1 = i;
+      }
+    }
+    if (jc === 0) {
+      const k = evaluate3(cards);
+      return k <= bound ? k : -1;
+    }
+    let best = -1;
+    const buf = cards.map(c => ({ rank: c.rank, suit: c.suit }));
+    if (jc === 1) {
+      for (let r = 14; r >= 2; r--) {
+        buf[j0].rank = r;
+        const k = evaluate3(buf);
+        if (k <= bound && k > best) best = k;
+      }
+    } else {
+      for (let r1 = 14; r1 >= 2; r1--) {
+        buf[j0].rank = r1;
+        for (let r2 = r1; r2 >= 2; r2--) {
+          buf[j1].rank = r2;
+          const k = evaluate3(buf);
+          if (k <= bound && k > best) best = k;
+        }
+      }
+    }
+    return best;
+  }
+
+  function getRoyalties(topK, midK, botK) {
+    let roy = 0;
+    const tCat = topK >>> 20;
+    if (tCat === CAT_TRIPS) roy += 10 + ((topK >>> 16) & 0xF) - 2;
+    else if (tCat === CAT_PAIR) {
+      const r = (topK >>> 16) & 0xF;
+      if (r >= 6) roy += r - 5;
+    }
+    roy += (midK === ROYAL_KEY) ? 50 : MID_ROY[midK >>> 20];
+    roy += (botK === ROYAL_KEY) ? 25 : BOT_ROY[botK >>> 20];
+    return roy;
+  }
+
+  function getFLCards(topK) {
+    const cat = topK >>> 20;
+    if (cat === CAT_TRIPS) return 17;
+    if (cat === CAT_PAIR) {
+      const r = (topK >>> 16) & 0xF;
+      if (r === 12) return 14; // QQ
+      if (r === 13) return 15; // KK
+      if (r === 14) return 16; // AA
+    }
+    return 0;
+  }
+
+  // =========================================================================
+  // 3. FANTASYLAND SOLVER (БЕЗОПАСНЫЙ И ТОЧНЫЙ 13-17 КАРТ)
+  // =========================================================================
+  function solveFantasyland(cards) {
+    const n = cards.length;
+    let bestObj = -1e9;
+    let best = null;
+
+    function combos5(arr) {
+      const res = [];
+      const len = arr.length;
+      for (let a = 0; a < len; a++)
+      for (let b = a + 1; b < len; b++)
+      for (let c = b + 1; c < len; c++)
+      for (let d = c + 1; d < len; d++)
+      for (let e = d + 1; e < len; e++)
+        res.push([arr[a], arr[b], arr[c], arr[d], arr[e]]);
+      return res;
+    }
+
+    const allIndices = Array.from({ length: n }, (_, i) => i);
+    const botCombos = combos5(allIndices);
+
+    for (let bIdx of botCombos) {
+      const bMask = (1 << bIdx[0]) | (1 << bIdx[1]) | (1 << bIdx[2]) | (1 << bIdx[3]) | (1 << bIdx[4]);
+      const bCards = bIdx.map(i => cards[i]);
+      const bKey = evaluate5(bCards);
+      const botStays = (bKey >>> 20) >= CAT_QUADS;
+
+      const rem1 = allIndices.filter(i => !(bMask & (1 << i)));
+      const midCombos = combos5(rem1);
+
+      for (let mIdx of midCombos) {
+        const mMask = (1 << mIdx[0]) | (1 << mIdx[1]) | (1 << mIdx[2]) | (1 << mIdx[3]) | (1 << mIdx[4]);
+        const mCards = mIdx.map(i => cards[i]);
+        let mKey = evaluate5(mCards);
+
+        if (mKey > bKey) {
+          mKey = key5AtMost(mCards, bKey);
+          if (mKey < 0) continue;
+        }
+
+        const used = bMask | mMask;
+        const rem2 = allIndices.filter(i => !(used & (1 << i)));
+        const rc = rem2.length;
+
+        // Динамический безопасный перебор топа C(rc, 3)
+        for (let i0 = 0; i0 < rc - 2; i0++) {
+          for (let i1 = i0 + 1; i1 < rc - 1; i1++) {
+            for (let i2 = i1 + 1; i2 < rc; i2++) {
+              const tCards = [cards[rem2[i0]], cards[rem2[i1]], cards[rem2[i2]]];
+              let tKey = evaluate3(tCards);
+              if (tKey > mKey) {
+                tKey = key3AtMost(tCards, mKey);
+                if (tKey < 0) continue;
+              }
+
+              const stays = botStays || ((tKey >>> 20) === CAT_TRIPS);
+              const roys = getRoyalties(tKey, mKey, bKey);
+              const stayBonus = FL_VALUES_JOKER[n] || 20.0;
+              // Приоритет рестея: +100000 гарантирует победу ре-фантазии
+              const obj = roys + (stays ? (stayBonus + 100000.0) : 0);
+
+              if (obj > bestObj) {
+                bestObj = obj;
+                best = {
+                  top: tCards,
+                  middle: mCards,
+                  bottom: bCards,
+                  royalties: roys,
+                  stays: stays,
+                  score: stays ? (obj - 100000.0) : obj
+                };
+              }
+            }
           }
         }
       }
@@ -64,619 +372,362 @@
     return best;
   }
 
-  function eval5Natural(cards) {
-    const sorted = [...cards].sort((a, b) => b.rank - a.rank);
-    const ranks = sorted.map(c => c.rank);
-    const isFlush = cards.every(c => c.suit === cards[0].suit);
-
-    // Подсчет повторений
-    const counts = {};
-    ranks.forEach(r => counts[r] = (counts[r] || 0) + 1);
-    const countPairs = Object.entries(counts).map(([r, c]) => ({ rank: +r, count: c }));
-    countPairs.sort((a, b) => b.count - a.count || b.rank - a.rank);
-
-    // Проверка стрита
-    const uniqueRanks = [...new Set(ranks)];
-    let isStraight = false;
-    let straightHigh = 0;
-    if (uniqueRanks.length === 5) {
-      if (ranks[0] - ranks[4] === 4) {
-        isStraight = true;
-        straightHigh = ranks[0];
-      } else if (ranks[0] === 14 && ranks[1] === 5 && ranks[2] === 4 && ranks[3] === 3 && ranks[4] === 2) {
-        isStraight = true;
-        straightHigh = 5; // Колесо (A-2-3-4-5)
-      }
-    }
-
-    // 8: Royal / Straight Flush, 7: Quads, 6: FullHouse, 5: Flush, 4: Straight, 3: Trips, 2: TwoPair, 1: Pair, 0: High
-    let type = 0, score = 0, rankVal = 0;
-
-    if (isFlush && isStraight) {
-      type = 8;
-      rankVal = straightHigh;
-      score = 8000000 + straightHigh;
-    } else if (countPairs[0].count === 4) {
-      type = 7;
-      rankVal = countPairs[0].rank;
-      score = 7000000 + countPairs[0].rank * 100 + countPairs[1].rank;
-    } else if (countPairs[0].count === 3 && countPairs[1].count === 2) {
-      type = 6;
-      rankVal = countPairs[0].rank;
-      score = 6000000 + countPairs[0].rank * 100 + countPairs[1].rank;
-    } else if (isFlush) {
-      type = 5;
-      rankVal = ranks[0];
-      score = 5000000 + ranks[0] * 10000 + ranks[1] * 1000 + ranks[2] * 100 + ranks[3] * 10 + ranks[4];
-    } else if (isStraight) {
-      type = 4;
-      rankVal = straightHigh;
-      score = 4000000 + straightHigh;
-    } else if (countPairs[0].count === 3) {
-      type = 3;
-      rankVal = countPairs[0].rank;
-      score = 3000000 + countPairs[0].rank * 100 + ranks[3] * 10 + ranks[4];
-    } else if (countPairs[0].count === 2 && countPairs[1].count === 2) {
-      type = 2;
-      rankVal = Math.max(countPairs[0].rank, countPairs[1].rank);
-      score = 2000000 + countPairs[0].rank * 100 + countPairs[1].rank * 10 + countPairs[2].rank;
-    } else if (countPairs[0].count === 2) {
-      type = 1;
-      rankVal = countPairs[0].rank;
-      score = 1000000 + countPairs[0].rank * 1000 + ranks[2] * 100 + ranks[3] * 10 + ranks[4];
-    } else {
-      type = 0;
-      rankVal = ranks[0];
-      score = ranks[0] * 10000 + ranks[1] * 1000 + ranks[2] * 100 + ranks[3] * 10 + ranks[4];
-    }
-    return { type, score, rankVal };
-  }
-
-  // Оценка 3-карточного топа (с джокерами)
-  function eval3(cards) {
-    const jokers = cards.filter(c => c.isJoker).length;
-    const regular = cards.filter(c => !c.isJoker);
-
-    if (jokers === 0) {
-      const sorted = [...regular].sort((a, b) => b.rank - a.rank);
-      if (sorted[0].rank === sorted[1].rank && sorted[1].rank === sorted[2].rank) {
-        return { type: 3, score: 30000 + sorted[0].rank, tripsRank: sorted[0].rank, pairRank: 0 };
-      }
-      if (sorted[0].rank === sorted[1].rank || sorted[1].rank === sorted[2].rank) {
-        const pRank = sorted[1].rank;
-        const kicker = (sorted[0].rank === pRank) ? sorted[2].rank : sorted[0].rank;
-        return { type: 1, score: 10000 + pRank * 100 + kicker, tripsRank: 0, pairRank: pRank };
-      }
-      return { type: 0, score: sorted[0].rank * 100 + sorted[1].rank * 10 + sorted[2].rank, tripsRank: 0, pairRank: 0 };
-    } else if (jokers === 1) {
-      if (regular[0].rank === regular[1].rank) {
-        return { type: 3, score: 30000 + regular[0].rank, tripsRank: regular[0].rank, pairRank: 0 };
-      }
-      const pRank = Math.max(regular[0].rank, regular[1].rank);
-      const kicker = Math.min(regular[0].rank, regular[1].rank);
-      return { type: 1, score: 10000 + pRank * 100 + kicker, tripsRank: 0, pairRank: pRank };
-    } else if (jokers === 2) {
-      return { type: 3, score: 30000 + regular[0].rank, tripsRank: regular[0].rank, pairRank: 0 };
-    } else {
-      return { type: 3, score: 30000 + 14, tripsRank: 14, pairRank: 0 };
-    }
-  }
-
-  // Роялти
-  function getRoyalties(topRes, midRes, botRes) {
-    let roy = 0;
-    // Top
-    if (topRes.type === 3) {
-      roy += 10 + (topRes.tripsRank - 2); // 222 = 10 ... AAA = 22
-    } else if (topRes.type === 1 && topRes.pairRank >= 12) {
-      roy += (topRes.pairRank - 5); // 66=1, 77=2 ... QQ=7, KK=8, AA=9
-    } else if (topRes.type === 1 && topRes.pairRank >= 6) {
-      roy += (topRes.pairRank - 5);
-    }
-
-    // Mid
-    if (midRes.type === 8) roy += (midRes.rankVal === 14 ? 50 : 30);
-    else if (midRes.type === 7) roy += 20;
-    else if (midRes.type === 6) roy += 12;
-    else if (midRes.type === 5) roy += 8;
-    else if (midRes.type === 4) roy += 4;
-    else if (midRes.type === 3) roy += 2;
-
-    // Bot
-    if (botRes.type === 8) roy += (botRes.rankVal === 14 ? 25 : 15);
-    else if (botRes.type === 7) roy += 10;
-    else if (botRes.type === 6) roy += 6;
-    else if (botRes.type === 5) roy += 4;
-    else if (botRes.type === 4) roy += 2;
-
-    return roy;
-  }
-
-  // Проверка правила: Низ >= Середина >= Верх
-  function isValidLayout(topRes, midRes, botRes) {
-    if (botRes.score < midRes.score) return false;
-    // Сравнение Середины с Топом
-    if (midRes.type > topRes.type) return true;
-    if (midRes.type < topRes.type) return false;
-    if (midRes.type === 3) return midRes.rankVal >= topRes.tripsRank;
-    if (midRes.type === 1) {
-      if (midRes.rankVal !== topRes.pairRank) return midRes.rankVal > topRes.pairRank;
-      return true;
-    }
-    return midRes.rankVal >= topRes.score;
-  }
-
-  // Проверка повторной фантазии (Re-Fantasy) в Ultimate
-  function isReFantasy(topRes, botRes) {
-    return (topRes.type === 3) || (botRes.type >= 7); // Сет в топе или Каре+ внизу
-  }
-
   // =========================================================================
-  // 3. FANTASYLAND SOLVER (14-17 КАРТ)
+  // 4. TIME-BUDGETED REAL-TIME SOLVER (ПОЛНЫЕ ВЫЧИСЛЕНИЯ 3.6 СЕК)
   // =========================================================================
-  function solveFantasyland(cards) {
-    const n = cards.length;
-    let bestLayout = null;
-    let bestScore = -999999;
+  function getFullDeck() {
+    const d = [];
+    for (let r = 2; r <= 14; r++) for (let s of ['c', 'd', 'h', 's']) d.push({ rank: r, suit: s });
+    d.push({ rank: 0, suit: 'c', raw: 'X1' });
+    d.push({ rank: 0, suit: 'd', raw: 'X2' });
+    return d;
+  }
 
-    // Быстрый отбор: генерируем кандидатов для Back (5 карт), затем Middle (5), Top (3)
-    const cardIndices = cards.map((_, i) => i);
+  function getLiveDeck(deadCards) {
+    const deadSet = new Set(deadCards.map(cardId));
+    return getFullDeck().filter(c => !deadSet.has(cardId(c)));
+  }
 
-    // Хелпер комбинаций
-    function getCombos(arr, k) {
-      const result = [];
-      function backtrack(start, combo) {
-        if (combo.length === k) { result.push([...combo]); return; }
-        for (let i = start; i < arr.length; i++) {
-          combo.push(arr[i]);
-          backtrack(i + 1, combo);
-          combo.pop();
-        }
-      }
-      backtrack(0, []);
-      return result;
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0;
+      const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
     }
+    return arr;
+  }
 
-    // Оптимизированный поиск
-    const all5Combos = getCombos(cardIndices, 5);
+  // Генерация допустимых ходов улицы (2 карты на борд, 1 сброс)
+  function generateStreetMoves(board, drawn) {
+    const candidates = [];
+    const rows = ['top', 'middle', 'bottom'];
 
-    for (let bIndices of all5Combos) {
-      const bCards = bIndices.map(i => cards[i]);
-      const bRes = eval5(bCards);
-      if (bRes.score < 2000000 && n >= 14) continue; // Отсекаем совсем слабый низ для ускорения
+    for (let d = 0; d < 3; d++) {
+      const discarded = drawn[d];
+      const placed = drawn.filter((_, i) => i !== d);
 
-      const bMask = new Set(bIndices);
-      const remaining1 = cardIndices.filter(i => !bMask.has(i));
-      const midCombos = getCombos(remaining1, 5);
+      for (let r1 of rows) {
+        for (let r2 of rows) {
+          const tAdd = (r1 === 'top' ? 1 : 0) + (r2 === 'top' ? 1 : 0);
+          const mAdd = (r1 === 'middle' ? 1 : 0) + (r2 === 'middle' ? 1 : 0);
+          const bAdd = (r1 === 'bottom' ? 1 : 0) + (r2 === 'bottom' ? 1 : 0);
 
-      for (let mIndices of midCombos) {
-        const mCards = mIndices.map(i => cards[i]);
-        const mRes = eval5(mCards);
-        if (mRes.score > bRes.score) continue; // Фоул между ботом и мидом
+          if (board.top.length + tAdd > 3) continue;
+          if (board.middle.length + mAdd > 5) continue;
+          if (board.bottom.length + bAdd > 5) continue;
 
-        const mMask = new Set(mIndices);
-        const remaining2 = remaining1.filter(i => !mMask.has(i));
-        const topCombos = getCombos(remaining2, 3);
+          const nb = {
+            top: [...board.top],
+            middle: [...board.middle],
+            bottom: [...board.bottom]
+          };
+          nb[r1].push(placed[0]);
+          nb[r2].push(placed[1]);
 
-        for (let tIndices of topCombos) {
-          const tCards = tIndices.map(i => cards[i]);
-          const tRes = eval3(tCards);
-
-          if (!isValidLayout(tRes, mRes, bRes)) continue;
-
-          const roy = getRoyalties(tRes, mRes, bRes);
-          const reFan = isReFantasy(tRes, bRes);
-
-          // ВЕС: Ре-фантазия имеет абсолютный приоритет (+1000 очков)
-          const totalScore = (reFan ? 1000 : 0) + roy;
-
-          if (totalScore > bestScore) {
-            bestScore = totalScore;
-            const usedSet = new Set([...bIndices, ...mIndices, ...tIndices]);
-            const discarded = cards.filter((_, idx) => !usedSet.has(idx));
-            bestLayout = {
-              front: tCards,
-              middle: mCards,
-              back: bCards,
-              discarded: discarded,
-              royalties: roy,
-              reFantasy: reFan,
-              score: totalScore
-            };
-          }
+          candidates.push({
+            board: nb,
+            moves: [{ card: placed[0], row: r1 }, { card: placed[1], row: r2 }],
+            discarded: discarded,
+            simSum: 0,
+            simCount: 0,
+            foulCount: 0,
+            flCount: 0,
+            royaltySum: 0
+          });
         }
       }
     }
-    return bestLayout;
+    return candidates;
   }
 
-  // =========================================================================
-  // 4. STREET SOLVER (Улицы 1-5)
-  // =========================================================================
-  function solveStreetPlacement(currentBoard, drawnCards, streetNumber) {
-    const { front = [], middle = [], back = [] } = currentBoard;
-    
-    // 1-я улица: расстановка первых 5 карт
-    if (streetNumber === 1 && drawnCards.length === 5) {
-      let best = null;
-      let maxScore = -999999;
-      // Перебор всех распределений 5 карт по 3 линиям (макс: топ 3, мид 5, бот 5)
-      for (let f = 0; f <= 3; f++) {
-        for (let m = 0; m <= 5 - f; m++) {
-          const b = 5 - f - m;
-          if (b > 5) continue;
-          
-          // Простейшая эвристика улицы 1: сильные карты в низ/мид, при QQ+ можно на топ
-          const cand = evaluateInitialDistribution(drawnCards, f, m, b);
-          if (cand.score > maxScore) {
-            maxScore = cand.score;
-            best = cand;
-          }
-        }
-      }
-      return best;
-    }
-
-    // Улицы 2-5: пришло 3 карты, нужно выбрать 1 сброс и 2 положить на доску
-    if (drawnCards.length === 3) {
-      let bestMove = null;
-      let maxScore = -999999;
-
-      for (let dropIdx = 0; dropIdx < 3; dropIdx++) {
-        const discarded = drawnCards[dropIdx];
-        const keepCards = drawnCards.filter((_, i) => i !== dropIdx);
-
-        // Варианты положить 2 карты в открытые слоты:
-        // Возможные позиции: 'FRONT', 'MIDDLE', 'BACK'
-        const rows = [];
-        if (front.length < 3) rows.push('FRONT');
-        if (middle.length < 5) rows.push('MIDDLE');
-        if (back.length < 5) rows.push('BACK');
-
-        for (let r1 of rows) {
-          for (let r2 of rows) {
-            // Проверка лимитов слотов
-            let fAdd = (r1 === 'FRONT' ? 1 : 0) + (r2 === 'FRONT' ? 1 : 0);
-            let mAdd = (r1 === 'MIDDLE' ? 1 : 0) + (r2 === 'MIDDLE' ? 1 : 0);
-            let bAdd = (r1 === 'BACK' ? 1 : 0) + (r2 === 'BACK' ? 1 : 0);
-
-            if (front.length + fAdd > 3) continue;
-            if (middle.length + mAdd > 5) continue;
-            if (back.length + bAdd > 5) continue;
-
-            const simFront = [...front, ...(r1 === 'FRONT' ? [keepCards[0]] : []), ...(r2 === 'FRONT' ? [keepCards[1]] : [])];
-            const simMid = [...middle, ...(r1 === 'MIDDLE' ? [keepCards[0]] : []), ...(r2 === 'MIDDLE' ? [keepCards[1]] : [])];
-            const simBack = [...back, ...(r1 === 'BACK' ? [keepCards[0]] : []), ...(r2 === 'BACK' ? [keepCards[1]] : [])];
-
-            const score = scoreIntermediateState(simFront, simMid, simBack);
-            if (score > maxScore) {
-              maxScore = score;
-              bestMove = {
-                moves: [
-                  { card: keepCards[0], hand: r1 },
-                  { card: keepCards[1], hand: r2 }
-                ],
-                discarded: discarded,
-                score: score
-              };
-            }
-          }
-        }
-      }
-      return bestMove;
-    }
-    return null;
-  }
-
-  function evaluateInitialDistribution(cards, f, m, b) {
-    // Жадная сортировка по рангу
-    const sorted = [...cards].sort((c1, c2) => c2.rank - c1.rank);
-    const jokers = sorted.filter(c => c.isJoker);
-    const nonJokers = sorted.filter(c => !c.isJoker);
-
-    let top = [], mid = [], bot = [];
-    
-    // Если есть джокеры, часто выгодно положить их в бэк или миддл
-    // Базовая эвристика 1-й улицы:
-    const high = nonJokers.slice(0, b);
-    const midCards = nonJokers.slice(b, b + m);
-    const topCards = nonJokers.slice(b + m);
-
-    return {
-      front: topCards,
-      middle: midCards,
-      back: [...high, ...jokers],
-      discarded: [],
-      score: (high.length ? high[0].rank * 2 : 0) + (jokers.length * 15)
+  // Честная симуляция добора и завершения раздачи
+  function simulateRollout(baseBoard, liveDeck) {
+    const deck = shuffle([...liveDeck]);
+    const simBoard = {
+      top: [...baseBoard.top],
+      middle: [...baseBoard.middle],
+      bottom: [...baseBoard.bottom]
     };
+
+    let ptr = 0;
+    const need = (3 - simBoard.top.length) + (5 - simBoard.middle.length) + (5 - simBoard.bottom.length);
+    const streets = Math.floor(need / 2);
+
+    // Доигрывание улиц по честным правилам (из 3 выбираем 2)
+    for (let s = 0; s < streets; s++) {
+      const c0 = deck[ptr++];
+      const c1 = deck[ptr++];
+      ptr++; // сброс 1 карты
+
+      if (simBoard.bottom.length < 5) {
+        simBoard.bottom.push(c0);
+        if (simBoard.middle.length < 5) simBoard.middle.push(c1);
+        else if (simBoard.top.length < 3) simBoard.top.push(c1);
+      } else if (simBoard.middle.length < 5) {
+        simBoard.middle.push(c0);
+        if (simBoard.top.length < 3) simBoard.top.push(c1);
+      } else if (simBoard.top.length < 3) {
+        simBoard.top.push(c0);
+      }
+    }
+
+    let bKey = evaluate5(simBoard.bottom);
+    let mKey = evaluate5(simBoard.middle);
+    let tKey = evaluate3(simBoard.top);
+
+    if (mKey > bKey) mKey = key5AtMost(simBoard.middle, bKey);
+    if (tKey > mKey) tKey = key3AtMost(simBoard.top, mKey);
+
+    const fouled = (bKey < mKey) || (mKey < tKey) || (mKey < 0) || (tKey < 0);
+    if (fouled) return { score: -FOUL_WEIGHT, foul: 1, fl: 0, roy: 0 };
+
+    const roy = getRoyalties(tKey, mKey, bKey);
+    const flCards = getFLCards(tKey);
+    const flVal = flCards > 0 ? (FL_VALUES_JOKER[flCards] || 6.5) : 0;
+    return { score: roy + flVal, foul: 0, fl: flCards > 0 ? 1 : 0, roy: roy };
   }
 
-  function scoreIntermediateState(front, mid, back) {
-    let sc = 0;
-    // Оцениваем частичные комбинации
-    if (back.length === 5 && mid.length === 5) {
-      const eB = eval5(back);
-      const eM = eval5(mid);
-      if (eM.score > eB.score) return -50000; // Риск мертвого борда
+  // Главный вычислительный цикл на 3.6 секунды чистого времени
+  function solveStreetBudgeted(currentBoard, drawn, deadCards, updateHUDCallback) {
+    const candidates = generateStreetMoves(currentBoard, drawn);
+    if (candidates.length === 0) return null;
+
+    const liveDeck = getLiveDeck([...deadCards, ...drawn]);
+    const startTime = Date.now();
+    const DEADLINE = startTime + 3600; // 3.6 секунды безостановочных вычислений
+
+    let totalSimulations = 0;
+
+    // Равномерный непрерывный стресс-тест процессора
+    while (Date.now() < DEADLINE) {
+      for (let i = 0; i < candidates.length; i++) {
+        const c = candidates[i];
+        // Пакет по 10 симуляций на кандидата для минимизации накладных расходов таймера
+        for (let k = 0; k < 10; k++) {
+          const res = simulateRollout(c.board, liveDeck);
+          c.simSum += res.score;
+          c.foulCount += res.foul;
+          c.flCount += res.fl;
+          c.royaltySum += res.roy;
+          c.simCount++;
+          totalSimulations++;
+        }
+      }
     }
-    // Фантазийный потенциал QQ+ на топе
-    if (front.length >= 2) {
-      const eT = eval3(front.length === 2 ? [...front, { rank: 2, suit: 'c', isJoker: false }] : front);
-      if (eT.pairRank >= 12 || eT.type === 3) sc += 80;
-    }
-    // Очки за силу низа
-    if (back.length >= 3) {
-      const suits = {};
-      back.forEach(c => suits[c.suit] = (suits[c.suit] || 0) + 1);
-      const maxSuit = Math.max(...Object.values(suits));
-      if (maxSuit >= 3) sc += maxSuit * 10; // Флеш-дро
-    }
-    return sc;
+
+    // Сортировка по математическому ожиданию EV
+    candidates.sort((a, b) => (b.simSum / b.simCount) - (a.simSum / a.simCount));
+    const best = candidates[0];
+
+    updateHUDCallback(`Просчитано симуляций: <b>${totalSimulations.toLocaleString()}</b><br>` +
+                      `EV: <b>+${(best.simSum / best.simCount).toFixed(2)}</b> | ` +
+                      `Фантазия: <b>${((best.flCount / best.simCount) * 100).toFixed(1)}%</b> | ` +
+                      `Фаул: <b>${((best.foulCount / best.simCount) * 100).toFixed(1)}%</b>`);
+
+    return best;
   }
 
   // =========================================================================
-  // 5. WEBSOCKET ПЕРЕХВАТ, ОБРАБОТКА И АВТОХОД ЧЕРЕЗ 4 СЕКУНДЫ
+  // 5. ЖЕЛЕЗОБЕТОННЫЙ ХУК WEBSOCKET И UI ИНДИКАТОР
   // =========================================================================
   let activeWS = null;
   let mySeat = "0";
-  let currentStreet = 1;
-  let boardState = { front: [], middle: [], back: [] };
+  let boardState = { top: [], middle: [], bottom: [] };
+  let allDeadCards = [];
   let pendingCards = [];
-  let isFantasy = false;
+  let currentStreet = 1;
+  let isFantasyland = false;
 
-  // Создаем плавающий индикатор (HUD)
   const hud = document.createElement('div');
   hud.style.cssText = `
-    position: fixed; top: 10px; right: 10px; z-index: 999999;
-    background: rgba(10, 15, 25, 0.95); color: #00ffcc; padding: 12px 16px;
-    border-radius: 8px; border: 1px solid #00ffcc; font-family: monospace;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.5); font-size: 13px; min-width: 250px;
-    pointer-events: none; line-height: 1.4;
+    position: fixed; top: 10px; right: 10px; z-index: 9999999;
+    background: rgba(13, 17, 23, 0.95); color: #58a6ff; padding: 12px 16px;
+    border-radius: 8px; border: 1.5px solid #58a6ff; font-family: -apple-system, monospace;
+    font-size: 13px; line-height: 1.4; box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+    pointer-events: none; min-width: 260px;
   `;
-  hud.innerHTML = `<b>OFC BOT ENGINE v9.0</b><br><span style="color:#aaa">Ожидание стола...</span>`;
+  hud.innerHTML = `<b>OFC GTO Engine</b><br><span style="color:#8b949e">Подключение к столу...</span>`;
   document.body.appendChild(hud);
 
-  function updateHUD(text, color = '#00ffcc') {
+  function setHUD(text, color = '#58a6ff') {
     hud.style.borderColor = color;
-    hud.innerHTML = `<b>OFC BOT ENGINE</b><br>${text}`;
+    hud.innerHTML = `<b>OFC GTO Engine</b><br>${text}`;
   }
 
-  // Хук WebSocket.prototype.send для поиска активного сокета
-  const origSend = WebSocket.prototype.send;
-  WebSocket.prototype.send = function (data) {
-    if (typeof data === 'string' && (data.includes('GetTableDetails') || data.includes('MoveCards') || data.includes('EnterTable'))) {
-      activeWS = this;
-    }
-    return origSend.apply(this, arguments);
-  };
-
-  // Хук addEventListener для чтения входящих XML-сообщений стола
-  const origAddEventListener = WebSocket.prototype.addEventListener;
-  WebSocket.prototype.addEventListener = function (type, listener, options) {
-    if (type === 'message') {
-      const wrappedListener = function (event) {
-        try {
-          if (typeof event.data === 'string' && event.data.startsWith('<Message>')) {
-            handleServerMessage(event.data, this);
-          }
-        } catch (e) {
-          console.error('[OFC Hook Error]', e);
-        }
-        return listener.apply(this, arguments);
-      };
-      return origAddEventListener.call(this, type, wrappedListener, options);
-    }
-    return origAddEventListener.apply(this, arguments);
-  };
-
-  // Парсер серверных XML-сообщений
-  function handleServerMessage(xmlStr, ws) {
+  function handlePacket(xmlText, ws) {
     activeWS = ws;
+    if (!xmlText.includes('<Message>') && !xmlText.includes('<TableDetails>')) return;
+
     const parser = new DOMParser();
-    const doc = parser.parseFromString(xmlStr, 'text/xml');
+    const doc = parser.parseFromString(xmlText, 'text/xml');
 
-    // Определение своего места
     const seatsEl = doc.querySelector('Seats[me]');
-    if (seatsEl) {
-      mySeat = seatsEl.getAttribute('me');
+    if (seatsEl) mySeat = seatsEl.getAttribute('me');
+
+    if (doc.querySelector('NewHand')) {
+      boardState = { top: [], middle: [], bottom: [] };
+      allDeadCards = [];
+      pendingCards = [];
+      currentStreet = 1;
+      isFantasyland = false;
+      setHUD(`<span style="color:#e3b341">Новая раздача. Ждем карт...</span>`);
     }
 
-    // Новая раздача
-    if (doc.querySelector('NewHand')) {
-      currentStreet = 1;
-      boardState = { front: [], middle: [], back: [] };
-      pendingCards = [];
-      isFantasy = false;
-      updateHUD(`<span style="color:#ffcc00">Новая раздача!</span>`);
-    }
+    // Чтение всех открытых карт стола (Dead Cards)
+    doc.querySelectorAll('Card').forEach(c => {
+      const code = c.textContent.trim() || c.getAttribute('name');
+      const parsed = parseCard(code);
+      if (parsed && !allDeadCards.some(d => d.raw === parsed.raw)) {
+        allDeadCards.push(parsed);
+      }
+    });
 
     // Раздача карт
-    const dealing = doc.querySelectorAll('DealingCards');
-    dealing.forEach(d => {
+    doc.querySelectorAll('DealingCards').forEach(d => {
       const seatEl = d.querySelector(`Seat[id="${mySeat}"]`);
       if (seatEl) {
         const st = d.getAttribute('street');
-        if (st) currentStreet = parseInt(st);
-        const cardEls = seatEl.querySelectorAll('Card');
-        pendingCards = Array.from(cardEls).map(c => ({
+        if (st) currentStreet = parseInt(st, 10);
+        pendingCards = Array.from(seatEl.querySelectorAll('Card')).map(c => ({
           id: c.getAttribute('id'),
           name: c.textContent.trim(),
           parsed: parseCard(c.textContent.trim())
         }));
 
         if (pendingCards.length >= 13) {
-          isFantasy = true;
-          updateHUD(`<span style="color:#ff00ff">ФАНТАЗИЯ! (${pendingCards.length} карт)</span>`);
+          isFantasyland = true;
+          setHUD(`<span style="color:#d2a8ff">ФАНТАЗИЯ (${pendingCards.length} карт)</span>`);
         } else {
-          updateHUD(`Улица ${currentStreet}: получено ${pendingCards.length} карт`);
+          setHUD(`Улица ${currentStreet}: получено ${pendingCards.length} карт`);
         }
       }
     });
 
-    // Ожидание действия от нашего места
-    const activeChange = doc.querySelector(`ActiveChange[seat="${mySeat}"]`);
-    if (activeChange && pendingCards.length > 0) {
-      planAndExecuteTurn();
+    const active = doc.querySelector(`ActiveChange[seat="${mySeat}"]`);
+    if (active && pendingCards.length > 0) {
+      triggerGTOEvaluation();
     }
   }
 
-  // Расчет и исполнение хода с задержкой 4 секунды
-  function planAndExecuteTurn() {
-    let countdown = 4;
-    updateHUD(`<span style="color:#00ff00">Ход бота через ${countdown} сек...</span>`);
+  // Перехват всех каналов входящих сообщений
+  const origOnMessageDesc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
+  Object.defineProperty(WebSocket.prototype, 'onmessage', {
+    set: function (fn) {
+      const wrapped = function (ev) {
+        if (typeof ev.data === 'string') handlePacket(ev.data, this);
+        return fn.apply(this, arguments);
+      };
+      return origOnMessageDesc.set.call(this, wrapped);
+    },
+    get: function () {
+      return origOnMessageDesc.get.call(this);
+    },
+    configurable: true
+  });
 
-    const timer = setInterval(() => {
-      countdown--;
-      if (countdown > 0) {
-        updateHUD(`<span style="color:#00ff00">Ход бота через ${countdown} сек...</span>`);
-      } else {
-        clearInterval(timer);
-        executeDecision();
-      }
-    }, 1000);
-  }
-
-  function executeDecision() {
-    if (!activeWS || activeWS.readyState !== WebSocket.OPEN) {
-      updateHUD(`<span style="color:red">Ошибка: сокет закрыт!</span>`, 'red');
-      return;
+  const origAddEventListener = WebSocket.prototype.addEventListener;
+  WebSocket.prototype.addEventListener = function (type, listener, opt) {
+    if (type === 'message') {
+      const wrapped = function (ev) {
+        if (typeof ev.data === 'string') handlePacket(ev.data, this);
+        return listener.apply(this, arguments);
+      };
+      return origAddEventListener.call(this, type, wrapped, opt);
     }
+    return origAddEventListener.apply(this, arguments);
+  };
 
-    if (isFantasy) {
-      // Решение фантазии
-      const cardObjects = pendingCards.map(c => c.parsed);
-      updateHUD(`Расчет фантазии на ${cardObjects.length} карт...`);
-      const flLayout = solveFantasyland(cardObjects);
+  const origSend = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (data) {
+    activeWS = this;
+    return origSend.apply(this, arguments);
+  };
 
-      if (!flLayout) {
-        updateHUD(`<span style="color:red">Фантазия: решение не найдено!</span>`, 'red');
-        return;
-      }
+  // =========================================================================
+  // 6. ЗАПУСК ВЫЧИСЛЕНИЙ И ОТПРАВКА ХОДА РОВНО В 4.0 СЕКУНДЫ
+  // =========================================================================
+  function triggerGTOEvaluation() {
+    const turnStartTime = Date.now();
 
-      // Сопоставляем обратно с серверными ID карт
-      function mapToIDs(handList) {
-        return handList.map(h => {
-          const match = pendingCards.find(pc => pc.name === h.raw);
-          return { id: match.id, name: match.name };
-        });
-      }
+    if (isFantasyland) {
+      setHUD(`<span style="color:#d2a8ff">Решаем Fantasyland на GPU/CPU...</span>`);
+      setTimeout(() => {
+        const cards = pendingCards.map(c => c.parsed);
+        const bestFL = solveFantasyland(cards);
 
-      const fIDs = mapToIDs(flLayout.front);
-      const mIDs = mapToIDs(flLayout.middle);
-      const bIDs = mapToIDs(flLayout.back);
-      const dIDs = mapToIDs(flLayout.discarded);
+        if (!bestFL) { setHUD(`<span style="color:red">Ошибка Fantasyland!</span>`, 'red'); return; }
 
-      // Формируем <LayOut>
-      let xml = `<LayOut>\n  <Discarded>\n`;
-      dIDs.forEach(c => xml += `    <Card name="${c.name}" id="${c.id}"/>\n`);
-      xml += `  </Discarded>\n  <Hands>\n`;
-      xml += `    <Hand name="FRONT"><Cards>\n`;
-      fIDs.forEach(c => xml += `      <Card name="${c.name}" id="${c.id}"/>\n`);
-      xml += `    </Cards></Hand>\n`;
-      xml += `    <Hand name="MIDDLE"><Cards>\n`;
-      mIDs.forEach(c => xml += `      <Card name="${c.name}" id="${c.id}"/>\n`);
-      xml += `    </Cards></Hand>\n`;
-      xml += `    <Hand name="BACK"><Cards>\n`;
-      bIDs.forEach(c => xml += `      <Card name="${c.name}" id="${c.id}"/>\n`);
-      xml += `    </Cards></Hand>\n`;
-      xml += `  </Hands>\n</LayOut>`;
-
-      activeWS.send(xml);
-      updateHUD(`<span style="color:#00ff00">Фантазия отправлена! Роялти: ${flLayout.royalties}, Ре-фантазия: ${flLayout.reFantasy ? 'ДА' : 'НЕТ'}</span>`);
-      pendingCards = [];
-      return;
-    }
-
-    // Обычная улица (1 или 2-5)
-    if (currentStreet === 1) {
-      const cardObjects = pendingCards.map(c => c.parsed);
-      const decision = solveStreetPlacement(boardState, cardObjects, 1);
-
-      // Маппинг карт
-      let xmlMoves = `<MoveCards>\n  <Moves>\n`;
-      let xmlLayout = `<LayOut>\n  <Discarded/>\n  <Hands>\n`;
-
-      let fIdx = 0, mIdx = 0, bIdx = 0;
-      let fCards = [], mCards = [], bCards = [];
-
-      pendingCards.forEach(c => {
-        if (decision.front.some(fc => fc.raw === c.name)) {
-          xmlMoves += `    <Move id="${c.id}" name="${c.name}" hand="FRONT" place="${fIdx++}"/>\n`;
-          fCards.push(c);
-        } else if (decision.middle.some(mc => mc.raw === c.name)) {
-          xmlMoves += `    <Move id="${c.id}" name="${c.name}" hand="MIDDLE" place="${mIdx++}"/>\n`;
-          mCards.push(c);
-        } else {
-          xmlMoves += `    <Move id="${c.id}" name="${c.name}" hand="BACK" place="${bIdx++}"/>\n`;
-          bCards.push(c);
+        function mapIDs(handList) {
+          return handList.map(h => pendingCards.find(pc => pc.name === h.raw));
         }
-      });
-      xmlMoves += `  </Moves>\n</MoveCards>`;
 
-      xmlLayout += `    <Hand name="FRONT"><Cards>${fCards.map(c => `<Card name="${c.name}" id="${c.id}"/>`).join('')}</Cards></Hand>\n`;
-      xmlLayout += `    <Hand name="MIDDLE"><Cards>${mCards.map(c => `<Card name="${c.name}" id="${c.id}"/>`).join('')}</Cards></Hand>\n`;
-      xmlLayout += `    <Hand name="BACK"><Cards>${bCards.map(c => `<Card name="${c.name}" id="${c.id}"/>`).join('')}</Cards></Hand>\n`;
-      xmlLayout += `  </Hands>\n</LayOut>`;
+        const f = mapIDs(bestFL.top);
+        const m = mapIDs(bestFL.middle);
+        const b = mapIDs(bestFL.bottom);
+        const d = pendingCards.filter(pc => !f.includes(pc) && !m.includes(pc) && !b.includes(pc));
 
-      activeWS.send(xmlMoves);
-      setTimeout(() => activeWS.send(xmlLayout), 100);
+        let xml = `<LayOut>\n  <Discarded>\n`;
+        d.forEach(c => xml += `    <Card name="${c.name}" id="${c.id}"/>\n`);
+        xml += `  </Discarded>\n  <Hands>\n`;
+        xml += `    <Hand name="FRONT"><Cards>${f.map(c => `<Card name="${c.name}" id="${c.id}"/>`).join('')}</Cards></Hand>\n`;
+        xml += `    <Hand name="MIDDLE"><Cards>${m.map(c => `<Card name="${c.name}" id="${c.id}"/>`).join('')}</Cards></Hand>\n`;
+        xml += `    <Hand name="BACK"><Cards>${b.map(c => `<Card name="${c.name}" id="${c.id}"/>`).join('')}</Cards></Hand>\n`;
+        xml += `  </Hands>\n</LayOut>`;
 
-      boardState.front.push(...fCards.map(c => c.parsed));
-      boardState.middle.push(...mCards.map(c => c.parsed));
-      boardState.back.push(...bCards.map(c => c.parsed));
-      updateHUD(`<span style="color:#00ff00">Улица 1 подтверждена!</span>`);
-      pendingCards = [];
-    } else {
-      // Улицы 2-5
-      const cardObjects = pendingCards.map(c => c.parsed);
-      const decision = solveStreetPlacement(boardState, cardObjects, currentStreet);
+        const elapsed = Date.now() - turnStartTime;
+        const delay = Math.max(0, 4000 - elapsed);
 
-      if (!decision) {
-        updateHUD(`<span style="color:red">Ошибка выбора хода!</span>`, 'red');
-        return;
-      }
-
-      const discardCard = pendingCards.find(c => c.name === decision.discarded.raw);
-      const m1Card = pendingCards.find(c => c.name === decision.moves[0].card.raw);
-      const m2Card = pendingCards.find(c => c.name === decision.moves[1].card.raw);
-
-      let p1 = decision.moves[0].hand === 'FRONT' ? boardState.front.length : (decision.moves[0].hand === 'MIDDLE' ? boardState.middle.length : boardState.back.length);
-      let p2 = decision.moves[1].hand === 'FRONT' ? (boardState.front.length + (decision.moves[0].hand === 'FRONT' ? 1 : 0)) :
-               (decision.moves[1].hand === 'MIDDLE' ? (boardState.middle.length + (decision.moves[0].hand === 'MIDDLE' ? 1 : 0)) :
-               (boardState.back.length + (decision.moves[0].hand === 'BACK' ? 1 : 0)));
-
-      let xmlMoves = `<MoveCards>\n  <Moves>\n`;
-      xmlMoves += `    <Move id="${m1Card.id}" name="${m1Card.name}" hand="${decision.moves[0].hand}" place="${p1}"/>\n`;
-      xmlMoves += `    <Move id="${m2Card.id}" name="${m2Card.name}" hand="${decision.moves[1].hand}" place="${p2}"/>\n`;
-      xmlMoves += `  </Moves>\n</MoveCards>`;
-
-      let xmlLayout = `<LayOut>\n  <Discarded>\n    <Card name="${discardCard.name}" id="${discardCard.id}"/>\n  </Discarded>\n  <Hands>\n`;
-      
-      const handsAdded = {};
-      handsAdded[decision.moves[0].hand] = (handsAdded[decision.moves[0].hand] || []).concat(m1Card);
-      handsAdded[decision.moves[1].hand] = (handsAdded[decision.moves[1].hand] || []).concat(m2Card);
-
-      Object.entries(handsAdded).forEach(([handName, cList]) => {
-        xmlLayout += `    <Hand name="${handName}"><Cards>${cList.map(c => `<Card id="${c.id}">${c.name}</Card>`).join('')}</Cards></Hand>\n`;
-      });
-      xmlLayout += `  </Hands>\n</LayOut>`;
-
-      activeWS.send(xmlMoves);
-      setTimeout(() => activeWS.send(xmlLayout), 100);
-
-      // Обновляем виртуальную доску
-      if (decision.moves[0].hand === 'FRONT') boardState.front.push(m1Card.parsed);
-      else if (decision.moves[0].hand === 'MIDDLE') boardState.middle.push(m1Card.parsed);
-      else boardState.back.push(m1Card.parsed);
-
-      if (decision.moves[1].hand === 'FRONT') boardState.front.push(m2Card.parsed);
-      else if (decision.moves[1].hand === 'MIDDLE') boardState.middle.push(m2Card.parsed);
-      else boardState.back.push(m2Card.parsed);
-
-      updateHUD(`<span style="color:#00ff00">Улица ${currentStreet} сыграна! (Сброс: ${discardCard.name})</span>`);
-      pendingCards = [];
+        setTimeout(() => {
+          activeWS.send(xml);
+          setHUD(`<span style="color:#3fb950">Фантазия отправлена! Роялти: ${bestFL.royalties}, Рестей: ${bestFL.stays ? 'ДА' : 'НЕТ'}</span>`, '#3fb950');
+          pendingCards = [];
+        }, delay);
+      }, 50);
+      return;
     }
+
+    // Запуск 3.6 секунд честных симуляций Монте-Карло
+    setHUD(`<span style="color:#e3b341">Глубокий Monte Carlo расчет...</span>`);
+    setTimeout(() => {
+      const drawn = pendingCards.map(c => c.parsed);
+      const bestMove = solveStreetBudgeted(boardState, drawn, allDeadCards, (info) => {
+        setHUD(info, '#58a6ff');
+      });
+
+      if (!bestMove) return;
+
+      const m1 = pendingCards.find(c => c.name === bestMove.moves[0].card.raw);
+      const m2 = pendingCards.find(c => c.name === bestMove.moves[1].card.raw);
+      const disc = pendingCards.find(c => c.name === bestMove.discarded.raw);
+
+      const r1 = bestMove.moves[0].row === 'top' ? 'FRONT' : (bestMove.moves[0].row === 'middle' ? 'MIDDLE' : 'BACK');
+      const r2 = bestMove.moves[1].row === 'top' ? 'FRONT' : (bestMove.moves[1].row === 'middle' ? 'MIDDLE' : 'BACK');
+
+      const p1 = boardState[bestMove.moves[0].row].length;
+      const p2 = boardState[bestMove.moves[1].row].length + (bestMove.moves[0].row === bestMove.moves[1].row ? 1 : 0);
+
+      const moveXml = `<MoveCards>\n  <Moves>\n` +
+                      `    <Move id="${m1.id}" name="${m1.name}" hand="${r1}" place="${p1}"/>\n` +
+                      `    <Move id="${m2.id}" name="${m2.name}" hand="${r2}" place="${p2}"/>\n` +
+                      `  </Moves>\n</MoveCards>`;
+
+      const layoutXml = `<LayOut>\n  <Discarded><Card name="${disc.name}" id="${disc.id}"/></Discarded>\n  <Hands>\n` +
+                        `    <Hand name="${r1}"><Cards><Card id="${m1.id}">${m1.name}</Card></Cards></Hand>\n` +
+                        `    <Hand name="${r2}"><Cards><Card id="${m2.id}">${m2.name}</Card></Cards></Hand>\n` +
+                        `  </Hands>\n</LayOut>`;
+
+      boardState[bestMove.moves[0].row].push(m1.parsed);
+      boardState[bestMove.moves[1].row].push(m2.parsed);
+
+      const elapsed = Date.now() - turnStartTime;
+      const delay = Math.max(0, 4000 - elapsed);
+
+      setTimeout(() => {
+        activeWS.send(moveXml);
+        setTimeout(() => activeWS.send(layoutXml), 80);
+        pendingCards = [];
+      }, delay);
+    }, 50);
   }
 
-  console.log('[OFC Engine] Перехватчик инициализирован успешно.');
+  setHUD(`Ожидание активности стола...<br><span style="color:#8b949e;font-size:11px;">Сделайте клик или дождитесь хода</span>`);
 })();
